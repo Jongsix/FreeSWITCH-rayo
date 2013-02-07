@@ -1,0 +1,7 @@
+<configuration name="rayo.conf" description="Rayo server config">
+	<!-- global params -->
+	<settings>
+		<param name="foo" value="bar"/>
+	</settings>
+</configuration>
+
