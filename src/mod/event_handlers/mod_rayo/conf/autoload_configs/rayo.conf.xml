@@ -1,7 +1,14 @@
 <configuration name="rayo.conf" description="Rayo server config">
-	<!-- global params -->
+
+
+<!-- global params -->
 	<settings>
 		<param name="foo" value="bar"/>
 	</settings>
+
+	<!-- Listeners for new Rayo client connections -->
+	<listeners>
+		<listener>$${local_ip_v4}</listener>
+	</listeners>
 </configuration>
 
