@@ -30,7 +30,6 @@
 #include <switch.h>
 #include <iksemel.h>
 
-#define XMPP_CLIENT_PORT "5222"
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load);
@@ -64,23 +63,99 @@ struct rayo_connection {
 	switch_port_t remote_port;
 	switch_memory_pool_t *pool;
 	switch_socket_t *socket;
+	int incoming;
+	iksparser *parser;
 };
+
+/**
+ * Handle stream logging
+ */
+void process_log(void *user_data, const char *data, size_t size, int is_incoming) 
+{
+	if (size > 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s %s\n", is_incoming ? "RECV" : "SEND", data);
+	}
+}
+
+/**
+ * Handle XML stream
+ */
+static int process_stream(void *user_data, int type, iks *node)
+{
+	struct rayo_connection *connection = (struct rayo_connection *)user_data;
+	
+	switch(type) {
+		case IKS_NODE_START:
+			if (connection->incoming) {
+				iks_send_header(connection->parser, "usera@192.168.1.12");
+			}
+			break;
+		case IKS_NODE_NORMAL:
+			break;
+		case IKS_NODE_ERROR:
+			break;
+		case IKS_NODE_STOP:
+			break;
+	}
+	
+	/* TODO */
+	if (node) {
+		iks_delete(node);
+	}
+	return IKS_OK;
+}
 
 /**
  * Handles Rayo stream
  */
 static void *SWITCH_THREAD_FUNC rayo_connection_thread(switch_thread_t *thread, void *obj)
 {
+	iksparser *parser;
 	struct rayo_connection *connection = (struct rayo_connection *)obj;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "New connection\n");	
-	/* TBD */
-	switch_socket_shutdown(connection->socket, SWITCH_SHUTDOWN_READWRITE);
-	switch_socket_close(connection->socket);
+	
+	/* set up XMPP stream parser */
+	parser = iks_stream_new(IKS_NS_SERVER, connection, process_stream);
+	if (!parser) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create XMPP stream parser!\n");
+		goto done;
+	}
+	connection->parser = parser;
+	
+	/* enable logging of XMPP stream */
+	iks_set_log_hook(parser, process_log); 
+	
+	if (connection->incoming) {
+		/* connect XMPP stream parser to socket */
+		switch_os_socket_t socket;
+		switch_os_sock_get(&socket, connection->socket);
+		iks_connect_fd(parser, socket);
+		/* TODO error checking */
+	} else {
+		/* make client connection */
+		/* TODO */
+	}
+	
+	while (!globals.shutdown) {
+		iks_recv(parser, 1);
+		/* TODO check errors, keep alive, figure out how to get events */
+	}
+	
+  done:
+  
+	if (connection->parser) {
+		iks_disconnect(connection->parser);
+	}
+	
+	if (connection->incoming) {
+		switch_socket_shutdown(connection->socket, SWITCH_SHUTDOWN_READWRITE);
+		switch_socket_close(connection->socket);
+	}
 	switch_core_destroy_memory_pool(&connection->pool);
+	
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Connection closed\n");
 	return NULL;
 }
-
 
 /**
  * Listens for new Rayo client connections
@@ -129,7 +204,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 		switch_socket_t *socket = NULL;
 		switch_memory_pool_t *pool = NULL;
 		switch_status_t rv;
-		
+
 		if (switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool for new client connection!\n");
 			goto fail;
@@ -168,6 +243,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 			connection->port = 0; /* TODO */
 			connection->remote_addr = ""; /* TODO */
 			connection->remote_port = 0; /* TODO */
+			connection->incoming = 1;
 			switch_threadattr_create(&thd_attr, connection->pool);
 			switch_threadattr_detach_set(thd_attr, 1);
 			switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
@@ -206,10 +282,6 @@ static switch_status_t add_rayo_server(char *addr, char *port)
 		return SWITCH_STATUS_FALSE;
 	}
 
-	if (zstr(port)) {
-		port = XMPP_CLIENT_PORT;
-	}
-
 	if (switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool!\n");
 		return SWITCH_STATUS_FALSE;
@@ -218,7 +290,7 @@ static switch_status_t add_rayo_server(char *addr, char *port)
 	new_server = switch_core_alloc(pool, sizeof(*new_server));
 	new_server->pool = pool;
 	new_server->addr = switch_core_strdup(new_server->pool, addr);
-	new_server->port = atoi(port);
+	new_server->port = zstr(port) ? IKS_JABBER_PORT : atoi(port);
 
 	/* start the server thread */
 	switch_threadattr_create(&thd_attr, new_server->pool);
@@ -319,7 +391,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 }
 
 /**
- * Shutdown module.  Notifies runtime thread to stop.
+ * Shutdown module.  Notifies threads to stop.
  */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 {
