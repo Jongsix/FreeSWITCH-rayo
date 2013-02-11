@@ -1,7 +1,6 @@
 <configuration name="rayo.conf" description="Rayo server config">
 
-
-<!-- global params -->
+	<!-- global params -->
 	<settings>
 		<param name="foo" value="bar"/>
 	</settings>
@@ -10,5 +9,10 @@
 	<listeners>
 		<listener>$${local_ip_v4}</listener>
 	</listeners>
+
+	<!-- Authorized users -->
+	<users>
+		<user name="usera@$${local_ip_v4}" password="1"/>
+	</users>
 </configuration>
 
