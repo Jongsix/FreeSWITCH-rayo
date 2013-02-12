@@ -35,21 +35,12 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load);
 SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
-/**
- * Convert iksemel XML node type to string
- * @param type the XML node type
- * @return the string value of type or "UNKNOWN"
- */
-static const char *node_type_to_string(int type)
-{
-	switch(type) {
-		case IKS_NODE_START: return "NODE_START";
-		case IKS_NODE_NORMAL: return "NODE_NORMAL";
-		case IKS_NODE_ERROR: return "NODE_ERROR";
-		case IKS_NODE_STOP: return "NODE_START";
-		default: return "NODE_UNKNOWN";
-	}
-}
+struct rayo_session;
+
+typedef void (*iq_command_handler_fn)(struct rayo_session *, iks *);
+struct iq_command_handler {
+	iq_command_handler_fn fn;
+};
 
 /**
  * Module state
@@ -58,6 +49,7 @@ static struct {
 	switch_memory_pool_t *pool;
 	int shutdown;
 	switch_hash_t *users;
+	switch_hash_t *iq_command_handlers;
 } globals;
 
 /**
@@ -111,6 +103,22 @@ static const char *rayo_session_state_to_string(enum rayo_session_state state)
 		case SS_ERROR: return "ERROR";
 		case SS_DESTROY: return "DESTROY";
 		default: return "UNKNOWN";
+	}
+}
+
+/**
+ * Convert iksemel XML node type to string
+ * @param type the XML node type
+ * @return the string value of type or "UNKNOWN"
+ */
+static const char *node_type_to_string(int type)
+{
+	switch(type) {
+		case IKS_NODE_START: return "NODE_START";
+		case IKS_NODE_NORMAL: return "NODE_NORMAL";
+		case IKS_NODE_ERROR: return "NODE_ERROR";
+		case IKS_NODE_STOP: return "NODE_START";
+		default: return "NODE_UNKNOWN";
 	}
 }
 
@@ -175,6 +183,36 @@ static int on_presence(void *user_data, ikspak *pak)
 }
 
 /**
+ * Handle <iq><session> request
+ * @param node the <iq> node
+ */
+static void on_iq_session(struct rayo_session *rsession, iks *node)
+{
+	if (rsession->state == SS_RESOURCE_BOUND) {
+		/* TODO send reply */
+		rsession->state = SS_SESSION_ESTABLISHED;
+	} else {
+		/* TODO error */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
+	}
+}
+
+/**
+ * Handle <iq><bind> request
+ * @param node the <iq> node
+ */
+static void on_iq_bind(struct rayo_session *rsession, iks *node)
+{
+	if (rsession->state == SS_AUTHENTICATED) {
+		/* TODO send reply */
+		rsession->state = SS_RESOURCE_BOUND;
+	} else {
+		/* TODO error */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
+	}
+}
+
+/**
  * Send <success> reply to Rayo client <auth>
  * @param rsession the Rayo session to use.
  */
@@ -198,53 +236,55 @@ static int rayo_send_auth_failure(struct rayo_session *rsession, const char *rea
 }
 
 /**
- * Parse jid, user, and password tokens from base64 PLAIN auth body.
+ * Parse authzid, authcid, and password tokens from base64 PLAIN auth message.
+ * @param message the base-64 encoded authentication message
+ * @param authzid the authorization id in the message
+ * @param authcid the authentication id in the message
+ * @param password the password in the message
  */
-static void parse_plain_auth_body(char *body, char **jid, char **user, char **password)
+static void parse_plain_auth_message(char *message, char **authzid, char **authcid, char **password)
 {
-	char *body_decoded = iks_base64_decode(body);
-	int len = 0;
-	int maxlen = strlen(body) * 6 / 8 + 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "maxlen = %i\n", maxlen);
-	*jid = "";
-	*user = "";
-	*password = "";
-	if (body_decoded == NULL) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing auth body\n");
+	char *decoded = iks_base64_decode(message);
+	int maxlen = strlen(message) * 6 / 8 + 1;
+	int pos = 0;
+	*authzid = NULL;
+	*authcid = NULL;
+	*password = NULL;
+	if (decoded == NULL) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing auth message\n");
 		return;
 	}
-	*jid = body_decoded;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "jid = %s\n", *jid);
-	len = strlen(*jid) + 1;
-	if (len >= maxlen) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at JID\n");
+	*authzid = decoded;
+	pos = strlen(*authzid) + 1;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authcid = %s\n", *authzid);
+	if (pos >= maxlen) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at authzid\n");
 		return;
 	}
-	*user = body_decoded + len;
-	len += strlen(*user) + 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "user = %s\n", *user);
-	if (len >= maxlen) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at user\n");
+	*authcid = decoded + pos;
+	pos += strlen(*authcid) + 1;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authcid = %s\n", *authcid);
+	if (pos >= maxlen) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at authcid\n");
 		return;
 	}
-	*password = body_decoded + len;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "password = %s\n", *password);
-	return;
+	*password = decoded + pos;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "password = %s\n", zstr(*password) ? "(null)" : "xxxxxx");
 }
 
 /**
  * Validate username and password
- * @param username
+ * @param authzid authorization id
+ * @param authcid authentication id
  * @param password
  */
-static int is_correct_user_password(char *username, char *password)
+static int verify_plain_auth(char *authzid, char *authcid, char *password)
 {
 	char *correct_password;
-	if (zstr(username) || zstr(password)) {
+	if (zstr(authcid) || zstr(password)) {
 		return 0;
 	}
-	correct_password = switch_core_hash_find(globals.users, username);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "is_authenticated? username = %s, password = %s, expected = %s\n", username, password, correct_password);
+	correct_password = switch_core_hash_find(globals.users, authcid);
 	return !zstr(correct_password) && !strcmp(correct_password, password);
 }
 
@@ -267,14 +307,12 @@ static int rayo_send_header_auth(struct rayo_session *rsession)
 }
 
 /**
- * Handle <auth> message callback.  Only PLAIN supported.
+ * Handle <auth> message.  Only PLAIN supported.
  * @param user_data the Rayo session
  * @param pak the <auth> packet
- * @return IKS_FILTER_EAT
  */
-static int on_auth(void *user_data, iks *node)
+static void on_auth(struct rayo_session *rsession, iks *node)
 {
-	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	char *xmlns, *mechanism;
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
@@ -284,7 +322,7 @@ static int on_auth(void *user_data, iks *node)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth UNEXPECTED, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 		/* TODO error */
 		rsession->state = SS_ERROR;
-		goto done;
+		return;
 	}
 
 	/* unsupported authentication type */
@@ -293,7 +331,7 @@ static int on_auth(void *user_data, iks *node)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported namespace: %s!\n", rsession->id, rayo_session_state_to_string(rsession->state), xmlns);
 		/* TODO error */
 		rsession->state = SS_ERROR;
-		goto done;
+		return;
 	}
 
 	/* unsupported SASL authentication mechanism */
@@ -302,16 +340,17 @@ static int on_auth(void *user_data, iks *node)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported SASL mechanism: %s!\n", rsession->id, rayo_session_state_to_string(rsession->state), mechanism);
 		rayo_send_auth_failure(rsession, "invalid-mechanism");
 		rsession->state = SS_ERROR;
-		goto done;
+		return;
 	}
 
 	{
 		/* get user and password from auth */
-		char *body = iks_cdata(iks_child(node));
-		char *jid = NULL, *user, *password;
-		parse_plain_auth_body(body, &jid, &user, &password);
-		if (is_correct_user_password(jid, password)) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", rsession->id, rayo_session_state_to_string(rsession->state), jid, user);
+		char *message = iks_cdata(iks_child(node));
+		char *authzid = NULL, *authcid, *password;
+		/* TODO use library for this! */
+		parse_plain_auth_message(message, &authzid, &authcid, &password);
+		if (verify_plain_auth(authzid, authcid, password)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", rsession->id, rayo_session_state_to_string(rsession->state), authzid, authcid);
 			rayo_send_auth_success(rsession);
 			rsession->state = SS_AUTHENTICATED;
 		} else {
@@ -319,11 +358,8 @@ static int on_auth(void *user_data, iks *node)
 			rayo_send_auth_failure(rsession, "not-authorized");
 			rsession->state = SS_ERROR;
 		}
-		switch_safe_free(jid);
+		switch_safe_free(authzid);
 	}
-
-  done:
-	return IKS_FILTER_EAT;
 }
 
 #if 0
@@ -351,43 +387,19 @@ static int send_feature_not_implemented(struct rayo_session *rsession, char *fro
  * @param pak the <iq> packet
  * @return IKS_FILTER_EAT
  */
-static int on_command(void *user_data, ikspak *pak)
+static int on_iq(void *user_data, ikspak *pak)
 {
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *iq = pak->x;
 	iks *command = iks_child(iq);
+	struct iq_command_handler *handler = NULL;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, iq, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-	if (!command) {
-		/* TODO error */
-		rsession->state = SS_ERROR;
-	} else if (rsession->state == SS_AUTHENTICATED) {
-		char *command_name = iks_name(command);
-		/* looking for bind */
-		if (!strcmp("bind", command_name)) {
-			rsession->state = SS_RESOURCE_BOUND;
-			/* TODO reply with JID */
-		} else {
-			/* TODO error */
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED: %s, state = %s\n", rsession->id, command_name, rayo_session_state_to_string(rsession->state));
-		}
-	} else if (rsession->state == SS_RESOURCE_BOUND) {
-		iks *command = iks_child(iq);
-		char *command_name = iks_name(command);
-		/* looking for session */
-		if (!strcmp("session", command_name)) {
-			rsession->state = SS_SESSION_ESTABLISHED;
-			/* TODO reply */
-		} else {
-			/* TODO error */
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED: %s, state = %s\n", rsession->id, command_name, rayo_session_state_to_string(rsession->state));
-		}
-	} else if (rsession->state == SS_SESSION_ESTABLISHED) {
-		iks *command = iks_child(iq);
-		char *command_name = iks_name(command);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNSUPPORTED: %s, state = %s\n", rsession->id, command_name, rayo_session_state_to_string(rsession->state));
-		/* TODO handle command */
+	if (command) {
+		handler = (struct iq_command_handler *)switch_core_hash_find(globals.iq_command_handlers, iks_name(command));
+	}
+	if (handler) {
+		handler->fn(rsession, iq);
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 		/* TODO error */
 		rsession->state = SS_ERROR;
 	}
@@ -463,7 +475,7 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 	iks_filter_add_rule(rsession->filter, on_presence, rsession,
 		IKS_RULE_TYPE, IKS_PAK_PRESENCE,
 		IKS_RULE_DONE);
-	iks_filter_add_rule(rsession->filter, on_command, rsession,
+	iks_filter_add_rule(rsession->filter, on_iq, rsession,
 		IKS_RULE_TYPE, IKS_PAK_IQ,
 		IKS_RULE_SUBTYPE, IKS_TYPE_SET,
 		IKS_RULE_DONE);
@@ -714,15 +726,40 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	return status;
 }
 
+/**
+ * Add command handler function to hash
+ * @param name the command name
+ * @param fn the command callback function
+ */
+static void add_command(const char *name, iq_command_handler_fn fn)
+{
+	/* have to wrap function pointer since conversion to void * is not allowed */
+	struct iq_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
+	handler->fn = fn;
+	switch_core_hash_insert(globals.iq_command_handlers, name, handler);
+}
+
+/**
+ * Offer a call for Rayo 3PCC
+ * @param session_uuid
+ * @return SWITCH_STATUS_SUCCESS on success
+ */
+static switch_status_t offer_call(char *session_uuid)
+{
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Offering call %s for Rayo 3PCC\n", session_uuid);
+	/* TODO */
+	return SWITCH_STATUS_FALSE;
+}
+
 #define RAYO_USAGE ""
 /**
  * Notify of new call and park channel
  */
 SWITCH_STANDARD_APP(rayo_app)
 {
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo control\n");
-	/* TODO send offer */
-	switch_ivr_park(session, NULL);
+	if (offer_call(switch_core_session_get_uuid(session)) == SWITCH_STATUS_SUCCESS) {
+		switch_ivr_park(session, NULL);
+	}
 }
 
 /**
@@ -738,6 +775,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	memset(&globals, 0, sizeof(globals));
 	globals.pool = pool;
 	switch_core_hash_init(&globals.users, pool);
+	
+	switch_core_hash_init(&globals.iq_command_handlers, pool);
+	add_command("bind", on_iq_bind);
+	add_command("session", on_iq_session);
 
 	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_TERM;
