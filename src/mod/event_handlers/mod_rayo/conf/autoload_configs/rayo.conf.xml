@@ -12,7 +12,7 @@
 
 	<!-- Authorized users -->
 	<users>
-		<user name="usera@$${local_ip_v4}" password="1"/>
+		<user name="usera" password="1"/>
 	</users>
 </configuration>
 
