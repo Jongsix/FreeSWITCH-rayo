@@ -159,6 +159,46 @@ void on_log(void *user_data, const char *data, size_t size, int is_incoming)
 	}
 }
 
+
+/**
+ * Add command handler function to hash
+ * @param name the command name
+ * @param fn the command callback function
+ */
+static void add_iq_set_command_handler(const char *name, iq_set_command_handler_fn fn)
+{
+	/* have to wrap function pointer since conversion to void * is not allowed */
+	struct iq_set_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
+	handler->fn = fn;
+	switch_core_hash_insert(globals.iq_set_command_handlers, name, handler);
+}
+
+/**
+ * Get command handler function from hash
+ * @param name the command name
+ * @param namespace the command namespace
+ * @return the command handler function or NULL
+ */
+static iq_set_command_handler_fn get_iq_set_command_handler(const char *name, const char *namespace)
+{
+	struct iq_set_command_handler *handler = NULL;
+	if (zstr(name)) {
+		return NULL;
+	}
+	if (zstr(namespace)) {
+		handler = (struct iq_set_command_handler *)switch_core_hash_find(globals.iq_set_command_handlers, name);
+	} else {
+		char full_name[1024];
+		full_name[1023] = '\0';
+		snprintf(full_name, sizeof(full_name) - 1, "%s:%s", namespace, name);
+		handler = (struct iq_set_command_handler *)switch_core_hash_find(globals.iq_set_command_handlers, full_name);
+	}
+	if (handler) {
+		return handler->fn;
+	}
+	return NULL;
+}
+
 /**
  * Get attribute value of node, returning empty string if non-existent or not set.
  * @param xml the XML node to search
@@ -220,16 +260,42 @@ static int on_presence(void *user_data, ikspak *pak)
 }
 
 /**
+ * Handle <iq><ping> request
+ * @param node the <iq> node
+ */
+static void on_iq_set_xmpp_ping(struct rayo_session *rsession, iks *node)
+{
+	iks *pong = iks_new("iq");
+	char *from = iks_find_attrib(node, "from");
+	char *to = iks_find_attrib(node, "to");
+	
+	if (zstr(from)) {
+		from = rsession->client_jid_full;
+	}
+	if (zstr(to)) {
+		to = rsession->server_jid;
+	}
+
+	iks_insert_attrib(pong, "type", "result");
+	iks_insert_attrib(pong, "from", to);
+	iks_insert_attrib(pong, "to", from);
+	iks_insert_attrib(pong, "id", iks_find_attrib(node, "id"));
+	iks_send(rsession->parser, pong);
+	iks_delete(pong);	
+}
+
+/**
  * Handle <iq><session> request
  * @param node the <iq> node
  */
-static void on_iq_set_session(struct rayo_session *rsession, iks *node)
+static void on_iq_set_xmpp_session(struct rayo_session *rsession, iks *node)
 {
 	if (rsession->state == SS_RESOURCE_BOUND) {
 		iks *reply = iks_new("iq");
 		iks_insert_attrib(reply, "type", "result");
 		iks_insert_attrib(reply, "from", rsession->server_jid);
 		iks_insert_attrib(reply, "to", rsession->client_jid_full);
+		iks_insert_attrib(reply, "id", iks_find_attrib(node, "id"));
 		iks_send(rsession->parser, reply);
 		iks_delete(reply);
 		rsession->state = SS_SESSION_ESTABLISHED;
@@ -243,7 +309,7 @@ static void on_iq_set_session(struct rayo_session *rsession, iks *node)
  * Handle <iq><bind> request
  * @param node the <iq> node
  */
-static void on_iq_set_bind(struct rayo_session *rsession, iks *node)
+static void on_iq_set_xmpp_bind(struct rayo_session *rsession, iks *node)
 {
 	if (rsession->state == SS_AUTHENTICATED) {
 		iks *bind = iks_find(node, "bind");
@@ -300,7 +366,7 @@ static int on_iq_get(void *user_data, ikspak *pak)
 	iks *x;
 	
 	/* <iq> */
-	iks_insert_attrib(response, "from", iks_find_attrib(node, "to"));
+	iks_insert_attrib(response, "from", rsession->server_jid);
 	iks_insert_attrib(response, "to", rsession->client_jid_full);
 	iks_insert_attrib(response, "type", "error");
 	
@@ -485,13 +551,13 @@ static int on_iq_set(void *user_data, ikspak *pak)
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *iq = pak->x;
 	iks *command = iks_child(iq);
-	struct iq_set_command_handler *handler = NULL;
+	iq_set_command_handler_fn fn = NULL;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, iq, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 	if (command) {
-		handler = (struct iq_set_command_handler *)switch_core_hash_find(globals.iq_set_command_handlers, iks_name(command));
+		fn = get_iq_set_command_handler(iks_name(command), iks_find_attrib(command, "xmlns"));
 	}
-	if (handler) {
-		handler->fn(rsession, iq);
+	if (fn) {
+		fn(rsession, iq);
 	} else {
 		/* TODO error */
 		rsession->state = SS_ERROR;
@@ -863,19 +929,6 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 }
 
 /**
- * Add command handler function to hash
- * @param name the command name
- * @param fn the command callback function
- */
-static void add_command(const char *name, iq_set_command_handler_fn fn)
-{
-	/* have to wrap function pointer since conversion to void * is not allowed */
-	struct iq_set_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
-	handler->fn = fn;
-	switch_core_hash_insert(globals.iq_set_command_handlers, name, handler);
-}
-
-/**
  * Offer a call for Rayo 3PCC
  * @param session_uuid
  * @return SWITCH_STATUS_SUCCESS on success
@@ -913,8 +966,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.users, pool);
 	
 	switch_core_hash_init(&globals.iq_set_command_handlers, pool);
-	add_command("bind", on_iq_set_bind);
-	add_command("session", on_iq_set_session);
+	add_iq_set_command_handler(IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
+	add_iq_set_command_handler(IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session);
+	add_iq_set_command_handler("urn:xmpp:ping:ping", on_iq_set_xmpp_ping);
 
 	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_TERM;
