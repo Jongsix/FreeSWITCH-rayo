@@ -30,7 +30,6 @@
 #include <switch.h>
 #include <iksemel.h>
 
-
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load);
 SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
@@ -55,12 +54,12 @@ static struct {
 	switch_memory_pool_t *pool;
 	/** module shutdown flag */
 	int shutdown;
+	/** prevents module shutdown until all sessions/servers are finished */
+	switch_thread_rwlock_t *shutdown_rwlock;
 	/** users mapped to passwords */
 	switch_hash_t *users;
 	/** <iq> set commands mapped to functions */
 	switch_hash_t *iq_set_command_handlers;
-	/** prevents module shutdown until all sessions are finished */
-	switch_thread_rwlock_t *session_rwlock;
 } globals;
 
 /**
@@ -75,6 +74,8 @@ struct rayo_server {
 	switch_port_t port;
 	/** listen socket */
 	switch_socket_t *socket;
+	/** pollset for listen socket */
+	switch_pollfd_t *read_pollfd;
 };
 
 enum rayo_session_state {
@@ -83,6 +84,7 @@ enum rayo_session_state {
 	SS_RESOURCE_BOUND,
 	SS_SESSION_ESTABLISHED,
 	SS_ONLINE,
+	SS_SHUTDOWN,
 	SS_ERROR,
 	SS_DESTROY
 };
@@ -128,6 +130,7 @@ static const char *rayo_session_state_to_string(enum rayo_session_state state)
 		case SS_RESOURCE_BOUND: return "RESOURCE_BOUND";
 		case SS_SESSION_ESTABLISHED: return "SESSION_ESTABLISHED";
 		case SS_ONLINE: return "SESSION_ESTABLISHED";
+		case SS_SHUTDOWN: return "SHUTDOWN";
 		case SS_ERROR: return "ERROR";
 		case SS_DESTROY: return "DESTROY";
 		default: return "UNKNOWN";
@@ -188,7 +191,6 @@ void on_log(void *user_data, const char *data, size_t size, int is_incoming)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s %s %s\n", rsession->id, is_incoming ? "RECV" : "SEND", data);
 	}
 }
-
 
 /**
  * Add command handler function to hash
@@ -484,7 +486,7 @@ static int rayo_send_auth_failure(struct rayo_session *rsession, const char *rea
 {
 	int result;
 	char *reply = switch_mprintf("<failure xmlns=\""IKS_NS_XMPP_SASL"\">"
-		"<%s/></failure></session:session>", reason);
+		"<%s/></failure>", reason);
 	result = iks_send_raw(rsession->parser, reply);
 	return result;
 }
@@ -663,23 +665,30 @@ static int on_stream(void *user_data, int type, iks *node)
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, node, state = %s, type = %s\n", rsession->id, rayo_session_state_to_string(rsession->state), node_type_to_string(type));
 
 	switch(type) {
-		case IKS_NODE_START:
-			if (rsession->state == SS_NEW) {
-				rsession->server_jid = switch_core_strdup(rsession->pool, soft_find_attrib(node, "to"));
-				rayo_send_header_auth(rsession);
-			} else if (rsession->state == SS_AUTHENTICATED) {
-				rayo_send_header_bind(rsession);
-			}
-			break;
-		case IKS_NODE_NORMAL:
-			if (!strcmp("auth", iks_name(node))) {
-				on_auth(rsession, node);
-			}
-			break;
-		case IKS_NODE_ERROR:
-			break;
-		case IKS_NODE_STOP:
-			break;
+	case IKS_NODE_START:
+		if (rsession->state == SS_NEW) {
+			rsession->server_jid = switch_core_strdup(rsession->pool, soft_find_attrib(node, "to"));
+			rayo_send_header_auth(rsession);
+		} else if (rsession->state == SS_AUTHENTICATED) {
+			rayo_send_header_bind(rsession);
+		} else if (rsession->state == SS_SHUTDOWN) {
+			/* strange... I expect IKS_NODE_STOP, this is a workaround. */
+			rsession->state = SS_DESTROY;
+		}
+		break;
+	case IKS_NODE_NORMAL:
+		if (!strcmp("auth", iks_name(node))) {
+			on_auth(rsession, node);
+		}
+		break;
+	case IKS_NODE_ERROR:
+		break;
+	case IKS_NODE_STOP:
+		if (rsession->state != SS_SHUTDOWN) {
+			iks_send_raw(rsession->parser, "</stream:stream>");
+		}
+		rsession->state = SS_DESTROY;
+		break;
 	}
 	
 	if (pak) {
@@ -711,6 +720,9 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 {
 	iksparser *parser;
 	struct rayo_session *rsession = (struct rayo_session *)obj;
+	
+	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s New connection\n", rsession->id);	
 	
 	/* set up XMPP stream parser */
@@ -749,7 +761,7 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 		/* TODO */
 	}
 	
-	while (!globals.shutdown && rayo_session_ready(rsession)) {
+	while (rayo_session_ready(rsession)) {
 		/* TODO keep alive, figure out how to get events */
 		int result = iks_recv(parser, 1);
 		switch (result) {
@@ -766,10 +778,15 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 				switch_yield(100 * 1000);
 				break;
 		}
+
+		if (rsession->state != SS_DESTROY && globals.shutdown && rsession->state != SS_SHUTDOWN) {
+			iks_send_raw(rsession->parser, "</stream:stream>");
+			rsession->state = SS_SHUTDOWN;
+		}
 	}
 
   done:
-  
+
 	if (rsession->parser) {
 		iks_disconnect(rsession->parser);
 	}
@@ -782,6 +799,8 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s Connection closed\n", rsession->id);
 	
 	switch_core_destroy_memory_pool(&rsession->pool);
+
+	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 
 	return NULL;
 }
@@ -821,8 +840,11 @@ static struct rayo_session *rayo_session_create(switch_memory_pool_t *pool, swit
 static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void *obj)
 {
 	struct rayo_server *server = (struct rayo_server *)obj;
+	switch_memory_pool_t *pool = NULL;
 	uint32_t errs = 0;
 
+	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+	
 	/* bind to XMPP port */
 	while (!globals.shutdown) {
 		switch_status_t rv;
@@ -849,6 +871,13 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 		rv = switch_socket_listen(server->socket, 5);
 		if (rv)
 			goto sock_fail;
+		
+		rv = switch_socket_create_pollset(&server->read_pollfd, server->socket, SWITCH_POLLIN | SWITCH_POLLERR, server->pool);
+		if (rv) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Create pollset for server socket %s:%u error!\n", server->addr, server->port);
+			goto sock_fail;
+		}
+		
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Rayo server listening on %s:%u\n", server->addr, server->port);
 
 		break;
@@ -858,18 +887,25 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	}
 
 	/* Listen for XMPP client connections */
+	
 	while (!globals.shutdown) {
 		switch_socket_t *socket = NULL;
-		switch_memory_pool_t *pool = NULL;
 		switch_status_t rv;
+		int32_t fdr;
 
-		if (switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
+		if (pool == NULL && switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool for new client connection!\n");
 			goto fail;
 		}
 
+		/* is there a new connection? */
+		rv = switch_poll(server->read_pollfd, 1, &fdr, 1000 * 1000 /* 1000 ms */);
+		if (rv != SWITCH_STATUS_SUCCESS) {
+			continue;
+		}
+		
+		/* accept the connection */
 		if ((rv = switch_socket_accept(&socket, server->socket, pool))) {
-			switch_core_destroy_memory_pool(&pool);
 			if (globals.shutdown) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Shutting Down\n");
 				goto end;
@@ -891,9 +927,9 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 			if (!(rsession = rayo_session_create(pool, socket, 1))) {
 				switch_socket_shutdown(socket, SWITCH_SHUTDOWN_READWRITE);
 				switch_socket_close(socket);
-				switch_core_destroy_memory_pool(&pool);
 				break;
 			}
+			pool = NULL; /* session now owns the pool */
 			switch_threadattr_create(&thd_attr, rsession->pool);
 			switch_threadattr_detach_set(thd_attr, 1);
 			switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
@@ -910,9 +946,14 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	if (server->pool) {
 		switch_core_destroy_memory_pool(&server->pool);
 	}
+	
+	if (pool) {
+		switch_core_destroy_memory_pool(&pool);
+	}
 
 fail:
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Rayo server %s:%u thread done\n", server->addr, server->port);
+	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 	return NULL;
 }
 
@@ -1056,8 +1097,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Loading module\n");
 	memset(&globals, 0, sizeof(globals));
 	globals.pool = pool;
+	switch_thread_rwlock_create(&globals.shutdown_rwlock, pool);
 	switch_core_hash_init(&globals.users, pool);
-	
 	switch_core_hash_init(&globals.iq_set_command_handlers, pool);
 	
 	/* XMPP commands */
@@ -1086,10 +1127,15 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
  */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Shutdown module\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Notifying of shutdown\n");
 	globals.shutdown = 1;
-	/* TODO wait for shutdown */
-	/* TODO cleanup hash, etc */
+
+	/* wait for shutdown to finish */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for server and session threads to stop\n");
+	switch_thread_rwlock_wrlock(globals.shutdown_rwlock);
+	
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");
+
 	return SWITCH_STATUS_SUCCESS;
 }
 
