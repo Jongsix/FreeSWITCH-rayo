@@ -37,7 +37,12 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 struct rayo_session;
 
+/** A command handler function */
 typedef void (*iq_set_command_handler_fn)(struct rayo_session *, iks *);
+
+/**
+ * Function pointer wrapper for the command handlers hash
+ */
 struct iq_set_command_handler {
 	iq_set_command_handler_fn fn;
 };
@@ -46,19 +51,29 @@ struct iq_set_command_handler {
  * Module state
  */
 static struct {
+	/** module memory pool */
 	switch_memory_pool_t *pool;
+	/** module shutdown flag */
 	int shutdown;
+	/** users mapped to passwords */
 	switch_hash_t *users;
+	/** <iq> set commands mapped to functions */
 	switch_hash_t *iq_set_command_handlers;
+	/** prevents module shutdown until all sessions are finished */
+	switch_thread_rwlock_t *session_rwlock;
 } globals;
 
 /**
  * A server listening for clients
  */
 struct rayo_server {
+	/** server socket memory pool */
 	switch_memory_pool_t *pool;
+	/** listen address */
 	char *addr;
+	/** listen port */
 	switch_port_t port;
+	/** listen socket */
 	switch_socket_t *socket;
 };
 
@@ -76,16 +91,27 @@ enum rayo_session_state {
  * A Rayo XML stream
  */
 struct rayo_session {
+	/** session pool */
 	switch_memory_pool_t *pool;
+	/** socket to client */
 	switch_socket_t *socket;
+	/** (this) server Jabber ID */
 	char *server_jid;
+	/** client Jabber ID */
 	char *client_jid;
+	/** resource part of full Jabber ID */
 	char *client_resource_id;
+	/** client full Jabber ID */
 	char *client_jid_full;
+	/** 1 if this session started from direct client connection */
 	int incoming;
+	/** XML stream parser */
 	iksparser *parser;
+	/** XML stream filter (sets callbacks to <iq>, <presence>, etc). */
 	iksfilter *filter;
+	/** session ID */
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1];
+	/** session state */
 	enum rayo_session_state state;
 };
 
@@ -149,7 +175,11 @@ static const char *net_error_to_string(int err)
 }
 
 /**
- * Handle stream logging callback
+ * Handle XMPP stream logging callback
+ * @param user_data the Rayo session
+ * @param data the log message
+ * @param size of the log message
+ * @param is_incoming true if this is a log for a received message
  */
 void on_log(void *user_data, const char *data, size_t size, int is_incoming) 
 {
@@ -231,6 +261,51 @@ static int rayo_send_header_bind(struct rayo_session *rsession)
 }
 
 /**
+ * Handle <iq><accept> request
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ */
+static void on_iq_set_rayo_accept(struct rayo_session *rsession, iks *node)
+{
+}
+
+/**
+ * Handle <iq><answer> request
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ */
+static void on_iq_set_rayo_answer(struct rayo_session *rsession, iks *node)
+{
+}
+
+/**
+ * Handle <iq><redirect> request
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ */
+static void on_iq_set_rayo_redirect(struct rayo_session *rsession, iks *node)
+{
+}
+
+/**
+ * Handle <iq><reject> request
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ */
+static void on_iq_set_rayo_reject(struct rayo_session *rsession, iks *node)
+{
+}
+
+/**
+ * Handle <iq><hangup> request
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ */
+static void on_iq_set_rayo_hangup(struct rayo_session *rsession, iks *node)
+{
+}
+
+/**
  * Handle <presence> message callback
  * @param user_data the Rayo session
  * @param pak the <presence> packet
@@ -286,6 +361,7 @@ static void on_iq_set_xmpp_ping(struct rayo_session *rsession, iks *node)
 
 /**
  * Handle <iq><session> request
+ * @param rsession the Rayo session
  * @param node the <iq> node
  */
 static void on_iq_set_xmpp_session(struct rayo_session *rsession, iks *node)
@@ -307,6 +383,7 @@ static void on_iq_set_xmpp_session(struct rayo_session *rsession, iks *node)
 
 /**
  * Handle <iq><bind> request
+ * @param rsession the Rayo session
  * @param node the <iq> node
  */
 static void on_iq_set_xmpp_bind(struct rayo_session *rsession, iks *node)
@@ -355,6 +432,7 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, iks *node)
 
 /**
  * Handle <iq> get requests
+ * @param user_data the Rayo session
  * @param node the <iq> node
  * @return IKS_FILTER_EAT
  */
@@ -453,6 +531,7 @@ static void parse_plain_auth_message(char *message, char **authzid, char **authc
  * @param authzid authorization id
  * @param authcid authentication id
  * @param password
+ * @return 1 if authenticated
  */
 static int verify_plain_auth(char *authzid, char *authcid, char *password)
 {
@@ -567,6 +646,10 @@ static int on_iq_set(void *user_data, ikspak *pak)
 
 /**
  * Handle XML stream callback
+ * @param user_data the Rayo session
+ * @param type stream type (start/normal/stop/etc)
+ * @param node optional XML node
+ * @return IKS_OK
  */
 static int on_stream(void *user_data, int type, iks *node)
 {
@@ -602,8 +685,7 @@ static int on_stream(void *user_data, int type, iks *node)
 	if (pak) {
 		iks_filter_packet(rsession->filter, pak);
 	}
-	
-	/* TODO */
+
 	if (node) {
 		iks_delete(node);
 	}
@@ -620,7 +702,10 @@ static int rayo_session_ready(struct rayo_session *rsession)
 }
 
 /**
- * Handles Rayo XML stream
+ * Thread that handles Rayo XML stream
+ * @param thread this thread
+ * @param obj the Rayo session
+ * @return NULL
  */
 static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, void *obj)
 {
@@ -703,6 +788,10 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 
 /**
  * Create a new Rayo session
+ * @param pool the memory pool for this session
+ * @param socket the socket for this session
+ * @param incoming 1 if this session was created by a direct client connection
+ * @return the new session or NULL
  */
 static struct rayo_session *rayo_session_create(switch_memory_pool_t *pool, switch_socket_t *socket, int incoming)
 {
@@ -724,7 +813,10 @@ static struct rayo_session *rayo_session_create(switch_memory_pool_t *pool, swit
 }
 
 /**
- * Listens for new Rayo client connections
+ * Thread that listens for new Rayo client connections
+ * @param thread this thread
+ * @param obj the Rayo server
+ * @return NULL
  */
 static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void *obj)
 {
@@ -825,9 +917,10 @@ fail:
 }
 
 /**
- * Add a new server for Rayo client connections.
+ * Add a new server to listen for Rayo client connections.
  * @param addr the IP address
  * @param port the port
+ * @return SWITCH_STATUS_SUCCESS if successful
  */
 static switch_status_t add_rayo_server(char *addr, char *port)
 {
@@ -862,7 +955,7 @@ static switch_status_t add_rayo_server(char *addr, char *port)
 /**
  * Process module XML configuration
  * @param pool memory pool to allocate from
- * @return SWITCH_STATUS_SUCCESS on successful (re)configuration
+ * @return SWITCH_STATUS_SUCCESS on successful configuration
  */
 static switch_status_t do_config(switch_memory_pool_t *pool)
 {
@@ -966,9 +1059,18 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.users, pool);
 	
 	switch_core_hash_init(&globals.iq_set_command_handlers, pool);
+	
+	/* XMPP commands */
 	add_iq_set_command_handler(IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
 	add_iq_set_command_handler(IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session);
 	add_iq_set_command_handler("urn:xmpp:ping:ping", on_iq_set_xmpp_ping);
+	
+	/* Rayo call commands */
+	add_iq_set_command_handler("urn:xmpp:rayo:1:accept", on_iq_set_rayo_accept);
+	add_iq_set_command_handler("urn:xmpp:rayo:1:answer", on_iq_set_rayo_answer);
+	add_iq_set_command_handler("urn:xmpp:rayo:1:redirect", on_iq_set_rayo_redirect);
+	add_iq_set_command_handler("urn:xmpp:rayo:1:reject", on_iq_set_rayo_reject);
+	add_iq_set_command_handler("urn:xmpp:rayo:1:hangup", on_iq_set_rayo_hangup);
 
 	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_TERM;
