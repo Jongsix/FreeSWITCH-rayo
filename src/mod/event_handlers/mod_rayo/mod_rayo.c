@@ -733,10 +733,10 @@ static int rayo_session_ready(struct rayo_session *rsession)
 
 /**
  * Receives events from FreeSWITCH core and routes them to the proper Rayo session.
+ * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
  */
 static void handle_event(switch_event_t *event)
 {
-	int delivered_event = 0;
 	char *uuid = switch_event_get_header(event, "unique-id");
 	if (!zstr(uuid)) {
 		/* is a client interested in this event? */
@@ -751,10 +751,11 @@ static void handle_event(switch_event_t *event)
 			rsession = (struct rayo_session *)switch_core_hash_find(globals.sessions, client_jid_full);
 			if (rsession) {
 				/* send event to session */
-				if (switch_queue_trypush(rsession->event_queue, event) == SWITCH_STATUS_SUCCESS) {
-					delivered_event = 1;
-				} else {
+				switch_event_t *dup_event = NULL;
+				switch_event_dup(&dup_event, event);
+				if (switch_queue_trypush(rsession->event_queue, dup_event) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "%s, failed to deliver event!\n", rsession->id);
+					switch_event_destroy(&dup_event);
 				}
 			} else {
 				/* TODO orphaned call... maybe allow events to queue so they can be delivered on reconnect? */
@@ -762,16 +763,12 @@ static void handle_event(switch_event_t *event)
 			switch_mutex_unlock(globals.sessions_mutex);
 		}
 	}
-
-	if (!delivered_event) {
-		switch_event_destroy(&event);
-	}
 }
 
 /**
  * Handle events delivered to this session
  * @param rsession the Rayo session to handle the event
- * @param event the event
+ * @param event the event.  This event must be destroyed by this function.
  */
 static void rayo_session_handle_event(struct rayo_session *rsession, switch_event_t *event)
 {
