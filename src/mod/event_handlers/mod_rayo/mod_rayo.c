@@ -34,6 +34,10 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load);
 SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
+#define MAX_QUEUE_LEN 25000
+
+#define RAYO_EVENT_OFFER "rayo::offer"
+
 struct rayo_session;
 
 /** A command handler function */
@@ -60,6 +64,16 @@ static struct {
 	switch_hash_t *users;
 	/** <iq> set commands mapped to functions */
 	switch_hash_t *iq_set_command_handlers;
+	/** map of call uuid to client full JID */
+	switch_hash_t *calls;
+	/** synchronizes access to calls hash */
+	switch_mutex_t *calls_mutex;
+	/** map of client full JID to session */
+	switch_hash_t *sessions;
+	/** synchronizes access to sessions hash */
+	switch_mutex_t *sessions_mutex;
+	/** handle to event bind */
+    switch_event_node_t *node;
 } globals;
 
 /**
@@ -115,6 +129,8 @@ struct rayo_session {
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1];
 	/** session state */
 	enum rayo_session_state state;
+	/** event queue */
+	switch_queue_t *event_queue;
 };
 
 /**
@@ -129,7 +145,7 @@ static const char *rayo_session_state_to_string(enum rayo_session_state state)
 		case SS_AUTHENTICATED: return "AUTHENTICATED";
 		case SS_RESOURCE_BOUND: return "RESOURCE_BOUND";
 		case SS_SESSION_ESTABLISHED: return "SESSION_ESTABLISHED";
-		case SS_ONLINE: return "SESSION_ESTABLISHED";
+		case SS_ONLINE: return "ONLINE";
 		case SS_SHUTDOWN: return "SHUTDOWN";
 		case SS_ERROR: return "ERROR";
 		case SS_DESTROY: return "DESTROY";
@@ -318,20 +334,20 @@ static int on_presence(void *user_data, ikspak *pak)
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *node = pak->x;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-	if (rsession->state == SS_SESSION_ESTABLISHED) {
+	if (rsession->state == SS_SESSION_ESTABLISHED || rsession->state == SS_ONLINE) {
 		iks *show = iks_find(node, "show");
+		int is_online = 0;
 		if (show) {
 			char *status = iks_cdata(iks_child(show));
-			if (!zstr(status) && !strcmp("chat", status)) {
-				rsession->state = SS_ONLINE;
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is ONLINE\n", rsession->id, rsession->client_jid_full);
-			}
-		} else {
-			/* TODO error */
+			is_online = !zstr(status) && !strcmp("chat", status);
 		}
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, presence UNEXPECTED, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		/* TODO error */
+		if (is_online && rsession->state == SS_SESSION_ESTABLISHED) {
+			rsession->state = SS_ONLINE;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is ONLINE\n", rsession->id, rsession->client_jid_full);
+		} else if (!is_online && rsession->state == SS_ONLINE) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is OFFLINE\n", rsession->id, rsession->client_jid_full);
+			rsession->state = SS_SESSION_ESTABLISHED;
+		}
 	}
 	return IKS_FILTER_EAT;
 }
@@ -426,6 +442,11 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, iks *node)
 		iks_delete(reply);
 
 		rsession->state = SS_RESOURCE_BOUND;
+		
+		/* map resource to session */
+		switch_mutex_lock(globals.sessions_mutex);
+		switch_core_hash_insert(globals.sessions, rsession->client_jid_full, rsession);
+		switch_mutex_unlock(globals.sessions_mutex);
 	} else {
 		/* TODO error */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
@@ -711,6 +732,97 @@ static int rayo_session_ready(struct rayo_session *rsession)
 }
 
 /**
+ * Receives events from FreeSWITCH core and routes them to the proper Rayo session.
+ */
+static void handle_event(switch_event_t *event)
+{
+	int delivered_event = 0;
+	char *uuid = switch_event_get_header(event, "unique-id");
+	if (!zstr(uuid)) {
+		/* is a client interested in this event? */
+		char *client_jid_full;
+		switch_mutex_lock(globals.calls_mutex);
+		client_jid_full = (char *)switch_core_hash_find(globals.calls, uuid);
+		switch_mutex_unlock(globals.calls_mutex);
+		if (!zstr(client_jid_full)) {
+			struct rayo_session *rsession;
+			/* find session that is connected to client */
+			switch_mutex_lock(globals.sessions_mutex);
+			rsession = (struct rayo_session *)switch_core_hash_find(globals.sessions, client_jid_full);
+			if (rsession) {
+				/* send event to session */
+				if (switch_queue_trypush(rsession->event_queue, event) == SWITCH_STATUS_SUCCESS) {
+					delivered_event = 1;
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "%s, failed to deliver event!\n", rsession->id);
+				}
+			} else {
+				/* TODO orphaned call... maybe allow events to queue so they can be delivered on reconnect? */
+			}
+			switch_mutex_unlock(globals.sessions_mutex);
+		}
+	}
+
+	if (!delivered_event) {
+		switch_event_destroy(&event);
+	}
+}
+
+/**
+ * Handle events delivered to this session
+ * @param rsession the Rayo session to handle the event
+ * @param event the event
+ */
+static void rayo_session_handle_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	if (event) {
+		/* TODO */
+		char *event_text = NULL;
+		if (switch_event_serialize(event, &event_text, SWITCH_FALSE) == SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, got event: %s\n", rsession->id, event_text);
+		}
+		switch_safe_free(event_text);
+		switch_event_destroy(&event);
+	}
+}
+
+/**
+ * Cleanup the session
+ * @param rsession the session
+ */
+static void rayo_session_destroy(struct rayo_session *rsession)
+{
+	void *queue_item = NULL;
+	
+	rsession->state = SS_DESTROY;
+	
+	/* remove session from map */
+	switch_mutex_lock(globals.sessions_mutex);
+	switch_core_hash_delete(globals.sessions, rsession->client_jid_full);
+	switch_mutex_unlock(globals.sessions_mutex);
+
+	/* flush pending events */
+	while (switch_queue_trypop(rsession->event_queue, &queue_item) == SWITCH_STATUS_SUCCESS) {
+		switch_event_t *event = (switch_event_t *)queue_item;
+		rayo_session_handle_event(rsession, event);
+	}
+
+	/* close connection */
+	if (rsession->parser) {
+		iks_disconnect(rsession->parser);
+	}
+	
+	if (rsession->incoming) {
+		switch_socket_shutdown(rsession->socket, SWITCH_SHUTDOWN_READWRITE);
+		switch_socket_close(rsession->socket);
+	}
+	
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s Session destroyed\n", rsession->id);
+	
+	switch_core_destroy_memory_pool(&rsession->pool);
+}
+
+/**
  * Thread that handles Rayo XML stream
  * @param thread this thread
  * @param obj the Rayo session
@@ -720,6 +832,8 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 {
 	iksparser *parser;
 	struct rayo_session *rsession = (struct rayo_session *)obj;
+	switch_pollfd_t *read_pollfd = NULL;
+	int err_count = 0;
 	
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
@@ -757,28 +871,55 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 		iks_connect_fd(parser, socket);
 		/* TODO error checking */
 	} else {
-		/* make client connection */
+		/* make outbound connection */
 		/* TODO */
 	}
-	
+
+	/* set up pollfd to monitor listen socket */
+	if (switch_socket_create_pollset(&read_pollfd, rsession->socket, SWITCH_POLLIN | SWITCH_POLLERR, rsession->pool) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%s, create pollset error!\n", rsession->id);
+		goto done;
+	}
+
 	while (rayo_session_ready(rsession)) {
-		/* TODO keep alive, figure out how to get events */
-		int result = iks_recv(parser, 1);
+		void *queue_item;
+		
+		/* read any messages from client */
+		int result = iks_recv(parser, 0);
 		switch (result) {
-			case IKS_OK:
-				break;
-			case IKS_NET_RWERR:
-			case IKS_NET_NOCONN:
-			case IKS_NET_NOSOCK:
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s, ending session\n", rsession->id, net_error_to_string(result));
-				rsession->state = SS_ERROR;
-				break;
-			default:
+		case IKS_OK:
+			err_count = 0;
+			break;
+		case IKS_NET_RWERR:
+		case IKS_NET_NOCONN:
+		case IKS_NET_NOSOCK:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s, ending session\n", rsession->id, net_error_to_string(result));
+			rsession->state = SS_ERROR;
+			break;
+		default:
+			if (err_count++ == 0) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s\n", rsession->id, net_error_to_string(result));
-				switch_yield(100 * 1000);
-				break;
+			}
+			if (err_count >= 50) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s too many iks_recv() error = %s, ending session\n", rsession->id, net_error_to_string(result));
+				rsession->state = SS_ERROR;
+			}
+			break;
 		}
 
+		/* wait up to 20ms for any FreeSWITCH events */
+		if (switch_queue_pop_timeout(rsession->event_queue, &queue_item, 20 * 1000) == SWITCH_STATUS_SUCCESS) {
+			switch_event_t *event = (switch_event_t *)queue_item;
+			rayo_session_handle_event(rsession, event);
+			
+			/* handle all queued events */
+			while (switch_queue_trypop(rsession->event_queue, &queue_item) == SWITCH_STATUS_SUCCESS) {
+				event = (switch_event_t *)queue_item;
+				rayo_session_handle_event(rsession, event);
+			}
+		}
+
+		/* check for shutdown */
 		if (rsession->state != SS_DESTROY && globals.shutdown && rsession->state != SS_SHUTDOWN) {
 			iks_send_raw(rsession->parser, "</stream:stream>");
 			rsession->state = SS_SHUTDOWN;
@@ -786,20 +927,8 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 	}
 
   done:
-
-	if (rsession->parser) {
-		iks_disconnect(rsession->parser);
-	}
-	
-	if (rsession->incoming) {
-		switch_socket_shutdown(rsession->socket, SWITCH_SHUTDOWN_READWRITE);
-		switch_socket_close(rsession->socket);
-	}
-	
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s Connection closed\n", rsession->id);
-	
-	switch_core_destroy_memory_pool(&rsession->pool);
-
+  
+	rayo_session_destroy(rsession);
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 
 	return NULL;
@@ -828,6 +957,8 @@ static struct rayo_session *rayo_session_create(switch_memory_pool_t *pool, swit
 	rsession->client_jid = "";
 	rsession->client_jid_full = "";
 	rsession->client_resource_id = "";
+	switch_queue_create(&rsession->event_queue, MAX_QUEUE_LEN, pool);
+
 	return rsession;
 }
 
@@ -887,7 +1018,6 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	}
 
 	/* Listen for XMPP client connections */
-	
 	while (!globals.shutdown) {
 		switch_socket_t *socket = NULL;
 		switch_status_t rv;
@@ -1004,6 +1134,8 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	switch_xml_t cfg, xml;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
+	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+	
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Configuring module\n");
 	if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "open of %s failed\n", cf);
@@ -1059,6 +1191,8 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 
 	switch_xml_free(xml);
 
+	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
+	
 	return status;
 }
 
@@ -1069,8 +1203,34 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
  */
 static switch_status_t offer_call(char *session_uuid)
 {
+	switch_hash_index_t *hi = NULL;
+	
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Offering call %s for Rayo 3PCC\n", session_uuid);
-	/* TODO */
+
+	/* find a session to offer call to */
+	/* TODO round robin?  For now just send to first session. */
+	switch_mutex_lock(globals.sessions_mutex);
+	hi = switch_hash_first(NULL, globals.sessions);
+	if (hi) {
+		struct rayo_session *rsession;
+		switch_event_t* offer_event = NULL;
+		const void *key;
+		void *val;
+		switch_hash_this(hi, &key, NULL, &val);
+		rsession = (struct rayo_session *)val;
+		switch_assert(rsession);
+
+		/* send offer event to session */
+		switch_event_create_subclass(&offer_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER);
+		switch_event_add_header_string(offer_event, SWITCH_STACK_BOTTOM, "unique-id", session_uuid);
+		if (switch_queue_trypush(rsession->event_queue, offer_event) == SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s Offered call to session %s, %s\n", session_uuid, rsession->id, rsession->client_jid_full);
+		} else  {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "%s Failed to queue call offer event to %s, %s!\n", session_uuid, rsession->id, rsession->client_jid_full);
+			switch_event_destroy(&offer_event);
+		}
+	}
+
 	return SWITCH_STATUS_FALSE;
 }
 
@@ -1095,11 +1255,16 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Loading module\n");
+
 	memset(&globals, 0, sizeof(globals));
 	globals.pool = pool;
 	switch_thread_rwlock_create(&globals.shutdown_rwlock, pool);
 	switch_core_hash_init(&globals.users, pool);
 	switch_core_hash_init(&globals.iq_set_command_handlers, pool);
+	switch_core_hash_init(&globals.calls, pool);
+	switch_mutex_init(&globals.calls_mutex, SWITCH_MUTEX_UNNESTED, pool);
+	switch_core_hash_init(&globals.sessions, pool);
+	switch_mutex_init(&globals.sessions_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	
 	/* XMPP commands */
 	add_iq_set_command_handler(IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
@@ -1113,11 +1278,18 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	add_iq_set_command_handler("urn:xmpp:rayo:1:reject", on_iq_set_rayo_reject);
 	add_iq_set_command_handler("urn:xmpp:rayo:1:hangup", on_iq_set_rayo_hangup);
 
-	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
-		return SWITCH_STATUS_TERM;
+	/* set up core event handler */
+	if (switch_event_bind_removable(modname, SWITCH_EVENT_ALL, SWITCH_EVENT_SUBCLASS_ANY, handle_event, NULL, &globals.node) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't bind to events!\n");
+		return SWITCH_STATUS_GENERR;
 	}
 
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
+	
+	/* configure / open sockets */
+	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
+		return SWITCH_STATUS_TERM;
+	}
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -1127,13 +1299,17 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
  */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 {
+	/* notify threads to stop */
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Notifying of shutdown\n");
 	globals.shutdown = 1;
 
-	/* wait for shutdown to finish */
+	/* wait for threads to finish */
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for server and session threads to stop\n");
 	switch_thread_rwlock_wrlock(globals.shutdown_rwlock);
 	
+	/* cleanup module */
+	switch_event_unbind(&globals.node);
+
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");
 
 	return SWITCH_STATUS_SUCCESS;
