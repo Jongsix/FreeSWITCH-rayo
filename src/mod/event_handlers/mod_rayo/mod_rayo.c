@@ -327,18 +327,18 @@ static char *soft_find_attrib(iks *xml, const char *attrib)
 }
 
 /**
- * Send bind + session reply to Rayo client <session>
+ * Send bind + session reply to Rayo client <stream>
  * @param rsession the Rayo session to use
  * @return the error code
  */
 static int rayo_send_header_bind(struct rayo_session *rsession)
 {
 	char *header = switch_mprintf(
-		"<stream:stream xmlns=\""IKS_NS_CLIENT"\" xmlns:db=\"jabber:server:dialback\""
-		" from=\"%s\" id=\"%s\" xml:lang=\"en\" version=\"1.0\""
-		" xmlns:stream=\"http://etherx.jabber.org/streams\"><stream:features>"
-		"<bind xmlns=\""IKS_NS_XMPP_BIND"\"/>"
-		"<session xmlns=\""IKS_NS_XMPP_SESSION"\"/>"
+		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='jabber:server:dialback'"
+		" from='%s' id='%s' xml:lang='en' version='1.0'"
+		" xmlns:stream='http://etherx.jabber.org/streams'><stream:features>"
+		"<bind xmlns='"IKS_NS_XMPP_BIND"'/>"
+		"<session xmlns='"IKS_NS_XMPP_SESSION"'/>"
 		"</stream:features>", rsession->server_jid, rsession->id);
 	int result = iks_send_raw(rsession->parser, header);
 	switch_safe_free(header);
@@ -393,33 +393,58 @@ static int has_call_control(struct rayo_session *rsession, char *call_jid)
 }
 
 /**
+ * Parse Rayo <iq> request and check for errors
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ * @param call_jid the parsed to attribute
+ * @param client_jid the parsed from attribute
+ * @return error response or NULL if OK
+ */
+static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **call_jid, char **client_jid, char **id)
+{
+	iks *response = NULL;
+	
+	*call_jid = iks_find_attrib(node, "to");
+	*client_jid = iks_find_attrib(node, "from");
+	*id = iks_find_attrib(node, "id");
+	
+	if (zstr(*client_jid)) {
+		*client_jid = rsession->client_jid_full;
+	}
+	
+	/* check if request is well formed, session is in the right state, and session has control of the call */
+	if (zstr(*call_jid)) {
+		response = create_iq_error(node, rsession->server_jid, *client_jid, STANZA_ERROR_BAD_REQUEST);
+	} else if (rsession->state == SS_NEW) {
+		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_NOT_AUTHORIZED);
+	} else if (zstr(*id)) {
+		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_BAD_REQUEST);
+	} else if (rsession->state != SS_ONLINE) {
+		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_UNEXPECTED_REQUEST);
+	} else if (!has_call_control(rsession, *call_jid)) {
+		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_CONFLICT);
+	}
+
+	return response;
+}
+
+/**
  * Handle <iq><accept> request
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
 static void on_iq_set_rayo_accept(struct rayo_session *rsession, iks *node)
 {
-	char *id = iks_find_attrib(node, "id");
-	char *call_jid = iks_find_attrib(node, "to");
-	iks *response = NULL;
-	
-	if (zstr(call_jid)) {
-		response = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_BAD_REQUEST);
-	} else if (zstr(id)) {
-		response = create_iq_error(node, call_jid, rsession->client_jid_full, STANZA_ERROR_BAD_REQUEST);
-	} else if (rsession->state != SS_ONLINE) {
-		response = create_iq_error(node, call_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
-	} else if (!has_call_control(rsession, call_jid)) {
-		response = create_iq_error(node, call_jid, rsession->client_jid_full, STANZA_ERROR_CONFLICT);
-	} else {
+	char *call_jid, *client_jid, *id;
+	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id);
+	if (!response) {
 		/* all good */
 		response = iks_new("iq");
-		iks_insert_attrib(response, "to", rsession->client_jid_full);
+		iks_insert_attrib(response, "to", client_jid);
 		iks_insert_attrib(response, "from", call_jid);
 		iks_insert_attrib(response, "type", "result");
 		iks_insert_attrib(response, "id", id);
 	}
-
 	iks_send(rsession->parser, response);
 	iks_delete(response);
 }
@@ -655,7 +680,7 @@ static int on_iq_get(void *user_data, ikspak *pak)
  */
 static int rayo_send_auth_success(struct rayo_session *rsession)
 {
-	return iks_send_raw(rsession->parser, "<success xmlns=\""IKS_NS_XMPP_SASL"\"/>");
+	return iks_send_raw(rsession->parser, "<success xmlns='"IKS_NS_XMPP_SASL"'/>");
 }
 
 /**
@@ -666,7 +691,7 @@ static int rayo_send_auth_success(struct rayo_session *rsession)
 static int rayo_send_auth_failure(struct rayo_session *rsession, const char *reason)
 {
 	int result;
-	char *reply = switch_mprintf("<failure xmlns=\""IKS_NS_XMPP_SASL"\">"
+	char *reply = switch_mprintf("<failure xmlns='"IKS_NS_XMPP_SASL"'>"
 		"<%s/></failure>", reason);
 	result = iks_send_raw(rsession->parser, reply);
 	return result;
@@ -693,7 +718,7 @@ static void parse_plain_auth_message(char *message, char **authzid, char **authc
 	}
 	*authzid = decoded;
 	pos = strlen(*authzid) + 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authcid = %s\n", *authzid);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authzid = %s\n", *authzid);
 	if (pos >= maxlen) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at authzid\n");
 		return;
@@ -734,10 +759,10 @@ static int verify_plain_auth(char *authzid, char *authcid, char *password)
 static int rayo_send_header_auth(struct rayo_session *rsession)
 {
 	char *header = switch_mprintf(
-		"<stream:stream xmlns=\""IKS_NS_CLIENT"\" xmlns:db=\"jabber:server:dialback\""
-		" from=\"%s\" id=\"%s\" xml:lang=\"en\" version=\"1.0\""
-		" xmlns:stream=\"http://etherx.jabber.org/streams\"><stream:features>"
-		"<mechanisms xmlns=\""IKS_NS_XMPP_SASL"\"><mechanism>"
+		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='jabber:server:dialback'"
+		" from='%s' id='%s' xml:lang='en' version='1.0'"
+		" xmlns:stream='http://etherx.jabber.org/streams'><stream:features>"
+		"<mechanisms xmlns='"IKS_NS_XMPP_SASL"'><mechanism>"
 		"PLAIN</mechanism></mechanisms></stream:features>", rsession->server_jid, rsession->id);
 	int result = iks_send_raw(rsession->parser, header);
 	switch_safe_free(header);
@@ -977,6 +1002,8 @@ static void on_rayo_offer_event(struct rayo_session *rsession, switch_event_t *e
 		switch_channel_t *channel = switch_core_session_get_channel(session);
 		switch_caller_profile_t *caller_profile = switch_channel_get_caller_profile(channel);
 		iks *revent, *offer;
+		char *to = switch_mprintf("tel:%s", caller_profile->destination_number);
+		char *from = switch_mprintf("tel:%s", caller_profile->caller_id_number);
 		char *call_jid = create_rayo_call_jid(rsession, uuid);
 
 		/* map call JID to FreeSWITCH call UUID */
@@ -985,10 +1012,12 @@ static void on_rayo_offer_event(struct rayo_session *rsession, switch_event_t *e
 		/* send offer to client */
 		revent = create_rayo_event(rsession, "offer", "urn:xmpp:rayo:1", call_jid);
 		offer = iks_child(revent);
-		iks_insert_attrib(offer, "to", caller_profile->destination_number);
-		iks_insert_attrib(offer, "from", caller_profile->caller_id_number);
+		iks_insert_attrib(offer, "to", to);
+		iks_insert_attrib(offer, "from", from);
 		iks_send(rsession->parser, revent);
 		iks_delete(revent);
+		switch_safe_free(to);
+		switch_safe_free(from);
 	}
 	if (!offered) {
 		/* TODO decline call */
