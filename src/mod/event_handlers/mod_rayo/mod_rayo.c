@@ -45,14 +45,14 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 struct rayo_session;
 
-/** A command handler function */
-typedef void (*iq_set_command_handler_fn)(struct rayo_session *, iks *);
+/** node handler function */
+typedef void (*node_handler)(struct rayo_session *, iks *);
 
 /**
- * Function pointer wrapper for the command handlers hash
+ * Function pointer wrapper for the handlers hash
  */
-struct iq_set_command_handler {
-	iq_set_command_handler_fn fn;
+struct node_handler_wrapper {
+	node_handler fn;
 };
 
 /**
@@ -67,8 +67,8 @@ static struct {
 	switch_thread_rwlock_t *shutdown_rwlock;
 	/** users mapped to passwords */
 	switch_hash_t *users;
-	/** <iq> set commands mapped to functions */
-	switch_hash_t *iq_set_command_handlers;
+	/** XMPP <iq> set commands mapped to functions */
+	switch_hash_t *iq_set_handlers;
 	/** map of call uuid to client full JID */
 	switch_hash_t *calls;
 	/** synchronizes access to calls hash */
@@ -207,6 +207,23 @@ static iks *_create_iq_error(iks *iq, char *from, char *to, const stanza_error *
 }
 
 /**
+ * Create <iq> result response
+ * @param from
+ * @param to
+ * @param id
+ * @return the result response
+ */
+static iks *create_iq_result(char *from, char *to, char *id)
+{
+	iks *response = iks_new("iq");
+	iks_insert_attrib(response, "from", from);
+	iks_insert_attrib(response, "to", to);
+	iks_insert_attrib(response, "type", "result");
+	iks_insert_attrib(response, "id", id);
+	return response;
+}
+
+/**
  * Convert Rayo state to string
  * @param state the Rayo state
  * @return the string value of type or "UNKNOWN"
@@ -282,40 +299,42 @@ void on_log(void *user_data, const char *data, size_t size, int is_incoming)
 }
 
 /**
- * Add command handler function to hash
+ * Add Rayo command handler function to hash
+ * @param hash the hash to add to
  * @param name the command name
  * @param fn the command callback function
  */
-static void add_iq_set_command_handler(const char *name, iq_set_command_handler_fn fn)
+static void add_node_handler(switch_hash_t *hash, const char *name, node_handler fn, switch_memory_pool_t *pool)
 {
 	/* have to wrap function pointer since conversion to void * is not allowed */
-	struct iq_set_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
-	handler->fn = fn;
-	switch_core_hash_insert(globals.iq_set_command_handlers, name, handler);
+	struct node_handler_wrapper *wrapper = switch_core_alloc(pool, sizeof (*wrapper));
+	wrapper->fn = fn;
+	switch_core_hash_insert(hash, name, wrapper);
 }
 
 /**
  * Get command handler function from hash
+ * @param hash the hash to search
  * @param name the command name
  * @param namespace the command namespace
  * @return the command handler function or NULL
  */
-static iq_set_command_handler_fn get_iq_set_command_handler(const char *name, const char *namespace)
+static node_handler get_node_handler(switch_hash_t *hash, const char *name, const char *namespace)
 {
-	struct iq_set_command_handler *handler = NULL;
+	struct node_handler_wrapper *wrapper = NULL;
 	if (zstr(name)) {
 		return NULL;
 	}
 	if (zstr(namespace)) {
-		handler = (struct iq_set_command_handler *)switch_core_hash_find(globals.iq_set_command_handlers, name);
+		wrapper = (struct node_handler_wrapper *)switch_core_hash_find(hash, name);
 	} else {
 		char full_name[1024];
 		full_name[1023] = '\0';
 		snprintf(full_name, sizeof(full_name) - 1, "%s:%s", namespace, name);
-		handler = (struct iq_set_command_handler *)switch_core_hash_find(globals.iq_set_command_handlers, full_name);
+		wrapper = (struct node_handler_wrapper *)switch_core_hash_find(hash, full_name);
 	}
-	if (handler) {
-		return handler->fn;
+	if (wrapper) {
+		return wrapper->fn;
 	}
 	return NULL;
 }
@@ -439,17 +458,12 @@ static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_rayo_accept(struct rayo_session *rsession, iks *node)
+static void on_rayo_accept(struct rayo_session *rsession, iks *node)
 {
 	char *call_jid, *client_jid, *id;
 	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id);
 	if (!response) {
-		/* all good */
-		response = iks_new("iq");
-		iks_insert_attrib(response, "to", client_jid);
-		iks_insert_attrib(response, "from", call_jid);
-		iks_insert_attrib(response, "type", "result");
-		iks_insert_attrib(response, "id", id);
+		response = create_iq_result(call_jid, client_jid, id);
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -460,8 +474,18 @@ static void on_iq_set_rayo_accept(struct rayo_session *rsession, iks *node)
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_rayo_answer(struct rayo_session *rsession, iks *node)
+static void on_rayo_answer(struct rayo_session *rsession, iks *node)
 {
+	char *call_jid, *client_jid, *id;
+	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id);
+	if (!response) {
+		response = create_iq_result(call_jid, client_jid, id);
+
+		/* send answer to call */
+		
+	}
+	iks_send(rsession->parser, response);
+	iks_delete(response);
 }
 
 /**
@@ -469,7 +493,7 @@ static void on_iq_set_rayo_answer(struct rayo_session *rsession, iks *node)
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_rayo_redirect(struct rayo_session *rsession, iks *node)
+static void on_rayo_redirect(struct rayo_session *rsession, iks *node)
 {
 }
 
@@ -478,7 +502,7 @@ static void on_iq_set_rayo_redirect(struct rayo_session *rsession, iks *node)
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_rayo_reject(struct rayo_session *rsession, iks *node)
+static void on_rayo_reject(struct rayo_session *rsession, iks *node)
 {
 }
 
@@ -487,7 +511,7 @@ static void on_iq_set_rayo_reject(struct rayo_session *rsession, iks *node)
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_rayo_hangup(struct rayo_session *rsession, iks *node)
+static void on_rayo_hangup(struct rayo_session *rsession, iks *node)
 {
 }
 
@@ -882,10 +906,12 @@ static int on_iq_set(void *user_data, ikspak *pak)
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *iq = pak->x;
 	iks *command = iks_child(iq);
-	iq_set_command_handler_fn fn = NULL;
+	node_handler fn = NULL;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, iq, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
+	
+	
 	if (command) {
-		fn = get_iq_set_command_handler(iks_name(command), iks_find_attrib(command, "xmlns"));
+		fn = get_node_handler(globals.iq_set_handlers, iks_name(command), iks_find_attrib(command, "xmlns"));
 	}
 	if (fn) {
 		fn(rsession, iq);
@@ -1589,23 +1615,23 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	globals.pool = pool;
 	switch_thread_rwlock_create(&globals.shutdown_rwlock, pool);
 	switch_core_hash_init(&globals.users, pool);
-	switch_core_hash_init(&globals.iq_set_command_handlers, pool);
+	switch_core_hash_init(&globals.iq_set_handlers, pool);
 	switch_core_hash_init(&globals.calls, pool);
 	switch_mutex_init(&globals.calls_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	switch_core_hash_init(&globals.sessions, pool);
 	switch_mutex_init(&globals.sessions_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	
 	/* XMPP commands */
-	add_iq_set_command_handler(IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
-	add_iq_set_command_handler(IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session);
-	add_iq_set_command_handler("urn:xmpp:ping:ping", on_iq_set_xmpp_ping);
+	add_node_handler(globals.iq_set_handlers, IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind, globals.pool);
+	add_node_handler(globals.iq_set_handlers, IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:ping:ping", on_iq_set_xmpp_ping, globals.pool);
 	
 	/* Rayo call commands */
-	add_iq_set_command_handler("urn:xmpp:rayo:1:accept", on_iq_set_rayo_accept);
-	add_iq_set_command_handler("urn:xmpp:rayo:1:answer", on_iq_set_rayo_answer);
-	add_iq_set_command_handler("urn:xmpp:rayo:1:redirect", on_iq_set_rayo_redirect);
-	add_iq_set_command_handler("urn:xmpp:rayo:1:reject", on_iq_set_rayo_reject);
-	add_iq_set_command_handler("urn:xmpp:rayo:1:hangup", on_iq_set_rayo_hangup);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:accept", on_rayo_accept, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:answer", on_rayo_answer, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:redirect", on_rayo_redirect, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:reject", on_rayo_reject, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:hangup", on_rayo_hangup, globals.pool);
 
 	/* set up core event handler */
 	if (switch_event_bind_removable(modname, SWITCH_EVENT_ALL, SWITCH_EVENT_SUBCLASS_ANY, handle_event, NULL, &globals.node) != SWITCH_STATUS_SUCCESS) {
