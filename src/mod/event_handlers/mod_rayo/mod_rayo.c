@@ -38,10 +38,10 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 #define RAYO_EVENT_OFFER "rayo::offer"
 
-#define RAYO_CAUSE_HANGUP SWITCH_CAUSE_NORMAL_CLEARING
-#define RAYO_CAUSE_DECLINE SWITCH_CAUSE_CALL_REJECTED
-#define RAYO_CAUSE_BUSY SWITCH_CAUSE_USER_BUSY
-#define RAYO_CAUSE_ERROR SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE
+#define RAYO_CAUSE_HANGUP "NORMAL_CLEARING"
+#define RAYO_CAUSE_DECLINE "CALL_REJECTED"
+#define RAYO_CAUSE_BUSY "USER_BUSY"
+#define RAYO_CAUSE_ERROR "TEMPORARY_FAILURE"
 
 struct rayo_session;
 
@@ -160,6 +160,7 @@ static const stanza_error STANZA_ERROR_CONFLICT = { "conflict", "cancel" };
 static const stanza_error STANZA_ERROR_FEATURE_NOT_IMPLEMENTED = { "feature-not-implemented", "modify" };
 static const stanza_error STANZA_ERROR_FORBIDDEN = { "forbidden", "auth" };
 static const stanza_error STANZA_ERROR_GONE = { "gone", "modify" };
+static const stanza_error STANZA_ERROR_INTERNAL_SERVER_ERROR = { "internal-server-error", "wait" };
 static const stanza_error STANZA_ERROR_ITEM_NOT_FOUND = { "item-not-found", "cancel" };
 static const stanza_error STANZA_ERROR_JID_MALFORMED = { "jid-malformed", "modify" };
 static const stanza_error STANZA_ERROR_NOT_ACCEPTABLE = { "not-acceptable", "modify" };
@@ -375,33 +376,34 @@ static int rayo_send_header_bind(struct rayo_session *rsession)
  * if nobody else has control.
  * @param rsession the Rayo session
  * @param call_jid the call JID
+ * @param call_uuid the internal call UUID
  * @return 1 if session has call control
  */
-static int has_call_control(struct rayo_session *rsession, char *call_jid)
+static int has_call_control(struct rayo_session *rsession, char *call_jid, char **call_uuid)
 {
 	int control = 0;
-	char *uuid = switch_core_hash_find(rsession->active_calls, call_jid);
-	if (!zstr(uuid)) {
+	*call_uuid = switch_core_hash_find(rsession->active_calls, call_jid);
+	if (!zstr(*call_uuid)) {
 		/* already have control */
 		return 1;
 	} 
-	uuid = switch_core_hash_find(rsession->offered_calls, call_jid);
-	if (!zstr(uuid)) {
+	*call_uuid = switch_core_hash_find(rsession->offered_calls, call_jid);
+	if (!zstr(*call_uuid)) {
 		char *client_jid_full;
 		/* does anybody own this call? */
 		switch_mutex_lock(globals.calls_mutex);
-		client_jid_full = (char *)switch_core_hash_find(globals.calls, uuid);
+		client_jid_full = (char *)switch_core_hash_find(globals.calls, *call_uuid);
 		if (zstr(client_jid_full)) {
 			/* take control */
-			switch_core_hash_insert(globals.calls, uuid, strdup(call_jid));
-			switch_core_hash_delete(rsession->active_calls, call_jid);
-			switch_core_hash_insert(rsession->active_calls, call_jid, uuid);
+			switch_core_hash_insert(globals.calls, *call_uuid, strdup(call_jid));
+			switch_core_hash_delete(rsession->offered_calls, call_jid);
+			switch_core_hash_insert(rsession->active_calls, call_jid, *call_uuid);
 			rsession->active_calls_count++;
 			control = 1;
 		} else if (!strcmp(client_jid_full, rsession->client_jid_full)) {
 			/* already have control... remove from offered calls */
-			switch_core_hash_delete(rsession->active_calls, call_jid);
-			switch_core_hash_insert(rsession->active_calls, call_jid, uuid);
+			switch_core_hash_delete(rsession->offered_calls, call_jid);
+			switch_core_hash_insert(rsession->active_calls, call_jid, *call_uuid);
 			rsession->active_calls_count++;
 			control = 1;
 		}
@@ -423,15 +425,18 @@ static int has_call_control(struct rayo_session *rsession, char *call_jid)
  * @param node the <iq> node
  * @param call_jid the parsed to attribute
  * @param client_jid the parsed from attribute
+ * @param id the <iq> id
+ * @param call_uuid the internal call UUID
  * @return error response or NULL if OK
  */
-static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **call_jid, char **client_jid, char **id)
+static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **call_jid, char **client_jid, char **id, char **call_uuid)
 {
 	iks *response = NULL;
 	
 	*call_jid = iks_find_attrib(node, "to");
 	*client_jid = iks_find_attrib(node, "from");
 	*id = iks_find_attrib(node, "id");
+	*call_uuid = NULL;
 	
 	if (zstr(*client_jid)) {
 		*client_jid = rsession->client_jid_full;
@@ -446,7 +451,7 @@ static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **
 		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state != SS_ONLINE) {
 		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_UNEXPECTED_REQUEST);
-	} else if (!has_call_control(rsession, *call_jid)) {
+	} else if (!has_call_control(rsession, *call_jid, call_uuid)) {
 		response = create_iq_error(node, *call_jid, *client_jid, STANZA_ERROR_CONFLICT);
 	}
 
@@ -460,8 +465,8 @@ static iks *parse_rayo_request(struct rayo_session *rsession, iks *node, char **
  */
 static void on_rayo_accept(struct rayo_session *rsession, iks *node)
 {
-	char *call_jid, *client_jid, *id;
-	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id);
+	char *call_jid, *client_jid, *id, *call_uuid;
+	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id, &call_uuid);
 	if (!response) {
 		response = create_iq_result(call_jid, client_jid, id);
 	}
@@ -476,13 +481,24 @@ static void on_rayo_accept(struct rayo_session *rsession, iks *node)
  */
 static void on_rayo_answer(struct rayo_session *rsession, iks *node)
 {
-	char *call_jid, *client_jid, *id;
-	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id);
+	char *call_jid, *client_jid, *id, *call_uuid;
+	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id, &call_uuid);
 	if (!response) {
-		response = create_iq_result(call_jid, client_jid, id);
-
-		/* send answer to call */
-		
+		switch_core_session_t *session = switch_core_session_locate(call_uuid);
+		if (!session) {
+			/* session gone */
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, Can't find session %s\n", rsession->id, call_uuid);
+			response = create_iq_error(node, call_jid, client_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+		} else {
+			/* TODO set signaling headers */
+			/* send answer to call */
+			if (switch_core_session_execute_application_async(session, "answer", "") == SWITCH_STATUS_SUCCESS) {
+				response = create_iq_result(call_jid, client_jid, id);
+			} else {
+				response = create_iq_error(node, call_jid, client_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			}
+			switch_core_session_rwunlock(session);
+		}
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -498,21 +514,59 @@ static void on_rayo_redirect(struct rayo_session *rsession, iks *node)
 }
 
 /**
- * Handle <iq><reject> request
- * @param rsession the Rayo session
- * @param node the <iq> node
- */
-static void on_rayo_reject(struct rayo_session *rsession, iks *node)
-{
-}
-
-/**
- * Handle <iq><hangup> request
+ * Handle <iq><hangup> or <iq><reject> request
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
 static void on_rayo_hangup(struct rayo_session *rsession, iks *node)
 {
+	char *call_jid, *client_jid, *id, *call_uuid;
+	iks *response = parse_rayo_request(rsession, node, &call_jid, &client_jid, &id, &call_uuid);
+	if (!response) {
+		switch_core_session_t *session = switch_core_session_locate(call_uuid);
+		if (!session) {
+			/* session gone */
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, Can't find session %s\n", rsession->id, call_uuid);
+			response = create_iq_error(node, call_jid, client_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+		} else {
+			iks *hangup = iks_child(node);
+			iks *reason = iks_child(hangup);
+			char *hangup_cause = NULL;
+			
+			/* get hangup cause */
+			if (!reason && !strcmp("hangup", iks_name(hangup))) {
+				/* no reason required in <hangup> */
+				hangup_cause = RAYO_CAUSE_HANGUP;
+			} else if (reason && !strcmp("reject", iks_name(hangup))) {
+				char *reason_name = iks_name(reason);
+				/* reason required for <reject> */
+				if (!strcmp("busy", reason_name)) {
+					hangup_cause = RAYO_CAUSE_BUSY;
+				} else if (!strcmp("decline", reason_name)) {
+					hangup_cause = RAYO_CAUSE_DECLINE;
+				} else if (!strcmp("error", reason_name)) {
+					hangup_cause = RAYO_CAUSE_ERROR;
+				}
+			}
+
+			/* do hangup */
+			if (!zstr(hangup_cause)) {
+		
+				/* TODO set signaling headers */
+				if (switch_core_session_execute_application_async(session, "hangup", hangup_cause) == SWITCH_STATUS_SUCCESS) {
+					response = create_iq_result(call_jid, client_jid, id);
+				} else {
+					response = create_iq_error(node, call_jid, client_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+				}
+			} else {
+				response = create_iq_error(node, call_jid, client_jid, STANZA_ERROR_BAD_REQUEST);
+			}
+			
+			switch_core_session_rwunlock(session);
+		}
+	}
+	iks_send(rsession->parser, response);
+	iks_delete(response);
 }
 
 /**
@@ -997,12 +1051,12 @@ static int rayo_session_ready(struct rayo_session *rsession)
  */
 static void handle_event(switch_event_t *event)
 {
-	char *uuid = switch_event_get_header(event, "unique-id");
-	if (!zstr(uuid)) {
+	char *call_uuid = switch_event_get_header(event, "unique-id");
+	if (!zstr(call_uuid)) {
 		/* is a client interested in this event? */
 		char *client_jid_full;
 		switch_mutex_lock(globals.calls_mutex);
-		client_jid_full = (char *)switch_core_hash_find(globals.calls, uuid);
+		client_jid_full = (char *)switch_core_hash_find(globals.calls, call_uuid);
 		switch_mutex_unlock(globals.calls_mutex);
 		if (!zstr(client_jid_full)) {
 			struct rayo_session *rsession;
@@ -1028,12 +1082,12 @@ static void handle_event(switch_event_t *event)
 /**
  * Create a Rayo call JID
  * @param rsession the Rayo session
- * @param uuid the call UUID
+ * @param call_uuid the call UUID
  * @return the call JID  (must be freed)
  */
-static char *create_rayo_call_jid(struct rayo_session *rsession, char *uuid)
+static char *create_rayo_call_jid(struct rayo_session *rsession, char *call_uuid)
 {
-	return switch_mprintf("%s@%s", uuid, rsession->server_jid);
+	return switch_mprintf("%s@%s", call_uuid, rsession->server_jid);
 }
 
 /**
@@ -1041,7 +1095,7 @@ static char *create_rayo_call_jid(struct rayo_session *rsession, char *uuid)
  * @param rsession the Rayo session
  * @param name the event name
  * @param namespace the event namespace
- * @param uuid the FreeSWITCH call UUID
+ * @param from
  * @return the event XML node
  */
 static iks* create_rayo_event(struct rayo_session *rsession, char *name, char *namespace, char *from)
@@ -1066,18 +1120,18 @@ static iks* create_rayo_event(struct rayo_session *rsession, char *name, char *n
 static void on_rayo_offer_event(struct rayo_session *rsession, switch_event_t *event)
 {
 	int offered = 0;
-	char *uuid = switch_event_get_header(event, "unique-id");
-	switch_core_session_t *session = switch_core_session_locate(uuid);
+	char *call_uuid = switch_event_get_header(event, "unique-id");
+	switch_core_session_t *session = switch_core_session_locate(call_uuid);
 	if (rsession->state == SS_ONLINE && session) {
 		switch_channel_t *channel = switch_core_session_get_channel(session);
 		switch_caller_profile_t *caller_profile = switch_channel_get_caller_profile(channel);
 		iks *revent, *offer;
 		char *to = switch_mprintf("tel:%s", caller_profile->destination_number);
 		char *from = switch_mprintf("tel:%s", caller_profile->caller_id_number);
-		char *call_jid = create_rayo_call_jid(rsession, uuid);
+		char *call_jid = create_rayo_call_jid(rsession, call_uuid);
 
 		/* map call JID to FreeSWITCH call UUID */
-		switch_core_hash_insert(rsession->offered_calls, call_jid, uuid);
+		switch_core_hash_insert(rsession->offered_calls, call_jid, strdup(call_uuid));
 
 		/* send offer to client */
 		revent = create_rayo_event(rsession, "offer", "urn:xmpp:rayo:1", call_jid);
@@ -1544,15 +1598,15 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 
 /**
  * Offer a call for Rayo 3PCC
- * @param session_uuid call UUID
+ * @param call_uuid call UUID
  * @return SWITCH_STATUS_SUCCESS on success
  */
-static switch_status_t offer_call(char *session_uuid)
+static switch_status_t offer_call(char *call_uuid)
 {
 	switch_hash_index_t *hi = NULL;
 	int offered = 0;
 	
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Offering call %s for Rayo 3PCC\n", session_uuid);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Offering call %s for Rayo 3PCC\n", call_uuid);
 
 	/* Offer call to all ONLINE sessions */
 	/* TODO load balance this so first session doesn't always get request first? */
@@ -1573,12 +1627,12 @@ static switch_status_t offer_call(char *session_uuid)
 		
 		/* send offer event to session */
 		switch_event_create_subclass(&offer_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER);
-		switch_event_add_header_string(offer_event, SWITCH_STACK_BOTTOM, "unique-id", session_uuid);
+		switch_event_add_header_string(offer_event, SWITCH_STACK_BOTTOM, "unique-id", call_uuid);
 		if (switch_queue_trypush(rsession->event_queue, offer_event) == SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s Offered call to session %s, %s\n", session_uuid, rsession->id, rsession->client_jid_full);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s Offered call to session %s, %s\n", call_uuid, rsession->id, rsession->client_jid_full);
 			offered = 1;
 		} else  {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s Failed to queue call offer event to %s, %s!\n", session_uuid, rsession->id, rsession->client_jid_full);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s Failed to queue call offer event to %s, %s!\n", call_uuid, rsession->id, rsession->client_jid_full);
 			switch_event_destroy(&offer_event);
 		}
 	}
@@ -1596,7 +1650,7 @@ SWITCH_STANDARD_APP(rayo_app)
 	if (offer_call(switch_core_session_get_uuid(session)) == SWITCH_STATUS_SUCCESS) {
 		switch_ivr_park(session, NULL);
 	} else {
-		switch_channel_hangup(switch_core_session_get_channel(session), RAYO_CAUSE_DECLINE);
+		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);
 	}
 }
 
@@ -1630,8 +1684,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:accept", on_rayo_accept, globals.pool);
 	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:answer", on_rayo_answer, globals.pool);
 	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:redirect", on_rayo_redirect, globals.pool);
-	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:reject", on_rayo_reject, globals.pool);
-	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:hangup", on_rayo_hangup, globals.pool);
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:reject", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
+	add_node_handler(globals.iq_set_handlers, "urn:xmpp:rayo:1:hangup", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
 
 	/* set up core event handler */
 	if (switch_event_bind_removable(modname, SWITCH_EVENT_ALL, SWITCH_EVENT_SUBCLASS_ANY, handle_event, NULL, &globals.node) != SWITCH_STATUS_SUCCESS) {
