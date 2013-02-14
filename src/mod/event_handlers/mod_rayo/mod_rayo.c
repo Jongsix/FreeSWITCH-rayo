@@ -1480,6 +1480,19 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 		}
 	}
 
+	/* configure authorized users */
+	{
+		switch_xml_t users = switch_xml_child(cfg, "users");
+		if (users) {
+			switch_xml_t u;
+			for (u = switch_xml_child(users, "user"); u; u = u->next) {
+				const char *user = switch_xml_attr_soft(u, "name");
+				const char *password = switch_xml_attr_soft(u, "password");
+				switch_core_hash_insert(globals.users, user, switch_core_strdup(pool, password));
+			}
+		}
+	}
+
 	/* configure listen addresses */
 	{
 		switch_xml_t listeners = switch_xml_child(cfg, "listeners");
@@ -1492,19 +1505,6 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 				if (add_rayo_server(val, port) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create listener: %s\n", val);
 				}
-			}
-		}
-	}
-	
-	/* configure authorized users */
-	{
-		switch_xml_t users = switch_xml_child(cfg, "users");
-		if (users) {
-			switch_xml_t u;
-			for (u = switch_xml_child(users, "user"); u; u = u->next) {
-				const char *user = switch_xml_attr_soft(u, "name");
-				const char *password = switch_xml_attr_soft(u, "password");
-				switch_core_hash_insert(globals.users, user, switch_core_strdup(pool, password));
 			}
 		}
 	}
