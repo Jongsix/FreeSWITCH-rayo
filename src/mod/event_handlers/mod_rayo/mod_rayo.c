@@ -108,6 +108,12 @@ enum rayo_session_state {
 	SS_DESTROY
 };
 
+enum presence_status {
+	PS_UNKNOWN = -1,
+	PS_OFFLINE = 0,
+	PS_ONLINE = 1
+};
+
 /**
  * A Rayo XML stream
  */
@@ -495,22 +501,60 @@ static int on_presence(void *user_data, ikspak *pak)
 {
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *node = pak->x;
+	char *type = iks_find_attrib(node, "type");
+	enum presence_status status = PS_UNKNOWN;
+	
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-	if (rsession->state == SS_SESSION_ESTABLISHED || rsession->state == SS_ONLINE) {
+	
+	/* 
+	   From RFC-6121:
+	   Entity is available when <presence/> received.  
+	   Entity is unavailable when <presence type='unavailable'/> is received.
+ 
+	   From Rayo-XEP:
+	   Entity is available when <presence to='foo' from='bar'><show>chat</show></presence> is received.
+	   Entity is unavailable when <presence to='foo' from='bar'><show>dnd</show></presence> is received.
+	*/
+	
+	/* figure out if online/offline */
+	if (zstr(type)) {
 		iks *show = iks_find(node, "show");
-		int is_online = 0;
 		if (show) {
-			char *status = iks_cdata(iks_child(show));
-			is_online = !zstr(status) && !strcmp("chat", status);
+			/* <presence><show>chat</show></presence> */
+			char *status_str = iks_cdata(iks_child(show));
+			if (!zstr(status_str) && !strcmp("show", status_str)) {
+				status = PS_ONLINE;
+			} else {
+				status = PS_OFFLINE;
+			}
+		} else {
+			/* <presence/> */
+			status = PS_ONLINE;
 		}
-		if (is_online && rsession->state == SS_SESSION_ESTABLISHED) {
-			rsession->state = SS_ONLINE;
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is ONLINE\n", rsession->id, rsession->client_jid_full);
-		} else if (!is_online && rsession->state == SS_ONLINE) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is OFFLINE\n", rsession->id, rsession->client_jid_full);
-			rsession->state = SS_SESSION_ESTABLISHED;
-		}
+	} else if (!strcmp("unavailable", type)) {
+		status = PS_OFFLINE;
+	} else if (!strcmp("error", type)) {
+		/* TODO */
+	} else if (!strcmp("probe", type)) {
+		/* TODO */
+	} else if (!strcmp("subscribe", type)) {
+		/* TODO */
+	} else if (!strcmp("subscribed", type)) {
+		/* TODO */
+	} else if (!strcmp("unsubscribe", type)) {
+		/* TODO */
+	} else if (!strcmp("unsubscribed", type)) {
+		/* TODO */
 	}
+
+	if (status == PS_ONLINE && rsession->state == SS_SESSION_ESTABLISHED) {
+		rsession->state = SS_ONLINE;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is ONLINE\n", rsession->id, rsession->client_jid_full);
+	} else if (status == PS_OFFLINE && rsession->state == SS_ONLINE) {
+		rsession->state = SS_SESSION_ESTABLISHED;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is OFFLINE\n", rsession->id, rsession->client_jid_full);
+	}
+
 	return IKS_FILTER_EAT;
 }
 
