@@ -274,21 +274,6 @@ static void app_iks_delete(app_iks *msg)
 	switch_safe_free(msg);
 }
 
-#if 0
-/**
- * Search node for attribute, returning default if not set
- * @param node the XML node to search
- * @param attrib the attribute to find
- * @param default_value the value to return if attribute is not set
- * @return the attribute value
- */
-static const char *find_attrib_with_default(iks *node, const char *attrib, const char *default_value)
-{
-	const char *value = iks_find_attrib(node, attrib);
-	return zstr(value) ? default_value : value;
-}
-#endif
-
 /**
  * Create <iq> result response
  * @param from
@@ -1438,8 +1423,6 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 				/* don't care */
 				break;
 			}
-		} else {
-			
 		}
 		switch_event_destroy(&event);
 		rayo_call_unlock(call);
@@ -1881,6 +1864,127 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
 	return SWITCH_STATUS_FALSE;
 }
 
+typedef switch_bool_t (*validation_function)(const char *, const char **);
+
+static switch_bool_t is_bool(const char *val, const char **test_name) {
+	*test_name = "is_bool";
+	return !zstr(val) && (!strcasecmp("true", val) || !strcasecmp("false", val));
+}
+
+static switch_bool_t is_not_negative(const char *val, const char **test_name) {
+	*test_name = "is_not_negative";
+	return !zstr(val) && switch_is_number(val) && atoi(val) >= 0;
+}
+
+static switch_bool_t is_positive_or_neg_one(const char *val, const char **test_name) {
+	*test_name = "is_positive_or_neg_one";
+	if (!zstr(val) && switch_is_number(val)) {
+		int v = atoi(val);
+		if (v == -1 || v > 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Search node for attribute, returning default if not set
+ * @param node the XML node to search
+ * @param attrib the attribute to find
+ * @param default_value the value to return if attribute is not set
+ * @param value the value
+ * @param fn (optional) validation function
+ * @return SWITCH_TRUE if valid
+ */
+static switch_bool_t get_param(switch_core_session_t *session, switch_xml_t node, const char *attrib, const char *default_value, const char **value, validation_function fn)
+{
+	const char *test_name = NULL;
+	*value = switch_xml_attr(node, attrib);
+	*value = zstr(*value) ? default_value : *value;
+	if (fn) {
+		if (!fn(*value, &test_name)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "<%s %s='%s'> !%s\n", switch_xml_name(node), attrib, *value, test_name);
+		} else {
+			return SWITCH_TRUE;
+		}
+	} else {
+		return SWITCH_TRUE;
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * @param node the XML node to search
+ * @param attrib the attribute to find
+ * @param default_value the value to return if attribute is not set
+ * @param value the value
+ * @param fn (optional) validation function
+ * @return SWITCH_TRUE if valid
+ */
+static switch_bool_t get_int_param(switch_core_session_t *session, switch_xml_t node, const char *attrib, const char *default_value, int *value, validation_function fn)
+{
+	const char *value_str = NULL;
+	if (get_param(session, node, attrib, default_value, &value_str, fn)) {
+		*value = atoi(value_str);
+		return SWITCH_TRUE;
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * @param node the XML node to search
+ * @param attrib the attribute to find
+ * @param default_value the value to return if attribute is not set
+ * @param value the value
+ * @param fn (optional) validation function
+ * @return SWITCH_TRUE if valid
+ */
+static switch_bool_t get_bool_param(switch_core_session_t *session, switch_xml_t node, const char *attrib, const char *default_value, switch_bool_t *value)
+{
+	const char *value_str = NULL;
+	if (get_param(session, node, attrib, default_value, &value_str, is_bool)) {
+		*value = switch_true(value_str);
+		return SWITCH_TRUE;
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * <output> component params
+ */
+struct output_params {
+	/** Offset through which the output should be skipped */
+	int start_offset;
+	/** Should component start paused? */
+	switch_bool_t start_paused;
+	/** Duration of silence between repeats */
+	int repeat_interval;
+	/** Number of times to play */
+	int repeat_times;
+	/** Maximum amount of time output should be run */
+	int max_time;
+	/** renderer */
+	const char *renderer;
+};
+
+/**
+ * Parse params from <output>
+ * @param output the output component
+ * @param params the output params
+ * @return SWITCH_STATUS_SUCCESS if the params are valid
+ */
+static switch_status_t parse_output_params(switch_core_session_t *session, switch_xml_t output, struct output_params *params)
+{
+	if (get_int_param(session, output, "start-offset", "0", &params->start_offset, is_not_negative) &&
+		get_bool_param(session, output, "start-paused", "false", &params->start_paused) &&
+		get_int_param(session, output, "repeat-interval", "0", &params->repeat_interval, is_not_negative) && 
+		get_int_param(session, output, "max-time", "-1", &params->max_time, is_positive_or_neg_one) &&
+		get_param(session, output, "renderer", "", &params->renderer, NULL)) {
+		return SWITCH_STATUS_SUCCESS;
+	}
+	return SWITCH_STATUS_FALSE;
+}
+
 #define RAYO_PLAY_USAGE ""
 /**
  * Process input/output/prompt
@@ -1893,6 +1997,7 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
 	char *iq_str = switch_core_session_strdup(session, data);
 	char *command;
+	struct output_params oparams = { 0 };
 
 	if (!call) {
 		/* shouldn't happen if APP was executed by this module */
@@ -1934,9 +2039,16 @@ SWITCH_STANDARD_APP(rayo_play_app)
 		return;
 	}
 	
-	response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-	app_iks_send(session, response);
-	app_iks_delete(response);
+	/* validate output params */
+	if (parse_output_params(session, output, &oparams) != SWITCH_STATUS_SUCCESS) {
+		response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		app_iks_send(session, response);
+		app_iks_delete(response);
+	} else {
+		response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		app_iks_send(session, response);
+		app_iks_delete(response);
+	}
 }
 
 /**
