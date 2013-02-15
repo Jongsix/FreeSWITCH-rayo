@@ -36,10 +36,8 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 #define MAX_QUEUE_LEN 25000
 
+#define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
 #define RAYO_EVENT_OFFER "rayo::offer"
-#define RAYO_EVENT_COMPONENT_ERROR "rayo::component_error"
-#define RAYO_EVENT_COMPONENT_BEGIN "rayo::component_begin"
-#define RAYO_EVENT_COMPONENT_END "rayo::component_end"
 
 #define RAYO_CAUSE_HANGUP "NORMAL_CLEARING"
 #define RAYO_CAUSE_DECLINE "CALL_REJECTED"
@@ -47,6 +45,8 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 #define RAYO_CAUSE_ERROR "TEMPORARY_FAILURE"
 
 #define RAYO_PRIVATE_VAR "_rayo_private"
+
+typedef char * app_iks;
 
 struct rayo_session;
 struct rayo_call;
@@ -221,65 +221,56 @@ static iks *_create_iq_error(iks *iq, const char *from, const char *to, const st
 	return response;
 }
 
+#define app_create_iq_error(iq, from, to, error) _app_create_iq_error(iq, from, to, &error)
+
 /**
- * Transform event from FreeSWITCH core into <iq> error
- * @param event the event
- * @return the <iq> error
+ * Create <iq> error response from <iq> request
+ * @param iq the <iq> get/set request
+ * @param from
+ * @param to
+ * @param error the XMPP stanza error
+ * @return the <iq> error response
  */
-static iks *create_iq_error_from_event(switch_event_t *event)
+static app_iks *_app_create_iq_error(switch_xml_t iq, const char *from, const char *to, const stanza_error *error)
 {
-	iks *response = iks_new("iq");
-	iks *x;
-	
-	/* <iq> */
-	iks_insert_attrib(response, "id", switch_event_get_header(event, "rayo-iq-id"));
-	iks_insert_attrib(response, "from", switch_event_get_header(event, "rayo-iq-from"));
-	iks_insert_attrib(response, "to", switch_event_get_header(event, "rayo-iq-to"));
-	iks_insert_attrib(response, "type", "error");
-	
-	/* <component> */
-	x = iks_insert(response, switch_event_get_header(event, "rayo-iq-component"));
-	iks_insert_attrib(x, "xmlns", switch_event_get_header(event, "rayo-iq-component-namespace"));
-	
-	/* <error> */
-	x = iks_insert(response, "error");
-	iks_insert_attrib(x, "type", switch_event_get_header(event, "rayo-iq-error-type"));
-	
-	/* e.g. <feature-not-implemented> */
-	x = iks_insert(x, switch_event_get_header(event, "rayo-iq-error"));
-	iks_insert_attrib(x, "xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
-	
-	return response;
+	char *command = switch_xml_toxml(iq->child, SWITCH_FALSE);
+	char *response = switch_mprintf(
+		"<iq id='%s' from='%s' to='%s' type='error'>"
+		"%s<error type='%s'>"
+		"<%s xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>",
+		switch_xml_attr_soft(iq, "id"), 
+		from,
+		to, 
+		command,
+		error->type,
+		error->name);
+	switch_safe_free(command);
+	return (app_iks *)response;
 }
 
-#define fire_call_component_error_event(call, component_id, iq, error) _fire_call_component_error_event(call, component_id, iq, &error)
-
 /**
- * Fire call component error from application
- * @param call the call that detected the error
- * @param component_id the ID of the component that has the error
- * @param iq the original component request
- * @param error the error
+ * Send an XMPP message from a FreeSWITCH application thread
+ * @param session the FreeSWITCH session
+ * @param msg the message to send
  */
-static void _fire_call_component_error_event(struct rayo_call *call, const char *component_id, switch_xml_t iq, const stanza_error *error)
+static void app_iks_send(switch_core_session_t *session, app_iks *msg)
 {
+	/* sends message to Rayo session via event */
 	switch_event_t *event;
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_COMPONENT_ERROR) == SWITCH_STATUS_SUCCESS) {
-		switch_xml_t component = iq->child;
-		char *from = call->jid;
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "unique-id", switch_core_session_get_uuid(call->session));
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-id", switch_xml_attr_soft(iq, "id"));
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-component", switch_xml_name(component));
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-component-namespace", switch_xml_attr_soft(component, "xmlns"));
-		if (!zstr(component_id)) {
-			from = switch_core_session_sprintf(call->session, "%s/%s", call->jid, component_id);
-		}
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-from", from);
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-to", call->dcp_jid);
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-error", error->name);
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "rayo-iq-error-type", error->type);
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "unique-id", switch_core_session_get_uuid(session));
+		switch_event_add_body(event, "%s", (char *)msg);
 		switch_event_fire(&event);
 	}
+}
+
+/**
+ * Destroy the XMPP message
+ * @param msg the message
+ */
+static void app_iks_delete(app_iks *msg)
+{
+	switch_safe_free(msg);
 }
 
 #if 0
@@ -1404,14 +1395,12 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 				break;
 			case SWITCH_EVENT_CUSTOM: {
 				char *event_subclass = switch_event_get_header(event, "Event-Subclass");
-				if (!strcmp(RAYO_EVENT_OFFER, event_subclass)) {
+				if (!strcmp(RAYO_EVENT_XMPP_SEND, event_subclass)) {
+					char *msg = switch_event_get_body(event);
+					iks_send_raw(rsession->parser, msg);
+				} else if (!strcmp(RAYO_EVENT_OFFER, event_subclass)) {
 					/* handle offer */
 					on_rayo_offer_event(rsession, call, event);
-				} else if (!strcmp(RAYO_EVENT_COMPONENT_ERROR, event_subclass)) {
-					/* transform event into iq reply and send... */
-					iks *response = create_iq_error_from_event(event);
-					iks_send(rsession->parser, response);
-					iks_delete(response);
 				}
 				/* else don't care */
 				break;
@@ -1867,10 +1856,12 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
  */
 SWITCH_STANDARD_APP(rayo_play_app)
 {
-	switch_xml_t iq;
+	app_iks *response;
+	switch_xml_t iq, output;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
 	char *iq_str = switch_core_session_strdup(session, data);
+	char *command;
 
 	if (!call) {
 		/* shouldn't happen if APP was executed by this module */
@@ -1893,9 +1884,28 @@ SWITCH_STANDARD_APP(rayo_play_app)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
 
-	/* For now, reject all */
-	/* TODO implement */
-	fire_call_component_error_event(call, NULL, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	command = switch_xml_name(iq->child);
+	if (!strcmp("prompt", command)) {
+		output = switch_xml_child(iq->child, "output");
+		/* TODO input */
+	} else if (!strcmp("output", command)) {
+		output = iq->child;
+	} else if (!strcmp("input", command)) {
+		/* TODO input */
+		response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		app_iks_send(session, response);
+		app_iks_delete(response);
+		return;
+	} else {
+		response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		app_iks_send(session, response);
+		app_iks_delete(response);
+		return;
+	}
+	
+	response = app_create_iq_error(iq, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	app_iks_send(session, response);
+	app_iks_delete(response);
 }
 
 #define RAYO_USAGE ""
