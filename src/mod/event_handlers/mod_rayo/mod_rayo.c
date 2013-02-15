@@ -38,6 +38,7 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 #define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
 #define RAYO_EVENT_OFFER "rayo::offer"
+#define RAYO_EVENT_END "rayo::end"
 
 #define RAYO_CAUSE_HANGUP "NORMAL_CLEARING"
 #define RAYO_CAUSE_DECLINE "CALL_REJECTED"
@@ -1252,26 +1253,38 @@ static int rayo_session_ready(struct rayo_session *rsession)
 static void handle_event(switch_event_t *event)
 {
 	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "unique-id"));
+	switch_core_session_t *session = NULL;
+	char *dcp_jid;
+	char *event_subclass = switch_event_get_header(event, "Event-Subclass");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "got event %s %s\n", switch_event_name(event->event_id), zstr(event_subclass) ? "" : event_subclass);
+
+	if (call) {
+		dcp_jid = call->dcp_jid;
+		session = call->session;
+	} else {
+		/* might be an end event and call is already destroyed */
+		dcp_jid = switch_event_get_header(event, "dcp-jid");
+	}
 
 	/* this event is for a rayo call */
-	if (call && !zstr(call->dcp_jid)) {
+	if (!zstr(dcp_jid)) {
 		struct rayo_session *rsession;
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_DEBUG, "%s call event %s\n", call->dcp_jid, switch_event_name(event->event_id));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s call event %s\n", dcp_jid, switch_event_name(event->event_id));
 
 		/* find session that is connected to client */
 		switch_mutex_lock(globals.sessions_mutex);
-		rsession = (struct rayo_session *)switch_core_hash_find(globals.sessions, call->dcp_jid);
+		rsession = (struct rayo_session *)switch_core_hash_find(globals.sessions, dcp_jid);
 		if (rsession) {
 			/* send event to session */
 			switch_event_t *dup_event = NULL;
 			switch_event_dup(&dup_event, event);
 			if (switch_queue_trypush(rsession->event_queue, dup_event) != SWITCH_STATUS_SUCCESS) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_CRIT, "failed to deliver call event to %s!\n", call->dcp_jid);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "failed to deliver call event to %s!\n", call->dcp_jid);
 				switch_event_destroy(&dup_event);
 			}
 		} else {
 			/* TODO orphaned call... maybe allow events to queue so they can be delivered on reconnect? */
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_DEBUG, "Orphaned call event %s to %s\n", switch_event_name(event->event_id), call->dcp_jid);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Orphaned call event %s to %s\n", switch_event_name(event->event_id), call->dcp_jid);
 		}
 		switch_mutex_unlock(globals.sessions_mutex);
 	}
@@ -1331,6 +1344,20 @@ static void on_rayo_offer_event(struct rayo_session *rsession, struct rayo_call 
 }
 
 /**
+ * Handle Rayo end event
+ * @param rsession the Rayo session
+ * @param event the end event
+ */
+static void on_rayo_end_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	iks *revent = create_rayo_event(rsession, "end", "urn:xmpp:rayo:1", switch_event_get_header(event, "jid"));
+	iks *end = iks_find(revent, "end");
+	iks_insert(end, "hangup");
+	iks_send(rsession->parser, revent);
+	iks_delete(revent);
+}
+
+/**
  * Handle call answer event
  * @param rsession the Rayo session
  * @param call the Rayo call
@@ -1339,21 +1366,6 @@ static void on_rayo_offer_event(struct rayo_session *rsession, struct rayo_call 
 static void on_call_answer_event(struct rayo_session *rsession, struct rayo_call *call, switch_event_t *event)
 {
 	iks *revent = create_rayo_event(rsession, "answered", "urn:xmpp:rayo:1", call->jid);
-	iks_send(rsession->parser, revent);
-	iks_delete(revent);
-}
-
-/**
- * Handle call hangup event
- * @param rsession the Rayo session
- * @param call the Rayo call
- * @param event the hangup event
- */
-static void on_call_hangup_event(struct rayo_session *rsession, struct rayo_call *call, switch_event_t *event)
-{
-	iks *revent = create_rayo_event(rsession, "end", "urn:xmpp:rayo:1", call->jid);
-	iks *end = iks_find(revent, "end");
-	iks_insert(end, "hangup");
 	iks_send(rsession->parser, revent);
 	iks_delete(revent);
 }
@@ -1379,9 +1391,28 @@ static void on_call_ringing_event(struct rayo_session *rsession, struct rayo_cal
 static void rayo_session_handle_event(struct rayo_session *rsession, switch_event_t *event)
 {
 	if (event) {
+		switch_core_session_t *session = NULL;
 		struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "unique-id"));
+		char *call_jid;
+		char *dcp_jid = "";
 		if (call) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_DEBUG, "session got event %s for %s\n", switch_event_name(event->event_id), call->dcp_jid);
+			call_jid = call->jid;
+			dcp_jid = call->dcp_jid;
+			session = call->session;
+		} else {
+			/* might be end event and call is already destroyed */
+			call_jid = switch_event_get_header(event, "jid");
+			dcp_jid = switch_event_get_header(event, "dcp-jid");
+		}
+		if (call || !zstr(call_jid)) {
+			char *event_subclass = switch_event_get_header(event, "Event-Subclass");
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, 
+				"session got event %s%s%s%s%s\n", 
+				switch_event_name(event->event_id), 
+				zstr(event_subclass) ? "" : " ", 
+				zstr(event_subclass) ? "" : event_subclass, 
+				zstr(dcp_jid) ? "" : " for ", 
+				zstr(dcp_jid) ? "" : dcp_jid);
 			switch (event->event_id) {
 			case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
 			case SWITCH_EVENT_CHANNEL_PROGRESS:
@@ -1390,14 +1421,12 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 			case SWITCH_EVENT_CHANNEL_ANSWER:
 				on_call_answer_event(rsession, call, event);
 				break;
-			case SWITCH_EVENT_CHANNEL_HANGUP:
-				on_call_hangup_event(rsession, call, event);
-				break;
 			case SWITCH_EVENT_CUSTOM: {
-				char *event_subclass = switch_event_get_header(event, "Event-Subclass");
 				if (!strcmp(RAYO_EVENT_XMPP_SEND, event_subclass)) {
 					char *msg = switch_event_get_body(event);
 					iks_send_raw(rsession->parser, msg);
+				} else if (!strcmp(RAYO_EVENT_END, event_subclass)) {
+					on_rayo_end_event(rsession, event);
 				} else if (!strcmp(RAYO_EVENT_OFFER, event_subclass)) {
 					/* handle offer */
 					on_rayo_offer_event(rsession, call, event);
@@ -1409,6 +1438,8 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 				/* don't care */
 				break;
 			}
+		} else {
+			
 		}
 		switch_event_destroy(&event);
 		rayo_call_unlock(call);
@@ -1908,6 +1939,28 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	app_iks_delete(response);
 }
 
+/**
+ * Fire end event on hangup.  This is needed because the channel often is destroyed before
+ * the Rayo session can process the CHANNEL_HANGUP event- so Rayo call data is lost.
+ * @param session that ended
+ * @return SWITCH_STATUS_SUCCESS
+ */
+static switch_status_t hangup_hook(switch_core_session_t *session)
+{
+	switch_event_t *event;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "In call hangup hook\n");
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_END) == SWITCH_STATUS_SUCCESS) {
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "unique-id", switch_core_session_get_uuid(session));
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "jid", call->jid);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "dcp-jid", call->dcp_jid);
+		switch_event_fire(&event);
+		switch_core_event_hook_remove_state_change(session, hangup_hook);
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
 #define RAYO_USAGE ""
 /**
  * Offer call and park channel
@@ -1922,6 +1975,9 @@ SWITCH_STANDARD_APP(rayo_app)
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call has already been offered!\n");
 		goto done;
 	}
+	
+	/* need special handling for hangups... since Rayo session may not process event before channel is destroyed */
+	switch_core_event_hook_add_state_change(session, hangup_hook);
 	
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo 3PCC\n");
 	
