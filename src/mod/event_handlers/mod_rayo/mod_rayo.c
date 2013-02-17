@@ -164,8 +164,8 @@ struct rayo_call {
 	switch_hash_t *pcps;
 	/** synchronizes access to this call */
 	switch_mutex_t *mutex;
-	/** Active play ID */
-	char *play_component_id;
+	/** Active play JID */
+	char *play_component_jid;
 };
 
 /* See RFC-3920 XMPP core for error definitions */
@@ -423,27 +423,6 @@ static char *soft_find_attrib(iks *xml, const char *attrib)
 }
 
 /**
- * Parse the resource from a JID
- * @param jid the full Jabber ID
- * @param buf the buffer to store the resource
- * @param size the buffer size
- * @return the resource, or NULL if resource isn't found or is too large for buffer
- */
-static char *parse_resource_from_jid(const char *jid, char *buf, int size)
-{
-	if (size > 0 && !zstr(jid)) {
-		char *tok = strstr(jid, "/");
-		if (tok && *(++tok)) {
-			if (strlen(tok) < size - 1) {
-				strncpy(buf, tok, size);
-				return buf;
-			}
-		}
-	}
-	return NULL;
-}
-
-/**
  * Get exclusive access to Rayo call data.
  * @param call_uuid the FreeSWITCH call UUID
  * @return the call or NULL.  Call rayo_call_unlock() when done with call pointer.
@@ -472,10 +451,10 @@ static struct rayo_call *rayo_call_locate_from_jid(const char *call_jid)
 {
 	char call_uuid[SWITCH_UUID_FORMATTED_LENGTH + 1];
 	call_uuid[SWITCH_UUID_FORMATTED_LENGTH] = '\0';
-	if (!zstr(call_jid) && strstr(call_jid, "@")) {
+	if (!zstr(call_jid) && strchr(call_jid, '@')) {
 		char *tok;
 		strncpy(call_uuid, call_jid, sizeof(call_uuid) - sizeof(char));
-		tok = strstr(call_uuid, "@");
+		tok = strchr(call_uuid, '@');
 		if (tok) {
 			*tok = '\0';
 		}
@@ -705,15 +684,20 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
  */
 static void on_rayo_stop(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
-	char *to = iks_find_attrib(node, "to");
-	char resource_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
-	char *resource = parse_resource_from_jid(to, resource_buf, SWITCH_UUID_FORMATTED_LENGTH + 1);
+	char *component_jid = iks_find_attrib(node, "to");
 	iks *response = NULL;
-	if (zstr(resource)) {
-		response = create_iq_error(node, to, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+	if (!strcmp(call->jid, component_jid) || !strcmp(rsession->server_jid, component_jid)) {
+		/* call/server instead of component */
+		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	} else if (zstr(call->play_component_jid) || strcmp(call->play_component_jid, component_jid)) {
+		/* component doesn't exist */
+		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+	} else if (switch_core_session_execute_application_async(call->session, "break", "") != SWITCH_STATUS_SUCCESS) {
+		/* failed to send break */
+		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	} else {
-		/* TODO implement */
-		response = create_iq_error(node, to, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		/* success */
+		response = create_iq_result(component_jid, call->dcp_jid, iks_find_attrib(node, "id"));
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -1302,11 +1286,7 @@ static iks* create_rayo_event(const char *name, const char *namespace, const cha
  */
 static void on_rayo_offer_event(struct rayo_session *rsession, switch_event_t *event)
 {
-	char *event_str;
 	iks *revent, *offer;
-
-	switch_event_serialize(event, &event_str, SWITCH_FALSE);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", event_str);
 
 	/* TODO add headers */
 
@@ -1376,6 +1356,7 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 		switch (event->event_id) {
 		case SWITCH_EVENT_CHANNEL_HANGUP:
 			on_call_hangup_event(rsession, event);
+			break;
 		case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
 		case SWITCH_EVENT_CHANNEL_PROGRESS:
 			on_call_ringing_event(rsession, event);
