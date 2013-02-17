@@ -1239,7 +1239,6 @@ static void route_call_event(switch_event_t *event)
 {
 	char *uuid = switch_event_get_header(event, "unique-id");
 	char *dcp_jid = switch_event_get_header(event, "variable_rayo_dcp_jid");
-	char *ldcp_jid = NULL, *lcall_jid = NULL;
 	char *event_subclass = switch_event_get_header(event, "Event-Subclass");
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "got event %s %s\n", switch_event_name(event->event_id), zstr(event_subclass) ? "" : event_subclass);
@@ -1266,9 +1265,6 @@ static void route_call_event(switch_event_t *event)
 		}
 		switch_mutex_unlock(globals.client_routes_mutex);
 	}
-
-	switch_safe_free(lcall_jid);
-	switch_safe_free(ldcp_jid);
 }
 
 /**
@@ -2082,7 +2078,7 @@ SWITCH_STANDARD_APP(rayo_app)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo 3PCC\n");
 
-	/* Offer call to all ONLINE client_routes */
+	/* Offer call to all ONLINE clients */
 	/* TODO load balance this so first session doesn't always get request first? */
 	switch_mutex_lock(globals.client_routes_mutex);
 	for (hi = switch_hash_first(NULL, globals.client_routes); hi; hi = switch_hash_next(hi)) {
