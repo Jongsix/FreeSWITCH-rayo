@@ -126,6 +126,8 @@ struct rayo_session {
 	switch_memory_pool_t *pool;
 	/** socket to client */
 	switch_socket_t *socket;
+	/** socket poll descriptor */
+	switch_pollfd_t *pollfd;
 	/** (this) server Jabber ID */
 	char *server_jid;
 	/** client Jabber ID */
@@ -144,6 +146,8 @@ struct rayo_session {
 	enum rayo_session_state state;
 	/** event queue */
 	switch_queue_t *event_queue;
+	/** true if no activity last poll */
+	int idle;
 };
 
 /**
@@ -1183,6 +1187,8 @@ static int on_stream(void *user_data, int type, iks *node)
 		pak = iks_packet(node);
 	}
 
+	rsession->idle = 0;
+
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, node, state = %s, type = %s\n", rsession->id, rayo_session_state_to_string(rsession->state), node_type_to_string(type));
 
 	switch(type) {
@@ -1493,10 +1499,12 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 	}
 
 	while (rayo_session_ready(rsession)) {
-		void *queue_item;
+		void *event;
+		int result;
 
 		/* read any messages from client */
-		int result = iks_recv(parser, 0);
+		rsession->idle = 1;
+		result = iks_recv(parser, 0);
 		switch (result) {
 		case IKS_OK:
 			err_count = 0;
@@ -1518,16 +1526,10 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 			}
 		}
 
-		/* wait up to 20ms for any FreeSWITCH events */
-		if (switch_queue_pop_timeout(rsession->event_queue, &queue_item, 20 * 1000) == SWITCH_STATUS_SUCCESS) {
-			switch_event_t *event = (switch_event_t *)queue_item;
-			rayo_session_handle_event(rsession, event);
-
-			/* handle all queued events */
-			while (switch_queue_trypop(rsession->event_queue, &queue_item) == SWITCH_STATUS_SUCCESS) {
-				event = (switch_event_t *)queue_item;
-				rayo_session_handle_event(rsession, event);
-			}
+		/* handle all queued events */
+		while (switch_queue_trypop(rsession->event_queue, &event) == SWITCH_STATUS_SUCCESS) {
+			rayo_session_handle_event(rsession, (switch_event_t *)event);
+			rsession->idle = 0;
 		}
 
 		/* check for shutdown */
@@ -1535,6 +1537,14 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s detected shutdown\n", rsession->id);
 			iks_send_raw(rsession->parser, "</stream:stream>");
 			rsession->state = SS_SHUTDOWN;
+			rsession->idle = 0;
+		}
+
+		if (rsession->idle) {
+			int fdr = 0;
+			switch_poll(rsession->pollfd, 1, &fdr, 20000);
+		} else {
+			switch_os_yield();
 		}
 	}
 
@@ -1569,6 +1579,7 @@ static struct rayo_session *rayo_session_create(switch_memory_pool_t *pool, swit
 	rsession->client_jid = "";
 	rsession->client_jid_full = "";
 	switch_queue_create(&rsession->event_queue, MAX_QUEUE_LEN, pool);
+	switch_socket_create_pollset(&rsession->pollfd, rsession->socket, SWITCH_POLLIN | SWITCH_POLLERR, pool);
 
 	return rsession;
 }
