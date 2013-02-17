@@ -1846,29 +1846,39 @@ static void _app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, 
 }
 
 /**
+ * Type of attribute value
+ */
+enum attrib_type {
+	AT_STRING = 0,
+	AT_INTEGER,
+	AT_DECIMAL
+};
+
+/**
  * An attribute in XML node
  */
-typedef struct attrib {
+struct attrib {
 	union {
 		char *s;
 		int i;
+		double d;
 	} v;
-	int is_str;
-	const char *type;
-} attrib_t;
+	enum attrib_type type;
+	const char *test;
+};
 
 /** A function to validate and convert string attrib */
-typedef switch_bool_t (*conversion_function)(attrib_t *, const char *);
+typedef switch_bool_t (*conversion_function)(struct attrib *, const char *);
 
 /**
  * Defines rules for attribute validation
  */
-typedef struct attrib_definition {
+struct attrib_definition {
 	const char *name;
 	const char *default_value;
 	conversion_function fn;
 	int is_last;
-} attrib_definition_t;
+};
 
 /**
  * Assign value to attribute if boolean
@@ -1876,9 +1886,9 @@ typedef struct attrib_definition {
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_bool(attrib_t *attrib, const char *value) {
-	attrib->is_str = 0;
-	attrib->type = "is_bool";
+static switch_bool_t is_bool(struct attrib *attrib, const char *value) {
+	attrib->type = AT_INTEGER;
+	attrib->test = "(true || false)";
 	if (!zstr(value) && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
 		attrib->v.i = switch_true(value);
 		return SWITCH_TRUE;
@@ -1892,9 +1902,9 @@ static switch_bool_t is_bool(attrib_t *attrib, const char *value) {
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_not_negative(attrib_t *attrib, const char *value) {
-	attrib->is_str = 0;
-	attrib->type = "is_not_negative";
+static switch_bool_t is_not_negative(struct attrib *attrib, const char *value) {
+	attrib->type = AT_INTEGER;
+	attrib->test = "(>= 0)";
 	if (!zstr(value) && switch_is_number(value)) {
 		attrib->v.i = atoi(value);
 		if (attrib->v.i >= 0) {
@@ -1910,9 +1920,9 @@ static switch_bool_t is_not_negative(attrib_t *attrib, const char *value) {
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_positive(attrib_t *attrib, const char *value) {
-	attrib->is_str = 0;
-	attrib->type = "is_positive";
+static switch_bool_t is_positive(struct attrib *attrib, const char *value) {
+	attrib->type = AT_INTEGER;
+	attrib->test = "(> 0)";
 	if (!zstr(value) && switch_is_number(value)) {
 		attrib->v.i = atoi(value);
 		if (attrib->v.i > 0) {
@@ -1928,9 +1938,9 @@ static switch_bool_t is_positive(attrib_t *attrib, const char *value) {
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_positive_or_neg_one(attrib_t *attrib, const char *value) {
-	attrib->is_str = 0;
-	attrib->type = "is_positive_or_neg_one";
+static switch_bool_t is_positive_or_neg_one(struct attrib *attrib, const char *value) {
+	attrib->type = AT_INTEGER;
+	attrib->test = "(-1 || > 0)";
 	if (!zstr(value) && switch_is_number(value)) {
 		attrib->v.i = atoi(value);
 		if (attrib->v.i == -1 || attrib->v.i > 0) {
@@ -1946,11 +1956,42 @@ static switch_bool_t is_positive_or_neg_one(attrib_t *attrib, const char *value)
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_any(attrib_t *attrib, const char *value) {
-	attrib->is_str = 1;
-	attrib->type = "is_any";
+static switch_bool_t is_any(struct attrib *attrib, const char *value) {
+	attrib->type = AT_STRING;
+	attrib->test = "(*)";
 	attrib->v.s = (char *)value;
 	return SWITCH_TRUE;
+}
+
+/**
+ * Assign value to attribute if valid input mode (
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+static switch_bool_t is_input_mode(struct attrib *attrib, const char *value) {
+	attrib->type = AT_STRING;
+	attrib->test = "(any || dtmf || speech)";
+	attrib->v.s = (char *)value;
+	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value);
+}
+
+/**
+ * Assign value to attribute if 0.0 <= x <= 1.0
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+static switch_bool_t is_decimal_between_zero_and_one(struct attrib *attrib, const char *value) {
+	attrib->type = AT_DECIMAL;
+	attrib->test = "(>= 0.0 && <= 1.0)";
+	if (!zstr(value) && switch_is_number(value)) {
+		attrib->v.d = atof(value);
+		if (attrib->v.d >= 0.0 || attrib->v.d <= 1.0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
 }
 
 /**
@@ -1960,14 +2001,14 @@ static switch_bool_t is_any(attrib_t *attrib, const char *value) {
  * @param node XML node to search
  * @return SWITCH_TRUE if successful
  */
-static switch_bool_t get_attrib(const attrib_definition_t *attrib_def, attrib_t *attrib, switch_xml_t node)
+static switch_bool_t get_attrib(const struct attrib_definition *attrib_def, struct attrib *attrib, switch_xml_t node)
 {
 	const char *value = switch_xml_attr(node, attrib_def->name);
 	value = zstr(value) ? attrib_def->default_value : value;
 	if (attrib_def->fn(attrib, value)) {
 		return SWITCH_TRUE;
 	}
-	attrib->is_str = 1;
+	attrib->type = AT_STRING;
 	attrib->v.s = (char *)value; /* remember bad value */
 	return SWITCH_FALSE;
 }
@@ -1988,14 +2029,14 @@ struct attribs {
  * @param attribs struct to fill
  * @return SWITCH_TRUE if the attribs are valid
  */
-static switch_bool_t get_attribs(switch_core_session_t *session, switch_xml_t node, const attrib_definition_t *attrib_def, struct attribs *attribs)
+static switch_bool_t get_attribs(switch_core_session_t *session, switch_xml_t node, const struct attrib_definition *attrib_def, struct attribs *attribs)
 {
-	attrib_t *attrib = attribs->attrib;
+	struct attrib *attrib = attribs->attrib;
 	switch_bool_t success = SWITCH_TRUE;
 	for (; success && !attrib_def->is_last; attrib_def++) {
 		success &= get_attrib(attrib_def, attrib, node);
 		if (!success) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", switch_xml_name(node), attrib_def->name, attrib->v.s, attrib->type);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", switch_xml_name(node), attrib_def->name, attrib->v.s, attrib->test);
 		}
 		attrib++;
 	}
@@ -2005,10 +2046,26 @@ static switch_bool_t get_attribs(switch_core_session_t *session, switch_xml_t no
 #define LAST_ATTRIB { NULL, NULL, NULL, SWITCH_TRUE }
 
 /**
+ * <prompt> component validation
+ */
+static const struct attrib_definition prompt_attribs_def[] = {
+	{ "barge-in", "true", is_bool, SWITCH_FALSE },
+	LAST_ATTRIB
+};
+
+/**
+ * <prompt> component attributes
+ */
+struct prompt_attribs {
+	int size;
+	struct attrib barge_in;
+};
+
+/**
  * <output> component validation
  */
-static const attrib_definition_t output_attribs_def[] = {
-	{ "start-offset", "-1", is_not_negative, SWITCH_FALSE },
+static const struct attrib_definition output_attribs_def[] = {
+	{ "start-offset", "0", is_not_negative, SWITCH_FALSE },
 	{ "start-paused", "false", is_bool, SWITCH_FALSE },
 	{ "repeat-interval", "0", is_not_negative, SWITCH_FALSE },
 	{ "repeat-times", "1", is_positive, SWITCH_FALSE },
@@ -2022,12 +2079,42 @@ static const attrib_definition_t output_attribs_def[] = {
  */
 struct output_attribs {
 	int size;
-	attrib_t start_offset;
-	attrib_t start_paused;
-	attrib_t repeat_interval;
-	attrib_t repeat_times;
-	attrib_t max_time;
-	attrib_t renderer;
+	struct attrib start_offset;
+	struct attrib start_paused;
+	struct attrib repeat_interval;
+	struct attrib repeat_times;
+	struct attrib max_time;
+	struct attrib renderer;
+};
+
+/**
+ * <input> component validation
+ */
+static const struct attrib_definition input_attribs_def[] = {
+	{ "mode", "any", is_input_mode, SWITCH_FALSE },
+	{ "terminator", "", is_any, SWITCH_FALSE },
+	{ "recognizer", "en-US", is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
+	{ "initial-timeout", "-1", is_positive_or_neg_one, SWITCH_FALSE },
+	{ "inter-digit-timeout", "-1", is_positive_or_neg_one, SWITCH_FALSE },
+	{ "sensitivity", "0.5", is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "min-confidence", "0", is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "max-silence", "-1", is_positive_or_neg_one, SWITCH_FALSE },
+	LAST_ATTRIB
+};
+
+/**
+ * <input> component attributes
+ */
+struct input_attribs {
+	int size;
+	struct attrib mode;
+	struct attrib terminator;
+	struct attrib recognizer;
+	struct attrib initial_timeout;
+	struct attrib inter_digit_timeout;
+	struct attrib sensitivity;
+	struct attrib min_confidence;
+	struct attrib max_silence;
 };
 
 #define RAYO_PLAY_USAGE ""
@@ -2036,12 +2123,14 @@ struct output_attribs {
  */
 SWITCH_STANDARD_APP(rayo_play_app)
 {
-	switch_xml_t iq, output;
+	switch_xml_t iq, output, prompt, input;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	const char *dcp_jid = switch_channel_get_variable(channel, "rayo_dcp_jid");
 	char *iq_str = switch_core_session_strdup(session, data);
 	char *command;
-	struct output_attribs oattribs;
+	struct output_attribs o_attribs;
+	struct input_attribs i_attribs;
+	struct prompt_attribs p_attribs;
 
 	if (zstr(dcp_jid)) {
 		/* shouldn't happen if APP was executed by this module */
@@ -2073,28 +2162,59 @@ SWITCH_STANDARD_APP(rayo_play_app)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
 
+	/* is this <prompt>, <output>, or <input>? */
 	command = switch_xml_name(iq->child);
 	if (!strcmp("prompt", command)) {
 		output = switch_xml_child(iq->child, "output");
-		/* TODO input */
+		input = switch_xml_child(iq->child, "input");
+		prompt = iq->child;
 	} else if (!strcmp("output", command)) {
 		output = iq->child;
+		input = NULL;
+		prompt = NULL;
 	} else if (!strcmp("input", command)) {
-		/* TODO input */
-		app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		output = NULL;
+		input = iq->child;
+		prompt = NULL;
 		return;
 	} else {
 		app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		return;
 	}
 
-	/* validate output attributes */
-	memset(&oattribs, 0, sizeof(oattribs));
-	if (!get_attribs(session, output, output_attribs_def, (struct attribs *)&oattribs)) {
+	/* need at least one... */
+	if (!output && !input) {
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-	} else {
-		app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		return;
 	}
+
+	/* validate output attributes */
+	if (output) {
+		memset(&o_attribs, 0, sizeof(o_attribs));
+		if (!get_attribs(session, output, output_attribs_def, (struct attribs *)&o_attribs)) {
+			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+			return;
+		}
+	}
+
+	/* validate input attributes */
+	if (input) {
+		memset(&i_attribs, 0, sizeof(i_attribs));
+		if (!get_attribs(session, input, input_attribs_def, (struct attribs *)&i_attribs)) {
+			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		}
+	}
+
+	/* validate prompt attributes */
+	if (prompt) {
+		memset(&p_attribs, 0, sizeof(p_attribs));
+		if (!get_attribs(session, prompt, prompt_attribs_def, (struct attribs *)&p_attribs)) {
+			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		}
+	}
+
+	/* fail for now */
+	app_send_iq_error(session, iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
 }
 
 /**
