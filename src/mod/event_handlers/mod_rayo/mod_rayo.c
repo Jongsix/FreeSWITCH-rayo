@@ -143,7 +143,9 @@ struct rayo_call {
 	/** synchronizes access to this call */
 	switch_mutex_t *mutex;
 	/** Active input JID */
-	char *play_component_jid;
+	char *input_component_jid;
+	/** Active input JID */
+	char *output_component_jid;
 };
 
 /**
@@ -519,7 +521,7 @@ static void on_rayo_stop(struct rayo_session *rsession, struct rayo_call *call, 
 	if (!strcmp(call->jid, component_jid) || !strcmp(rsession->server_jid, component_jid)) {
 		/* call/server instead of component */
 		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-	} else if (zstr(call->play_component_jid) || strcmp(call->play_component_jid, component_jid)) {
+	} else if (zstr(call->output_component_jid) || strcmp(call->output_component_jid, component_jid)) {
 		/* component doesn't exist */
 		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (switch_core_session_execute_application_async(call->session, "break", "") != SWITCH_STATUS_SUCCESS) {
@@ -1645,12 +1647,65 @@ static void app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, c
 
 	/* send message to Rayo session via event */
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		switch_channel_event_set_data(switch_core_session_get_channel(session), event);
+		switch_channel_event_set_data(channel, event);
 		switch_event_add_body(event, "%s", response);
 		switch_event_fire(&event);
 	}
 
 	switch_safe_free(command);
+	switch_safe_free(response);
+}
+
+/**
+ * Send component ref to controlling client from call
+ * @param session the session that created the component
+ * @param iq the request that requested the component
+ * @param ref the component ref
+ */
+static void app_send_component_ref(switch_core_session_t *session, switch_xml_t iq, const char *ref)
+{
+	switch_event_t *event;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	char *response = switch_mprintf(
+		"<iq id='%s' from='%s' to='%s' type='result'>"
+		"<ref xmlns='urn:xmpp:rayo:1' id='%s'/></iq>",
+		switch_xml_attr_soft(iq, "id"),
+		switch_channel_get_variable(channel, "rayo_call_jid"),
+		switch_channel_get_variable(channel, "rayo_dcp_jid"),
+		ref);
+
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_body(event, "%s", response);
+		switch_event_fire(&event);
+	}
+	switch_safe_free(response);
+}
+
+/**
+ * Send component complete presence to client
+ * @param session the session that created the component
+ * @param jid the component JID
+ * @param reason the completion reason
+ * @param reason_namespace the completion reason namespace
+ */
+static void app_send_component_complete(switch_core_session_t *session, const char *jid, const char *reason, const char *reason_namespace)
+{
+	switch_event_t *event;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	char *response = switch_mprintf(
+		"<presence from='%s' to='%s' type='unavailable'>"
+		"<complete xmlns='urn:xmpp:rayo:ext:1'><%s xmlns='%s'/></complete></presence>",
+		jid,
+		switch_channel_get_variable(channel, "rayo_dcp_jid"),
+		reason,
+		reason_namespace);
+
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_body(event, "%s", response);
+		switch_event_fire(&event);
+	}
 	switch_safe_free(response);
 }
 
@@ -1739,6 +1794,38 @@ struct input_attribs {
 	struct xml_attrib max_silence;
 };
 
+/**
+ * Play a document
+ * @param session the session to play to
+ * @param document the document to play
+ * @param args input args
+ * @return status
+ */
+switch_status_t play_document(switch_core_session_t *session, switch_xml_t document, switch_input_args_t *args)
+{
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	char *name;
+	if (!document) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No document to play!\n");
+		return SWITCH_STATUS_FALSE;
+	}
+	name = switch_xml_name(document);
+	if (!strcmp("speak", name)) {
+		char *ssml = switch_xml_toxml(document, SWITCH_FALSE);
+		char *inline_ssml = switch_mprintf("ssml://%s", ssml);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", inline_ssml);
+		status = switch_ivr_play_file(session, NULL, inline_ssml, args);
+		switch_safe_free(ssml);
+		switch_safe_free(inline_ssml);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <speak>, got: <%s>!\n", name);
+	}
+	return status;
+}
+
+#define OUTPUT_FINISHED "finish", "urn:xmpp:rayo:output:complete:1"
+#define INPUT_FINISHED "finish", "urn:xmpp:rayo:input:complete:1"
+
 #define RAYO_PLAY_USAGE ""
 /**
  * Process input/output/prompt component
@@ -1747,18 +1834,23 @@ SWITCH_STANDARD_APP(rayo_play_app)
 {
 	switch_xml_t iq, output, prompt, input;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	const char *dcp_jid = switch_channel_get_variable(channel, "rayo_dcp_jid");
+	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
 	char *iq_str = switch_core_session_strdup(session, data);
 	char *command;
 	struct output_attribs o_attribs;
 	struct input_attribs i_attribs;
 	struct prompt_attribs p_attribs;
+	char ref[SWITCH_UUID_FORMATTED_LENGTH + 1];
+	char *component_jid = NULL;
 
-	if (zstr(dcp_jid)) {
+	switch_mutex_lock(call->mutex);
+	if (!call && zstr(call->dcp_jid)) {
+		switch_mutex_unlock(call->mutex);
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "No Rayo client controlling this session!\n");
 		return;
 	}
+	switch_mutex_unlock(call->mutex);
 
 	if (zstr(iq_str)) {
 		/* shouldn't happen if APP was executed by this module */
@@ -1835,8 +1927,38 @@ SWITCH_STANDARD_APP(rayo_play_app)
 		}
 	}
 
-	/* fail for now */
-	app_send_iq_error(session, iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+	/* acknowledge command */
+	ref[SWITCH_UUID_FORMATTED_LENGTH] = '\0';
+	switch_uuid_str(ref, sizeof(ref));
+	switch_mutex_lock(call->mutex);
+	component_jid = switch_core_session_sprintf(session, "%s/%s", call->jid, ref);
+	if (output) {
+		call->output_component_jid = ref;
+	} else {
+		call->input_component_jid = ref;
+	}
+	switch_mutex_unlock(call->mutex);
+
+	/* send confirmation to client */
+	app_send_component_ref(session, iq, ref);
+
+	/* render document(s) */
+	if (output) {
+		switch_xml_t document = switch_xml_child(output, "document");
+		if (!document) {
+			play_document(session, output->child, NULL);
+		} else {
+			for (; document; document = document->next) {
+				play_document(session, document->child, NULL);
+			}
+		}
+		app_send_component_complete(session, component_jid, OUTPUT_FINISHED);
+	}
+
+	switch_mutex_lock(call->mutex);
+	call->input_component_jid = "";
+	call->output_component_jid = "";
+	switch_mutex_unlock(call->mutex);
 }
 
 /**
@@ -1851,6 +1973,8 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 	call->session = session;
 	call->jid = switch_core_session_sprintf(session, "%s@%s", switch_core_session_get_uuid(session), globals.domain);
 	call->dcp_jid = "";
+	call->input_component_jid = "";
+	call->output_component_jid = "";
 	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
 	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
 	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
