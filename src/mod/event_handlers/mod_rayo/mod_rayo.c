@@ -30,6 +30,10 @@
 #include <switch.h>
 #include <iksemel.h>
 
+#include "xml_attrib.h"
+#include "iks_helpers.h"
+#include "sasl.h"
+
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load);
 SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
@@ -46,8 +50,6 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 #define RAYO_PRIVATE_VAR "_rayo_private"
 
-typedef char * app_iks;
-
 struct rayo_session;
 struct rayo_call;
 
@@ -60,30 +62,6 @@ typedef void (*command_handler)(struct rayo_session *, struct rayo_call *, iks *
 struct command_handler_wrapper {
 	command_handler fn;
 };
-
-/**
- * Module state
- */
-static struct {
-	/** module memory pool */
-	switch_memory_pool_t *pool;
-	/** module shutdown flag */
-	int shutdown;
-	/** prevents module shutdown until all session/server threads are finished */
-	switch_thread_rwlock_t *shutdown_rwlock;
-	/** users mapped to passwords */
-	switch_hash_t *users;
-	/** XMPP <iq> set commands mapped to functions */
-	switch_hash_t *command_handlers;
-	/** XMPP <iq> set commands mapped to functions */
-	switch_hash_t *rayo_command_handlers;
-	/** map of DCP JID to session */
-	switch_hash_t *client_routes;
-	/** synchronizes access to routes */
-	switch_mutex_t *client_routes_mutex;
-	/** domain for calls/mixers/server/etc */
-	char *domain;
-} globals;
 
 /**
  * A server listening for clients
@@ -164,135 +142,33 @@ struct rayo_call {
 	switch_hash_t *pcps;
 	/** synchronizes access to this call */
 	switch_mutex_t *mutex;
-	/** Active play JID */
+	/** Active input JID */
 	char *play_component_jid;
 };
 
-/* See RFC-3920 XMPP core for error definitions */
-typedef struct {
-	const char *name;
-	const char *type;
-} stanza_error;
-static const stanza_error STANZA_ERROR_BAD_REQUEST = { "bad-request", "modify" };
-static const stanza_error STANZA_ERROR_CONFLICT = { "conflict", "cancel" };
-static const stanza_error STANZA_ERROR_FEATURE_NOT_IMPLEMENTED = { "feature-not-implemented", "modify" };
-static const stanza_error STANZA_ERROR_FORBIDDEN = { "forbidden", "auth" };
-static const stanza_error STANZA_ERROR_GONE = { "gone", "modify" };
-static const stanza_error STANZA_ERROR_INTERNAL_SERVER_ERROR = { "internal-server-error", "wait" };
-static const stanza_error STANZA_ERROR_ITEM_NOT_FOUND = { "item-not-found", "cancel" };
-static const stanza_error STANZA_ERROR_JID_MALFORMED = { "jid-malformed", "modify" };
-static const stanza_error STANZA_ERROR_NOT_ACCEPTABLE = { "not-acceptable", "modify" };
-static const stanza_error STANZA_ERROR_NOT_ALLOWED = { "not-allowed", "cancel" };
-static const stanza_error STANZA_ERROR_NOT_AUTHORIZED = { "not-authorized", "auth" };
-static const stanza_error STANZA_ERROR_RECIPIENT_UNAVAILABLE = { "recipient-unavailable", "wait" };
-static const stanza_error STANZA_ERROR_REDIRECT = { "redirect", "modify" };
-static const stanza_error STANZA_ERROR_REGISTRATION_REQUIRED = { "registration-required", "auth" };
-static const stanza_error STANZA_ERROR_REMOTE_SERVER_NOT_FOUND = { "remote-server-not-found", "cancel" };
-static const stanza_error STANZA_ERROR_REMOTE_SERVER_TIMEOUT = { "remote-server-timeout", "wait" };
-static const stanza_error STANZA_ERROR_RESOURCE_CONSTRAINT = { "resource-constraint", "wait" };
-static const stanza_error STANZA_ERROR_SERVICE_UNAVAILABLE = { "service-unavailable", "cancel" };
-static const stanza_error STANZA_ERROR_UNDEFINED_CONDITION = { "undefined-condition", "wait" };
-static const stanza_error STANZA_ERROR_UNEXPECTED_REQUEST = { "unexpected-request", "wait" };
-
-#define create_iq_error(iq, from, to, error) _create_iq_error(iq, from, to, &error)
-
 /**
- * Create <iq> error response from <iq> request
- * @param iq the <iq> get/set request
- * @param from
- * @param to
- * @param error the XMPP stanza error
- * @return the <iq> error response
+ * Module state
  */
-static iks *_create_iq_error(iks *iq, const char *from, const char *to, const stanza_error *error)
-{
-	iks *response = iks_copy(iq);
-	iks *x;
-
-	/* <iq> */
-	iks_insert_attrib(response, "from", from);
-	iks_insert_attrib(response, "to", to);
-	iks_insert_attrib(response, "type", "error");
-
-	/* <error> */
-	x = iks_insert(response, "error");
-	iks_insert_attrib(x, "type", error->type);
-
-	/* e.g. <feature-not-implemented> */
-	x = iks_insert(x, error->name);
-	iks_insert_attrib(x, "xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
-
-	return response;
-}
-
-#define app_create_iq_error(iq, from, to, error) _app_create_iq_error(iq, from, to, &error)
-
-/**
- * Create <iq> error response from <iq> request
- * @param iq the <iq> get/set request
- * @param from
- * @param to
- * @param error the XMPP stanza error
- * @return the <iq> error response
- */
-static app_iks *_app_create_iq_error(switch_xml_t iq, const char *from, const char *to, const stanza_error *error)
-{
-	char *command = switch_xml_toxml(iq->child, SWITCH_FALSE);
-	char *response = switch_mprintf(
-		"<iq id='%s' from='%s' to='%s' type='error'>"
-		"%s<error type='%s'>"
-		"<%s xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>",
-		switch_xml_attr_soft(iq, "id"),
-		from,
-		to,
-		command,
-		error->type,
-		error->name);
-	switch_safe_free(command);
-	return (app_iks *)response;
-}
-
-/**
- * Send an XMPP message from a FreeSWITCH application thread
- * @param session the session
- * @param msg the message to send
- */
-static void app_iks_send(switch_core_session_t *session, app_iks *msg)
-{
-	/* sends message to Rayo session via event */
-	switch_event_t *event;
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		switch_channel_event_set_data(switch_core_session_get_channel(session), event);
-		switch_event_add_body(event, "%s", (char *)msg);
-		switch_event_fire(&event);
-	}
-}
-
-/**
- * Destroy the XMPP message
- * @param msg the message
- */
-static void app_iks_delete(app_iks *msg)
-{
-	switch_safe_free(msg);
-}
-
-/**
- * Create <iq> result response
- * @param from
- * @param to
- * @param id
- * @return the result response
- */
-static iks *create_iq_result(const char *from, const char *to, const char *id)
-{
-	iks *response = iks_new("iq");
-	iks_insert_attrib(response, "from", from);
-	iks_insert_attrib(response, "to", to);
-	iks_insert_attrib(response, "type", "result");
-	iks_insert_attrib(response, "id", id);
-	return response;
-}
+static struct {
+	/** module memory pool */
+	switch_memory_pool_t *pool;
+	/** module shutdown flag */
+	int shutdown;
+	/** prevents module shutdown until all session/server threads are finished */
+	switch_thread_rwlock_t *shutdown_rwlock;
+	/** users mapped to passwords */
+	switch_hash_t *users;
+	/** XMPP <iq> set commands mapped to functions */
+	switch_hash_t *command_handlers;
+	/** XMPP <iq> set commands mapped to functions */
+	switch_hash_t *rayo_command_handlers;
+	/** map of DCP JID to session */
+	switch_hash_t *client_routes;
+	/** synchronizes access to routes */
+	switch_mutex_t *client_routes_mutex;
+	/** domain for calls/mixers/server/etc */
+	char *domain;
+} globals;
 
 /**
  * Convert Rayo state to string
@@ -310,46 +186,6 @@ static const char *rayo_session_state_to_string(enum rayo_session_state state)
 		case SS_SHUTDOWN: return "SHUTDOWN";
 		case SS_ERROR: return "ERROR";
 		case SS_DESTROY: return "DESTROY";
-		default: return "UNKNOWN";
-	}
-}
-
-/**
- * Convert iksemel XML node type to string
- * @param type the XML node type
- * @return the string value of type or "UNKNOWN"
- */
-static const char *node_type_to_string(int type)
-{
-	switch(type) {
-		case IKS_NODE_START: return "NODE_START";
-		case IKS_NODE_NORMAL: return "NODE_NORMAL";
-		case IKS_NODE_ERROR: return "NODE_ERROR";
-		case IKS_NODE_STOP: return "NODE_START";
-		default: return "NODE_UNKNOWN";
-	}
-}
-
-/**
- * Convert iksemel error code to string
- * @param err the iksemel error code
- * @return the string value of error or "UNKNOWN"
- */
-static const char *net_error_to_string(int err)
-{
-	switch (err) {
-		case IKS_OK: return "OK";
-		case IKS_NOMEM: return "NOMEM";
-		case IKS_BADXML: return "BADXML";
-		case IKS_HOOK: return "HOOK";
-		case IKS_NET_NODNS: return "NET_NODNS";
-		case IKS_NET_NOSOCK: return "NET_NOSOCK";
-		case IKS_NET_NOCONN: return "NET_NOCONN";
-		case IKS_NET_RWERR: return "NET_RWERR";
-		case IKS_NET_NOTSUPP: return "NET_NOTSUPP";
-		case IKS_NET_TLSFAIL: return "NET_TLSFAIL";
-		case IKS_NET_DROPPED: return "NET_DROPPED";
-		case IKS_NET_UNKNOWN: return "NET_UNKNOWN";
 		default: return "UNKNOWN";
 	}
 }
@@ -408,18 +244,6 @@ static command_handler get_command_handler(switch_hash_t *hash, const char *name
 		return wrapper->fn;
 	}
 	return NULL;
-}
-
-/**
- * Get attribute value of node, returning empty string if non-existent or not set.
- * @param xml the XML node to search
- * @param attrib the Attribute name
- * @return the attribute value
- */
-static char *soft_find_attrib(iks *xml, const char *attrib)
-{
-	char *value = iks_find_attrib(xml, attrib);
-	return zstr(value) ? "" : value;
 }
 
 /**
@@ -551,15 +375,15 @@ static int rayo_session_command_ok(struct rayo_session *rsession, struct rayo_ca
 	to = zstr(to) ? rsession->server_jid : to;
 
 	if (bad) {
-		response = create_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
-		response = create_iq_error(node, to, from, STANZA_ERROR_NOT_AUTHORIZED);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_NOT_AUTHORIZED);
 	} else if (!call) {
-		response = create_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (rsession->state != SS_ONLINE) {
-		response = create_iq_error(node, to, from, STANZA_ERROR_UNEXPECTED_REQUEST);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_UNEXPECTED_REQUEST);
 	} else if (!rayo_session_has_call_control(rsession, call)) {
-		response = create_iq_error(node, to, from, STANZA_ERROR_CONFLICT);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_CONFLICT);
 	}
 
 	if (response) {
@@ -578,8 +402,14 @@ static int rayo_session_command_ok(struct rayo_session *rsession, struct rayo_ca
  */
 static void on_rayo_accept(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
+	iks *response = NULL;
 	/* if we get this far, session has control of the call */
-	iks *response = create_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+	/* send ringing */
+	if (switch_core_session_execute_application_async(call->session, "ring_ready", "") == SWITCH_STATUS_SUCCESS) {
+		response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+	} else {
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
 }
@@ -596,9 +426,9 @@ static void on_rayo_answer(struct rayo_session *rsession, struct rayo_call *call
 	/* TODO set signaling headers */
 	/* send answer to call */
 	if (switch_core_session_execute_application_async(call->session, "answer", "") == SWITCH_STATUS_SUCCESS) {
-		response = create_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
 	} else {
-		response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -617,14 +447,14 @@ static void on_rayo_redirect(struct rayo_session *rsession, struct rayo_call *ca
 	char *redirect_to = iks_find_attrib(redirect, "to");
 
 	if (zstr(redirect_to)) {
-		response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
 	} else {
 		/* TODO set signaling headers */
 		/* send redirect to call */
 		if (switch_core_session_execute_application_async(call->session, "redirect", redirect_to) == SWITCH_STATUS_SUCCESS) {
-			response = create_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
 		} else {
-			response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 	}
 	iks_send(rsession->parser, response);
@@ -664,12 +494,12 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
 	if (!zstr(hangup_cause)) {
 		/* TODO set signaling headers */
 		if (switch_core_session_execute_application_async(call->session, "hangup", hangup_cause) == SWITCH_STATUS_SUCCESS) {
-			response = create_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
 		} else {
-			response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 	} else {
-		response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	iks_send(rsession->parser, response);
@@ -688,16 +518,16 @@ static void on_rayo_stop(struct rayo_session *rsession, struct rayo_call *call, 
 	iks *response = NULL;
 	if (!strcmp(call->jid, component_jid) || !strcmp(rsession->server_jid, component_jid)) {
 		/* call/server instead of component */
-		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	} else if (zstr(call->play_component_jid) || strcmp(call->play_component_jid, component_jid)) {
 		/* component doesn't exist */
-		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (switch_core_session_execute_application_async(call->session, "break", "") != SWITCH_STATUS_SUCCESS) {
 		/* failed to send break */
-		response = create_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	} else {
 		/* success */
-		response = create_iq_result(component_jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		response = iks_new_iq_result(component_jid, call->dcp_jid, iks_find_attrib(node, "id"));
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -714,7 +544,7 @@ static void on_rayo_play_component(struct rayo_session *rsession, struct rayo_ca
 	char *play = iks_string(NULL, node);
 	/* forward document to call thread by executing custom application */
 	if (!play || switch_core_session_execute_application_async(call->session, "rayo_play", play) != SWITCH_STATUS_SUCCESS) {
-		iks *response = create_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		iks *response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		iks_send(rsession->parser, response);
 		iks_delete(response);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to execute rayo_play!\n");
@@ -831,12 +661,12 @@ static void on_iq_set_xmpp_session(struct rayo_session *rsession, struct rayo_ca
 	switch(rsession->state) {
 	case SS_NEW:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
 		break;
 
 	case SS_AUTHENTICATED:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
 		break;
 
 	case SS_RESOURCE_BOUND:
@@ -851,12 +681,12 @@ static void on_iq_set_xmpp_session(struct rayo_session *rsession, struct rayo_ca
 	case SS_SESSION_ESTABLISHED:
 	case SS_ONLINE:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
 		break;
 
 	default:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
 		break;
 	}
 
@@ -917,19 +747,19 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, struct rayo_call 
 	case SS_ONLINE:
 		/* already bound a single resource */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_ALLOWED);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_ALLOWED);
 		break;
 
 	case SS_NEW:
 		/* new */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
 		break;
 
 	default:
 		/* shutdown/error/destroy */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
 		break;
 	}
 
@@ -947,7 +777,7 @@ static int on_iq_get(void *user_data, ikspak *pak)
 {
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *node = pak->x;
-	iks *response = create_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	iks *response = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	iks_send(rsession->parser, response);
 	iks_delete(response);
 
@@ -975,43 +805,6 @@ static int rayo_send_auth_failure(struct rayo_session *rsession, const char *rea
 		"<%s/></failure>", reason);
 	result = iks_send_raw(rsession->parser, reply);
 	return result;
-}
-
-/**
- * Parse authzid, authcid, and password tokens from base64 PLAIN auth message.
- * @param message the base-64 encoded authentication message
- * @param authzid the authorization id in the message - free this string when done with parsed message
- * @param authcid the authentication id in the message
- * @param password the password in the message
- */
-static void parse_plain_auth_message(const char *message, char **authzid, char **authcid, char **password)
-{
-	char *decoded = iks_base64_decode(message);
-	int maxlen = strlen(message) * 6 / 8 + 1;
-	int pos = 0;
-	*authzid = NULL;
-	*authcid = NULL;
-	*password = NULL;
-	if (decoded == NULL) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing auth message\n");
-		return;
-	}
-	*authzid = decoded;
-	pos = strlen(*authzid) + 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authzid = %s\n", *authzid);
-	if (pos >= maxlen) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at authzid\n");
-		return;
-	}
-	*authcid = decoded + pos;
-	pos += strlen(*authcid) + 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "authcid = %s\n", *authcid);
-	if (pos >= maxlen) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stopped at authcid\n");
-		return;
-	}
-	*password = decoded + pos;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "password = %s\n", zstr(*password) ? "(null)" : "xxxxxx");
 }
 
 /**
@@ -1069,7 +862,7 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 	}
 
 	/* unsupported authentication type */
-	xmlns = soft_find_attrib(node, "xmlns");
+	xmlns = iks_find_attrib_soft(node, "xmlns");
 	if (strcmp(IKS_NS_XMPP_SASL, xmlns)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported namespace: %s!\n", rsession->id, rayo_session_state_to_string(rsession->state), xmlns);
 		/* TODO error */
@@ -1078,7 +871,7 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 	}
 
 	/* unsupported SASL authentication mechanism */
-	mechanism = soft_find_attrib(node, "mechanism");
+	mechanism = iks_find_attrib_soft(node, "mechanism");
 	if (strcmp("PLAIN", mechanism)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported SASL mechanism: %s!\n", rsession->id, rayo_session_state_to_string(rsession->state), mechanism);
 		rayo_send_auth_failure(rsession, "invalid-mechanism");
@@ -1149,7 +942,7 @@ static int on_iq_set(void *user_data, ikspak *pak)
 		iks *reply;
 		from = zstr(from) ? rsession->server_jid : from;
 		to = zstr(to) ? rsession->client_jid_full : to;
-		reply = create_iq_error(iq, from, to, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		reply = iks_new_iq_error(iq, from, to, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	}
 
 	return IKS_FILTER_EAT;
@@ -1173,12 +966,12 @@ static int on_stream(void *user_data, int type, iks *node)
 
 	rsession->idle = 0;
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, node, state = %s, type = %s\n", rsession->id, rayo_session_state_to_string(rsession->state), node_type_to_string(type));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, node, state = %s, type = %s\n", rsession->id, rayo_session_state_to_string(rsession->state), iks_node_type_to_string(type));
 
 	switch(type) {
 	case IKS_NODE_START:
 		if (rsession->state == SS_NEW) {
-			rsession->server_jid = switch_core_strdup(rsession->pool, soft_find_attrib(node, "to"));
+			rsession->server_jid = switch_core_strdup(rsession->pool, iks_find_attrib_soft(node, "to"));
 			rayo_send_header_auth(rsession);
 		} else if (rsession->state == SS_AUTHENTICATED) {
 			rayo_send_header_bind(rsession);
@@ -1493,15 +1286,15 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 		case IKS_NET_RWERR:
 		case IKS_NET_NOCONN:
 		case IKS_NET_NOSOCK:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s, ending session\n", rsession->id, net_error_to_string(result));
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s, ending session\n", rsession->id, iks_net_error_to_string(result));
 			rsession->state = SS_ERROR;
 			goto done;
 		default:
 			if (err_count++ == 0) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s\n", rsession->id, net_error_to_string(result));
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s iks_recv() error = %s\n", rsession->id, iks_net_error_to_string(result));
 			}
 			if (err_count >= 50) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s too many iks_recv() error = %s, ending session\n", rsession->id, net_error_to_string(result));
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s too many iks_recv() error = %s, ending session\n", rsession->id, iks_net_error_to_string(result));
 				rsession->state = SS_ERROR;
 				goto done;
 			}
@@ -1684,7 +1477,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 		switch_core_destroy_memory_pool(&pool);
 	}
 
-fail:
+  fail:
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Rayo server %s:%u thread done\n", server->addr, server->port);
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 	return NULL;
@@ -1828,228 +1621,44 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
 	return SWITCH_STATUS_FALSE;
 }
 
-#define app_send_iq_error(session, iq, error) _app_send_iq_error(session, iq, &error)
-
 /**
  * Send IQ error to controlling client from call
  * @param session the session that detected the error
  * @param iq the request that caused the error
  * @param error the error message
  */
-static void _app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, const stanza_error *error)
+static void app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, const char *error_name, const char *error_type)
 {
+	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	app_iks *response = _app_create_iq_error(iq, switch_channel_get_variable(channel, "rayo_call_jid"),
-		switch_channel_get_variable(channel, "rayo_dcp_jid"), error);
-	app_iks_send(session, response);
-	app_iks_delete(response);
-}
+	char *command = switch_xml_toxml(iq->child, SWITCH_FALSE);
+	char *response = switch_mprintf(
+		"<iq id='%s' from='%s' to='%s' type='error'>"
+		"%s<error type='%s'>"
+		"<%s xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>",
+		switch_xml_attr_soft(iq, "id"),
+		switch_channel_get_variable(channel, "rayo_call_jid"),
+		switch_channel_get_variable(channel, "rayo_dcp_jid"),
+		command,
+		error_type,
+		error_name);
 
-/**
- * Type of attribute value
- */
-enum attrib_type {
-	AT_STRING = 0,
-	AT_INTEGER,
-	AT_DECIMAL
-};
-
-/**
- * An attribute in XML node
- */
-struct attrib {
-	union {
-		char *s;
-		int i;
-		double d;
-	} v;
-	enum attrib_type type;
-	const char *test;
-};
-
-/** A function to validate and convert string attrib */
-typedef switch_bool_t (*conversion_function)(struct attrib *, const char *);
-
-/**
- * Defines rules for attribute validation
- */
-struct attrib_definition {
-	const char *name;
-	const char *default_value;
-	conversion_function fn;
-	int is_last;
-};
-
-/**
- * Assign value to attribute if boolean
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_bool(struct attrib *attrib, const char *value) {
-	attrib->type = AT_INTEGER;
-	attrib->test = "(true || false)";
-	if (!zstr(value) && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
-		attrib->v.i = switch_true(value);
-		return SWITCH_TRUE;
+	/* send message to Rayo session via event */
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		switch_channel_event_set_data(switch_core_session_get_channel(session), event);
+		switch_event_add_body(event, "%s", response);
+		switch_event_fire(&event);
 	}
-	return SWITCH_FALSE;
+
+	switch_safe_free(command);
+	switch_safe_free(response);
 }
-
-/**
- * Assign value to attribute if not negative
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_not_negative(struct attrib *attrib, const char *value) {
-	attrib->type = AT_INTEGER;
-	attrib->test = "(>= 0)";
-	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i >= 0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Assign value to attribute if positive
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_positive(struct attrib *attrib, const char *value) {
-	attrib->type = AT_INTEGER;
-	attrib->test = "(> 0)";
-	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i > 0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Assign value to attribute if positive or -1
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_positive_or_neg_one(struct attrib *attrib, const char *value) {
-	attrib->type = AT_INTEGER;
-	attrib->test = "(-1 || > 0)";
-	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i == -1 || attrib->v.i > 0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Assign value to attribute
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_any(struct attrib *attrib, const char *value) {
-	attrib->type = AT_STRING;
-	attrib->test = "(*)";
-	attrib->v.s = (char *)value;
-	return SWITCH_TRUE;
-}
-
-/**
- * Assign value to attribute if valid input mode (
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_input_mode(struct attrib *attrib, const char *value) {
-	attrib->type = AT_STRING;
-	attrib->test = "(any || dtmf || speech)";
-	attrib->v.s = (char *)value;
-	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value);
-}
-
-/**
- * Assign value to attribute if 0.0 <= x <= 1.0
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static switch_bool_t is_decimal_between_zero_and_one(struct attrib *attrib, const char *value) {
-	attrib->type = AT_DECIMAL;
-	attrib->test = "(>= 0.0 && <= 1.0)";
-	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.d = atof(value);
-		if (attrib->v.d >= 0.0 || attrib->v.d <= 1.0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Search node for attribute, returning default if not set
- * @param attrib_def the attribute validation definition
- * @param attrib the attribute to set
- * @param node XML node to search
- * @return SWITCH_TRUE if successful
- */
-static switch_bool_t get_attrib(const struct attrib_definition *attrib_def, struct attrib *attrib, switch_xml_t node)
-{
-	const char *value = switch_xml_attr(node, attrib_def->name);
-	value = zstr(value) ? attrib_def->default_value : value;
-	if (attrib_def->fn(attrib, value)) {
-		return SWITCH_TRUE;
-	}
-	attrib->type = AT_STRING;
-	attrib->v.s = (char *)value; /* remember bad value */
-	return SWITCH_FALSE;
-}
-
-/**
- * Attributes to get
- */
-struct attribs {
-	int size;
-	struct attrib attrib[];
-};
-
-/**
- * Get attribs from XML node
- * @param session the session getting the attribs
- * @param node the XML node to search
- * @param attrib_def the attributes to get
- * @param attribs struct to fill
- * @return SWITCH_TRUE if the attribs are valid
- */
-static switch_bool_t get_attribs(switch_core_session_t *session, switch_xml_t node, const struct attrib_definition *attrib_def, struct attribs *attribs)
-{
-	struct attrib *attrib = attribs->attrib;
-	switch_bool_t success = SWITCH_TRUE;
-	for (; success && !attrib_def->is_last; attrib_def++) {
-		success &= get_attrib(attrib_def, attrib, node);
-		if (!success) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", switch_xml_name(node), attrib_def->name, attrib->v.s, attrib->test);
-		}
-		attrib++;
-	}
-	return success;
-}
-
-#define LAST_ATTRIB { NULL, NULL, NULL, SWITCH_TRUE }
 
 /**
  * <prompt> component validation
  */
-static const struct attrib_definition prompt_attribs_def[] = {
-	{ "barge-in", "true", is_bool, SWITCH_FALSE },
+static const struct xml_attrib_definition prompt_attribs_def[] = {
+	{ "barge-in", "true", xml_attrib_is_bool, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -2058,19 +1667,19 @@ static const struct attrib_definition prompt_attribs_def[] = {
  */
 struct prompt_attribs {
 	int size;
-	struct attrib barge_in;
+	struct xml_attrib barge_in;
 };
 
 /**
  * <output> component validation
  */
-static const struct attrib_definition output_attribs_def[] = {
-	{ "start-offset", "0", is_not_negative, SWITCH_FALSE },
-	{ "start-paused", "false", is_bool, SWITCH_FALSE },
-	{ "repeat-interval", "0", is_not_negative, SWITCH_FALSE },
-	{ "repeat-times", "1", is_positive, SWITCH_FALSE },
-	{ "max-time", "-1", is_positive_or_neg_one, SWITCH_FALSE },
-	{ "renderer", "", is_any, SWITCH_FALSE },
+static const struct xml_attrib_definition output_attribs_def[] = {
+	{ "start-offset", "0", xml_attrib_is_not_negative, SWITCH_FALSE },
+	{ "start-paused", "false", xml_attrib_is_bool, SWITCH_FALSE },
+	{ "repeat-interval", "0", xml_attrib_is_not_negative, SWITCH_FALSE },
+	{ "repeat-times", "1", xml_attrib_is_positive, SWITCH_FALSE },
+	{ "max-time", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "renderer", "", xml_attrib_is_any, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -2079,26 +1688,39 @@ static const struct attrib_definition output_attribs_def[] = {
  */
 struct output_attribs {
 	int size;
-	struct attrib start_offset;
-	struct attrib start_paused;
-	struct attrib repeat_interval;
-	struct attrib repeat_times;
-	struct attrib max_time;
-	struct attrib renderer;
+	struct xml_attrib start_offset;
+	struct xml_attrib start_paused;
+	struct xml_attrib repeat_interval;
+	struct xml_attrib repeat_times;
+	struct xml_attrib max_time;
+	struct xml_attrib renderer;
 };
+
+/**
+ * Assign value to attribute if valid input mode (
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+static switch_bool_t is_input_mode(struct xml_attrib *attrib, const char *value) {
+	attrib->type = XAT_STRING;
+	attrib->test = "(any || dtmf || speech)";
+	attrib->v.s = (char *)value;
+	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value);
+}
 
 /**
  * <input> component validation
  */
-static const struct attrib_definition input_attribs_def[] = {
+static const struct xml_attrib_definition input_attribs_def[] = {
 	{ "mode", "any", is_input_mode, SWITCH_FALSE },
-	{ "terminator", "", is_any, SWITCH_FALSE },
-	{ "recognizer", "en-US", is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
-	{ "initial-timeout", "-1", is_positive_or_neg_one, SWITCH_FALSE },
-	{ "inter-digit-timeout", "-1", is_positive_or_neg_one, SWITCH_FALSE },
-	{ "sensitivity", "0.5", is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "min-confidence", "0", is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "max-silence", "-1", is_positive_or_neg_one, SWITCH_FALSE },
+	{ "terminator", "", xml_attrib_is_any, SWITCH_FALSE },
+	{ "recognizer", "en-US", xml_attrib_is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
+	{ "initial-timeout", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "inter-digit-timeout", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "sensitivity", "0.5", xml_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "min-confidence", "0", xml_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "max-silence", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -2107,14 +1729,14 @@ static const struct attrib_definition input_attribs_def[] = {
  */
 struct input_attribs {
 	int size;
-	struct attrib mode;
-	struct attrib terminator;
-	struct attrib recognizer;
-	struct attrib initial_timeout;
-	struct attrib inter_digit_timeout;
-	struct attrib sensitivity;
-	struct attrib min_confidence;
-	struct attrib max_silence;
+	struct xml_attrib mode;
+	struct xml_attrib terminator;
+	struct xml_attrib recognizer;
+	struct xml_attrib initial_timeout;
+	struct xml_attrib inter_digit_timeout;
+	struct xml_attrib sensitivity;
+	struct xml_attrib min_confidence;
+	struct xml_attrib max_silence;
 };
 
 #define RAYO_PLAY_USAGE ""
@@ -2191,7 +1813,7 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	/* validate output attributes */
 	if (output) {
 		memset(&o_attribs, 0, sizeof(o_attribs));
-		if (!get_attribs(session, output, output_attribs_def, (struct attribs *)&o_attribs)) {
+		if (!xml_attrib_parse(session, output, output_attribs_def, (struct xml_attribs *)&o_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 			return;
 		}
@@ -2200,7 +1822,7 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	/* validate input attributes */
 	if (input) {
 		memset(&i_attribs, 0, sizeof(i_attribs));
-		if (!get_attribs(session, input, input_attribs_def, (struct attribs *)&i_attribs)) {
+		if (!xml_attrib_parse(session, input, input_attribs_def, (struct xml_attribs *)&i_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		}
 	}
@@ -2208,7 +1830,7 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	/* validate prompt attributes */
 	if (prompt) {
 		memset(&p_attribs, 0, sizeof(p_attribs));
-		if (!get_attribs(session, prompt, prompt_attribs_def, (struct attribs *)&p_attribs)) {
+		if (!xml_attrib_parse(session, prompt, prompt_attribs_def, (struct xml_attribs *)&p_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		}
 	}
