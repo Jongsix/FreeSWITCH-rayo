@@ -430,10 +430,6 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
 	char *voice;
 	char *document;
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
-		"TTS open: samplerate=%i, interval=%i, samples=%i, channels=%i\n", 
-		handle->samplerate, handle->interval, handle->samples, handle->channels);
-
 	/* path is module:(optional)profile|voice|{param1=val1,param2=val2}TTS document */
 	if (argc != 3) {
 		return SWITCH_STATUS_FALSE;
@@ -481,8 +477,6 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 	}
 	rlen = *len * 2;
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read %i bytes\n", (int)*len);
-	
 	if (context->lead) {
 		memset(data, 0, *len);
 		context->lead--;
@@ -574,8 +568,8 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-static char *ssml_supported_formats[] = { "ssml" };
-static char *tts_supported_formats[] = { "tts" };
+static char *ssml_supported_formats[] = { "ssml", NULL };
+static char *tts_supported_formats[] = { "tts", NULL };
 
 SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 {
