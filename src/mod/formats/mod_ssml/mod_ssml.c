@@ -400,12 +400,17 @@ static switch_status_t ssml_file_read(switch_file_handle_t *handle, void *data, 
  * SSML playback state
  */
 struct tts_context {
-	/** true if TTS opened */
-	int opened;
 	/** handle to TTS engine */
 	switch_speech_handle_t sh;
 	/** TTS flags */
 	switch_speech_flag_t flags;
+	/** number of samples to read at a time */
+	int frame_size;
+	/** done flag */
+	int done;
+	/** frames of silence to send before/after sending TTS */
+	int lead_in_out;
+	int lead;
 };
 
 /**
@@ -425,6 +430,10 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
 	char *voice;
 	char *document;
 
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, 
+		"TTS open: samplerate=%i, interval=%i, samples=%i, channels=%i\n", 
+		handle->samplerate, handle->interval, handle->samples, handle->channels);
+
 	/* path is module:(optional)profile|voice|{param1=val1,param2=val2}TTS document */
 	if (argc != 3) {
 		return SWITCH_STATUS_FALSE;
@@ -435,9 +444,17 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
 
 	memset(context, 0, sizeof(*context));
 	context->flags = SWITCH_SPEECH_FLAG_NONE;
+	context->lead_in_out = 10;
+	context->lead = context->lead_in_out;
 	if ((status = switch_core_speech_open(&context->sh, module, voice, handle->samplerate, handle->interval, &context->flags, NULL)) == SWITCH_STATUS_SUCCESS) {
 		if ((status = switch_core_speech_feed_tts(&context->sh, document, &context->flags)) == SWITCH_STATUS_SUCCESS) {
-			context->opened = 1;
+			handle->channels = 1;
+			handle->samples = 0;
+			handle->format = 0;
+			handle->sections = 0;
+			handle->seekable = 0;
+			handle->speed = 0;
+			context->frame_size = handle->samplerate / 1000 * 20; /* TODO get actual interval */
 		} else {
 			switch_core_speech_close(&context->sh, &context->flags);
 		}
@@ -455,8 +472,33 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
  */
 static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, size_t *len)
 {
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	struct tts_context *context = (struct tts_context *)handle->private_info;
-	return switch_core_speech_read_tts(&context->sh, data, len, &context->flags);
+	switch_size_t rlen;
+
+	if (*len > context->frame_size) {
+		*len = context->frame_size;
+	}
+	rlen = *len * 2;
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read %i bytes\n", (int)*len);
+	
+	if (context->lead) {
+		memset(data, 0, *len);
+		context->lead--;
+	} else if (!context->done) {
+		context->flags = SWITCH_SPEECH_FLAG_BLOCKING;
+		if ((status = switch_core_speech_read_tts(&context->sh, data, &rlen, &context->flags))) {
+			context->done = 1;
+			context->lead = context->lead_in_out;
+		}
+	} else {
+		switch_core_speech_flush_tts(&context->sh);
+		memset(data, 0, *len);
+		status = SWITCH_STATUS_FALSE;
+	}
+	*len = rlen / 2;
+	return status;
 }
 
 /**
@@ -467,10 +509,7 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 static switch_status_t tts_file_close(switch_file_handle_t *handle)
 {
 	struct tts_context *context = (struct tts_context *)handle->private_info;
-	if (context->opened) {
-		switch_core_speech_close(&context->sh, &context->flags);
-		context->opened = 0;
-	}
+	switch_core_speech_close(&context->sh, &context->flags);
 	return SWITCH_STATUS_SUCCESS;
 }
 
