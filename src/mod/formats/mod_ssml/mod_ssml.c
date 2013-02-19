@@ -30,6 +30,7 @@
  *
  */
 #include <switch.h>
+#include <iksemel.h>
 
 SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_ssml_shutdown);
@@ -54,21 +55,58 @@ static struct {
 } globals;
 
 /**
+ * A TTS voice
+ */
+struct voice {
+	/** higher priority = more likely to pick */
+	int priority;
+	/** voice gender */
+	char *gender;
+	/** voice name */
+	char *name;
+	/** voice language */
+	char *language;
+	/** internal file prefix */
+	char *prefix;
+};
+
+#define TAG_LEN 32
+#define NAME_LEN 128
+#define LANGUAGE_LEN 6
+#define GENDER_LEN 8
+
+/**
+ * SSML voice state 
+ */
+struct ssml_voice_attribs {
+	/** tag name */
+	char tag_name[TAG_LEN];
+	/** requested name */
+	char name[NAME_LEN];
+	/** requested language */
+	char language[LANGUAGE_LEN];
+	/** requested gender */
+	char gender[GENDER_LEN];
+	/** voice to use */
+	struct voice *voice;
+	/** previous attribs */
+	struct ssml_voice_attribs *parent;
+};
+
+/**
  * SSML parser state
  */
 struct ssml_parser {
-	/** requested name */
-	const char *name;
-	/** requested language */
-	const char *language;
-	/** requested gender */
-	const char *gender;
+	/** current attribs */
+	struct ssml_voice_attribs *attribs;
 	/** files to play */
 	const char **files;
 	/** number of files */
 	int num_files;
 	/** max files to play */
 	int max_files;
+	/** memory pool to use */
+	switch_memory_pool_t *pool;
 };
 
 /**
@@ -86,61 +124,41 @@ struct ssml_context {
 };
 
 /**
- * A TTS voice
- */
-struct voice {
-	/** higher priority = more likely to pick */
-	int priority;
-	/** voice gender */
-	char *gender;
-	/** voice name */
-	char *name;
-	/** voice language */
-	char *language;
-	/** internal file prefix */
-	char *prefix;
-};
-
-/**
  * Score the voice on how close it is to desired language, name, and gender
  * @param voice the voice to score
- * @param language the desired language
- * @param name the desired name
- * @param gender the desired gender
+ * @param attribs the desired voice attributes
  * @return the score
  */
-static int score_voice(struct voice *voice, const char *language, const char *name, const char *gender)
+static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs)
 {
 	/* language > gender,name > priority */
 	int score = voice->priority;
-	if (!zstr(gender) && !strcmp(gender, voice->gender)) {
+	if (!zstr_buf(attribs->gender) && !strcmp(attribs->gender, voice->gender)) {
 		score += VOICE_GENDER_PRIORITY;
 	}
-	if (!zstr(name) && !strcmp(name, voice->name)) {
+	if (!zstr_buf(attribs->name) && !strcmp(attribs->name, voice->name)) {
 		score += VOICE_NAME_PRIORITY;
 	}
-	if (!zstr(language) && !strcmp(language, voice->language)) {
+	if (!zstr_buf(attribs->language) && !strcmp(attribs->language, voice->language)) {
 		score += VOICE_LANG_PRIORITY;
 	}
 	return score;
 }
 
 /**
- * Search for best voice based on name, language, gender
- * @param language voice language - this is highest priority
- * @param name voice name - this is low priority
- * @param gender voice gender - this is low priority
+ * Search for best voice based on attributes
+ * @param attribs the desired voice attributes
  * @return the voice or NULL
  */
-static struct voice *find_voice(const char *language, const char *name, const char *gender)
+static struct voice *find_voice(struct ssml_voice_attribs *attribs)
 {
 	switch_hash_index_t *hi = NULL;
-	struct voice *voice = (struct voice *)switch_core_hash_find(globals.voice_map, name);
+	struct voice *voice = (struct voice *)switch_core_hash_find(globals.voice_map, attribs->name);
 	char *lang_name_gender = NULL;
 	int best_score = 0;
 
 	/* check cache */
-	lang_name_gender = switch_mprintf("%s-%s-%s", language, name, gender);
+	lang_name_gender = switch_mprintf("%s-%s-%s", attribs->language, attribs->name, attribs->gender);
 	voice = (struct voice *)switch_core_hash_find(globals.voice_cache, lang_name_gender);
 	if (voice) {
 		/* that was easy! */
@@ -155,7 +173,7 @@ static struct voice *find_voice(const char *language, const char *name, const ch
 		int candidate_score = 0;
 		switch_hash_this(hi, &key, NULL, &val);
 		candidate = (struct voice *)val;
-		candidate_score = score_voice(candidate, language, name, gender);
+		candidate_score = score_voice(candidate, attribs);
 		if (candidate_score > best_score) {
 			voice = candidate;
 			best_score = candidate_score;
@@ -167,110 +185,9 @@ static struct voice *find_voice(const char *language, const char *name, const ch
 		switch_core_hash_insert(globals.voice_cache, lang_name_gender, voice);
 	}
 
+	switch_safe_free(lang_name_gender);
+
 	return voice;
-}
-
-/**
- * Process <say-as> or <speak>
- * @param pool memory pool to use
- * @param say_as the XML node
- * @param voice default voice
- * @return the file
- */
-static const char *parse_say_as_element(switch_memory_pool_t *pool, switch_xml_t say_as, const char *voice)
-{
-	const char *phrase_macro = (const char *)switch_core_hash_find(globals.interpret_as_map, switch_xml_attr_soft(say_as, "interpret-as"));
-	const char *body = switch_xml_txt(say_as);
-	if (!zstr(body)) {
-		return switch_core_sprintf(pool, "%s%s", zstr(phrase_macro) ? voice : phrase_macro, body);
-	}
-	return NULL;
-}
-
-/**
- * Process <audio>
- * @param pool memory pool to use
- * @param audio the XML node
- * @return the file
- */
-static const char *parse_audio_element(switch_memory_pool_t *pool, switch_xml_t audio)
-{
-	return switch_xml_attr_soft(audio, "src");
-}
-
-/**
- * Get list of audio files / TTS phrases from <voice> or <speak>
- * @param pool memory pool to use
- * @param xml the XML node to parse
- * @param ssml_parser parser state
- * @return number of files
- */
-static int parse_voice_element(switch_memory_pool_t *pool, switch_xml_t xml, struct ssml_parser *parser)
-{
-	switch_xml_t child;
-	struct voice *voice = NULL;
-	const char *xml_name = switch_xml_name(xml);
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Parsing <%s>\n", xml_name);
-
-	if (!strcmp("speak", xml_name)) {
-		/* is the <speak> element- find default voice */
-		voice = find_voice(switch_xml_attr_soft(xml, "xml:lang"), "", "");
-	} else {
-		/* a <voice> element */
-		const char *gender = switch_xml_attr_soft(xml, "gender");
-		const char *name = switch_xml_attr_soft(xml, "name");
-		const char *language = switch_xml_attr_soft(xml, "xml:lang");
-		if (!zstr(gender)) {
-			parser->gender = gender;
-		}
-		if (!zstr(name)) {
-			parser->name = name;
-		}
-		if (!zstr(language)) {
-			parser->language = language;
-		}
-		voice = find_voice(language, name, gender);
-	}
-
-	if (voice) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using voice %s, %s, %s, %s, %i\n", voice->language, voice->gender, voice->name, voice->prefix, voice->priority);
-	}
-
-	/* check body for text */
-	if (!xml->child) {
-		if (voice) {
-			const char *file = parse_say_as_element(pool, xml, voice->prefix);
-			if (!zstr(file)) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding file: %s\n", file);
-				parser->files[parser->num_files++] = file;
-			}
-		}
-	}
-
-	/* look for <audio>, <say-as> elements */
-	for (child = xml->child; child && parser->num_files < parser->max_files; child = child->next) {
-		const char *name = switch_xml_name(child);
-		if (!strcmp("voice", name)) {
-			struct ssml_parser new_parser = *parser;
-			parser->num_files += parse_voice_element(pool, child, &new_parser);
-		} else {
-			const char *file = NULL;
-			if (!strcmp("audio", name)) {
-				/* Audio URI */
-				file = parse_audio_element(pool, child);
-			} else if (!strcmp("say-as", name)) {
-				if (voice) {
-					file = parse_say_as_element(pool, child, voice->prefix);
-				}
-			}
-			if (!zstr(file)) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding file: %s\n", file);
-				parser->files[parser->num_files++] = file;
-			}
-		}
-	}
-	return parser->num_files;
 }
 
 /**
@@ -322,6 +239,198 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 }
 
 /**
+ * Process anything else
+ */
+static void process_default_open(struct ssml_parser *parsed_data, char *name, char **atts)
+{
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	
+	/* only allow language change in <speak>, <p>, and <s> */
+	if (!strcmp("speak", name) || !strcmp("p", name) || !strcmp("s", name)) {
+		if (atts) {
+			int i = 0;
+			while (atts[i]) {
+				if (!strcmp("xml:lang", atts[i])) {
+					if (!zstr(atts[i + 1])) {
+					strncpy(attribs->language, atts[i + 1], LANGUAGE_LEN);
+					attribs->language[LANGUAGE_LEN - 1] = '\0';
+					}
+				}
+				i += 2;
+			}
+		}
+	}
+	attribs->voice = find_voice(attribs);
+}
+
+/**
+ * Process <voice>
+ */
+static void process_voice_open(struct ssml_parser *parsed_data, char **atts)
+{
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("xml:lang", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(attribs->language, atts[i + 1], LANGUAGE_LEN);
+					attribs->language[LANGUAGE_LEN - 1] = '\0';
+				}
+			} else if (!strcmp("name", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(attribs->name, atts[i + 1], NAME_LEN);
+					attribs->name[NAME_LEN - 1] = '\0';
+				}
+			} else if (!strcmp("gender", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(attribs->gender, atts[i + 1], GENDER_LEN);
+					attribs->gender[GENDER_LEN - 1] = '\0';
+				}
+			}
+			i += 2;
+		}
+	}
+	attribs->voice = find_voice(attribs);
+}
+
+/**
+ * Process <say-as>
+ */
+static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
+{
+	struct voice *phrase_macro = NULL;
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("interpret-as", atts[i])) {
+				char *interpret_as = atts[i + 1];
+				if (!zstr(interpret_as)) {
+					phrase_macro = (struct voice *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
+				}
+				break;
+			}
+			i += 2;
+		}
+	}
+	if (phrase_macro) {
+		attribs->voice = phrase_macro;
+	} else {
+		attribs->voice = find_voice(attribs);
+	}
+}
+
+/**
+ * Process <audio>- this is a URL to play
+ */
+static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
+{
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("src", atts[i])) {
+				char *src = atts[i + 1];
+				if (!zstr(src) && parsed_data->num_files < parsed_data->max_files) {
+					/* get the URI */
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding audio: %s\n", src);
+					parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, src);
+				}
+				return;
+			}
+			i += 2;
+		}
+	}
+}
+
+/**
+ * Process a tag
+ */
+static int tag_hook(void *user_data, char *name, char **atts, int type)
+{
+	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
+	switch (type) {
+		case IKS_OPEN: {
+			struct ssml_voice_attribs *new_attribs = malloc(sizeof *new_attribs);
+			struct ssml_voice_attribs *parent = parsed_data->attribs;
+			if (parent) {
+				/* inherit parent attribs */
+				*new_attribs = *parent;
+				new_attribs->parent = parent;
+				new_attribs->voice = NULL;
+			} else {
+				new_attribs->name[0] = '\0';
+				new_attribs->language[0] = '\0'; 
+				new_attribs->gender[0] = '\0'; 
+				new_attribs->parent = NULL;
+				new_attribs->voice = NULL;
+			}
+			strncpy(new_attribs->tag_name, name, TAG_LEN);
+			new_attribs->tag_name[TAG_LEN - 1] = '\0';
+			parsed_data->attribs = new_attribs;
+			
+			if (!strcmp("audio", name)) {
+				process_audio_open(parsed_data, atts);
+			} else if (!strcmp("voice", name)) {
+				process_voice_open(parsed_data, atts);
+			} else if (!strcmp("say-as", name)) {
+				process_say_as_open(parsed_data, atts);
+			} else {
+				process_default_open(parsed_data, name, atts);
+			}
+			break;
+		}
+		case IKS_CLOSE: {
+			if (parsed_data->attribs) {
+				struct ssml_voice_attribs *parent = parsed_data->attribs->parent;
+				free(parsed_data->attribs);
+				parsed_data->attribs = parent;
+			}
+			break;
+		}
+		case IKS_SINGLE:
+			break;
+	}
+	return IKS_OK;
+}
+
+/**
+ * Process cdata- this is the text to speak
+ */
+static int cdata_hook(void *user_data, char *data, size_t len)
+{
+	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	if (len && attribs && attribs->voice &&
+			parsed_data->num_files < parsed_data->max_files && 
+			(!strcmp("speak", attribs->tag_name) ||
+			!strcmp("voice", attribs->tag_name) ||
+			!strcmp("say-as", attribs->tag_name) ||
+			!strcmp("s", attribs->tag_name) ||
+			!strcmp("p", attribs->tag_name))) {
+		/* is CDATA empty? */
+		int i = 0;
+		int empty = 1;
+		for (i = 0; i < len && empty; i++) {
+			empty &= isspace(data[i]);
+		}
+		if (!empty) {
+			/* get the text */
+			int prefix_len = strlen(attribs->voice->prefix);
+			char *file = switch_core_alloc(parsed_data->pool, prefix_len + len + 1);
+			file[prefix_len + len] = '\0';
+			strncpy(file, attribs->voice->prefix, prefix_len);
+			strncpy(file + prefix_len, data, len);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding tts: %s\n", file);
+			parsed_data->files[parsed_data->num_files++] = file;
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skipping empty tts\n");
+		}
+	}
+	return IKS_OK;
+}
+
+/**
  * Transforms SSML into file_string format and opens file_string.
  * @param handle
  * @param path the inline SSML
@@ -337,22 +446,21 @@ static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Open: %s\n", path);
 
 	if (ssml) {
-		struct ssml_parser *parser = switch_core_alloc(handle->memory_pool, sizeof(*parser));
-		parser->name = "";
-		parser->language = "";
-		parser->gender = "";
-		parser->files = switch_core_alloc(handle->memory_pool, sizeof(const char *) * MAX_VOICE_FILES);
-		parser->max_files = MAX_VOICE_FILES;
-		parser->num_files = 0;
-
-		/* parse list of audio / TTS requests */
-		if (parse_voice_element(handle->memory_pool, ssml, parser)) {
-			context->files = parser->files;
-			context->num_files = parser->num_files;
+		struct ssml_parser *parsed_data = switch_core_alloc(handle->memory_pool, sizeof(*parsed_data));
+		iksparser *parser = iks_sax_new(parsed_data, tag_hook, cdata_hook);
+		parsed_data->attribs = NULL;
+		parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(const char *) * MAX_VOICE_FILES);
+		parsed_data->max_files = MAX_VOICE_FILES;
+		parsed_data->num_files = 0;
+		parsed_data->pool = handle->memory_pool;
+		if (iks_parse(parser, path, 0, 1) == IKS_OK && parsed_data->num_files) {
+			context->files = parsed_data->files;
+			context->num_files = parsed_data->num_files;
 			context->index = -1;
 			handle->private_info = context;
 			status = next_file(handle);
 		}
+		iks_parser_delete(parser);
 	}
 	return status;
 }
