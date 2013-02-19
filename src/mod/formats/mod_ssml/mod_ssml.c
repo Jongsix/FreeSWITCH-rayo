@@ -530,7 +530,7 @@ struct tts_context {
 static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *path)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
-	struct tts_context *context = switch_core_alloc(handle->memory_pool, sizeof(*handle));
+	struct tts_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
 	char *arg_string = switch_core_strdup(handle->memory_pool, path);
 	char *args[3] = { 0 };
 	int argc = switch_separate_string(arg_string, '|', args, (sizeof(args) / sizeof(args[0])));
