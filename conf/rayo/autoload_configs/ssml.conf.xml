@@ -1,0 +1,16 @@
+<configuration name="ssml.conf" description="SSML parser config">
+
+	<!-- voices in order of preference -->
+	<voices>
+		<voice name="kal" language="en-US" gender="male" prefix="tts://flite|kal|"/>
+		<voice name="slt" language="en-US" gender="female" prefix="tts://flite|slt|"/>
+		<voice name="rms" language="en-US" gender="male" prefix="tts://flite|rms|"/>
+		<voice name="awb" language="en-US" gender="male" prefix="tts://flite|awb|"/>
+	</voices>
+
+	<!-- map interpret-as to phrase macros -->
+	<interpret-as>
+		<!--map name="cardinal" prefix="phrase:number:"/-->
+	</interpret-as>
+
+</configuration>
