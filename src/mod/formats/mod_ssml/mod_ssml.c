@@ -50,9 +50,23 @@ static struct {
 	switch_hash_t *voice_cache;
 	/** Mapping of voice names */
 	switch_hash_t *voice_map;
-	/** Mapping of interpret-as value to phrase:macro */
+	/** Mapping of interpret-as value to macro */
 	switch_hash_t *interpret_as_map;
 } globals;
+
+/**
+ * A say macro
+ */
+struct macro {
+	/** interpret-as name (cardinal...) */
+	char *name;
+	/** language (en-US, en-UK, ...) */
+	char *language;
+	/** type (number, items, persons, messages...) */
+	char *type;
+	/** method (pronounced, counted, iterated...) */
+	char *method;
+};
 
 /**
  * A TTS voice
@@ -62,7 +76,7 @@ struct voice {
 	int priority;
 	/** voice gender */
 	char *gender;
-	/** voice name */
+	/** voice name / macro */
 	char *name;
 	/** voice language */
 	char *language;
@@ -89,6 +103,8 @@ struct ssml_voice_attribs {
 	char gender[GENDER_LEN];
 	/** voice to use */
 	struct voice *voice;
+	/** macro to use */
+	struct macro *macro;
 	/** previous attribs */
 	struct ssml_voice_attribs *parent;
 };
@@ -299,7 +315,6 @@ static void process_voice_open(struct ssml_parser *parsed_data, char **atts)
  */
 static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
 {
-	struct voice *phrase_macro = NULL;
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
 	if (atts) {
 		int i = 0;
@@ -307,18 +322,15 @@ static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
 			if (!strcmp("interpret-as", atts[i])) {
 				char *interpret_as = atts[i + 1];
 				if (!zstr(interpret_as)) {
-					phrase_macro = (struct voice *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "interpret-as: %s\n", atts[i + 1]);
+					attribs->macro = (struct macro *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
 				}
 				break;
 			}
 			i += 2;
 		}
 	}
-	if (phrase_macro) {
-		attribs->voice = phrase_macro;
-	} else {
-		attribs->voice = find_voice(attribs);
-	}
+	attribs->voice = find_voice(attribs);
 }
 
 /**
@@ -333,7 +345,7 @@ static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
 				char *src = atts[i + 1];
 				if (!zstr(src) && parsed_data->num_files < parsed_data->max_files) {
 					/* get the URI */
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding audio: %s\n", src);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <audio>: %s\n", src);
 					parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, src);
 				}
 				return;
@@ -357,14 +369,14 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 				/* inherit parent attribs */
 				*new_attribs = *parent;
 				new_attribs->parent = parent;
-				new_attribs->voice = NULL;
 			} else {
 				new_attribs->name[0] = '\0';
 				new_attribs->language[0] = '\0'; 
 				new_attribs->gender[0] = '\0'; 
 				new_attribs->parent = NULL;
-				new_attribs->voice = NULL;
 			}
+			new_attribs->voice = NULL;
+			new_attribs->macro = NULL;
 			strncpy(new_attribs->tag_name, name, TAG_LEN);
 			new_attribs->tag_name[TAG_LEN - 1] = '\0';
 			parsed_data->attribs = new_attribs;
@@ -395,6 +407,59 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 }
 
 /**
+ * Try to get file(s) from say module
+ * @param parsed_data 
+ * @param to_say 
+ * @return 1 if successful
+ */
+static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
+{
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	char *file_string = NULL;
+	char language[3];
+	char *gender = NULL;
+
+	/* convert ISO language to FS language */
+	if (!zstr_buf(attribs->language)) {
+		strncpy(language, attribs->language, 3);
+		language[2] = '\0';
+	}
+
+	/* convert SSML gender to FS gender */
+	if (!zstr_buf(attribs->gender)) {
+		if (!strcmp("male", attribs->gender)) {
+			gender = "masculine";
+		} else if (!strcmp("female", attribs->gender)) {
+			gender = "feminine";
+		} else if (!strcmp("neutral", attribs->gender)) {
+			gender = "neuter";
+		}
+	}
+
+	/* get file_string from Say module */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language, to_say, attribs->macro->type, attribs->macro->method, gender);
+	if (switch_ivr_say_string(NULL, language, NULL, to_say, NULL, attribs->macro->type, attribs->macro->method, gender, &file_string) != SWITCH_STATUS_SUCCESS) {
+		switch_safe_free(file_string);
+		return 0;
+	}
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding macro: %s\n", file_string);
+	switch_safe_free(file_string);
+	return 1;
+}
+
+/**
+ * Get TTS file for voice
+ */
+static int get_file_from_voice(struct ssml_parser *parsed_data, char *to_say)
+{
+	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", attribs->voice->prefix, to_say);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: %s\n", attribs->tag_name, file);
+	parsed_data->files[parsed_data->num_files++] = file;
+	return 1;
+}
+
+/**
  * Process cdata- this is the text to speak
  */
 static int cdata_hook(void *user_data, char *data, size_t len)
@@ -408,24 +473,29 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 			!strcmp("say-as", attribs->tag_name) ||
 			!strcmp("s", attribs->tag_name) ||
 			!strcmp("p", attribs->tag_name))) {
-		/* is CDATA empty? */
+		
 		int i = 0;
 		int empty = 1;
+		char *to_say;
+
+		/* is CDATA empty? */
 		for (i = 0; i < len && empty; i++) {
 			empty &= isspace(data[i]);
 		}
-		if (!empty) {
-			/* get the text */
-			int prefix_len = strlen(attribs->voice->prefix);
-			char *file = switch_core_alloc(parsed_data->pool, prefix_len + len + 1);
-			file[prefix_len + len] = '\0';
-			strncpy(file, attribs->voice->prefix, prefix_len);
-			strncpy(file + prefix_len, data, len);
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding tts: %s\n", file);
-			parsed_data->files[parsed_data->num_files++] = file;
-		} else {
+		if (empty) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skipping empty tts\n");
+			return IKS_OK;
 		}
+
+		/* try macro */
+		to_say = malloc(len + 1);
+		strncpy(to_say, data, len);
+		to_say[len] = '\0';
+		if (!attribs->macro || !get_file_from_macro(parsed_data, to_say)) {
+			/* use voice instead */
+			get_file_from_voice(parsed_data, to_say);
+		}
+		free(to_say);
 	}
 	return IKS_OK;
 }
@@ -505,7 +575,7 @@ static switch_status_t ssml_file_read(switch_file_handle_t *handle, void *data, 
 }
 
 /**
- * SSML playback state
+ * TTS playback state
  */
 struct tts_context {
 	/** handle to TTS engine */
@@ -616,6 +686,14 @@ static switch_status_t tts_file_close(switch_file_handle_t *handle)
 }
 
 /**
+ * Phrase playback state
+ */
+struct phrase_context {
+	/** done flag */
+	int done;
+};
+
+/**
  * Configure module
  * @param pool memory pool to use
  * @return SWITCH_STATUS_SUCCESS if module is configured
@@ -655,17 +733,22 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 		}
 	}
 
-	/* get interpret-as mappings */
+	/* get macros */
 	{
-		switch_xml_t mappings = switch_xml_child(cfg, "interpret-as");
-		if (mappings) {
-			switch_xml_t map;
-			for (map = switch_xml_child(mappings, "map"); map; map = map->next) {
-				const char *var = switch_xml_attr_soft(map, "name");
-				const char *val = switch_xml_attr_soft(map, "prefix");
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "interpret-as map: %s = %s\n", var, val);
-				if (!zstr(var)) {
-					switch_core_hash_insert(globals.interpret_as_map, var, switch_core_strdup(pool, val));
+		switch_xml_t macros = switch_xml_child(cfg, "macros");
+		if (macros) {
+			switch_xml_t macro;
+			for (macro = switch_xml_child(macros, "macro"); macro; macro = macro->next) {
+				const char *name = switch_xml_attr_soft(macro, "name");
+				const char *method = switch_xml_attr_soft(macro, "method");
+				const char *type = switch_xml_attr_soft(macro, "type");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "macro: %s = (%s, %s) \n", name, method, type);
+				if (!zstr(name) && !zstr(type)) {
+					struct macro *m = (struct macro *)switch_core_alloc(pool, sizeof(*m));
+					m->name = switch_core_strdup(pool, name);
+					m->method = switch_core_strdup(pool, method);
+					m->type = switch_core_strdup(pool, type);
+					switch_core_hash_insert(globals.interpret_as_map, name, m);
 				}
 			}
 		}
