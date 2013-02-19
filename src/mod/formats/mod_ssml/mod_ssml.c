@@ -373,23 +373,6 @@ static switch_status_t ssml_file_close(switch_file_handle_t *handle)
 }
 
 /**
- * Seek SSML document.
- * @param handle
- * @param cur_sample
- * @param samples
- * @param whence
- * @return
- */
-static switch_status_t ssml_file_seek(switch_file_handle_t *handle, unsigned int *cur_sample, int64_t samples, int whence)
-{
-	struct ssml_context *context = (struct ssml_context *)handle->private_info;
-	if (!handle->seekable) {
-		return SWITCH_STATUS_NOTIMPL;
-	}
-	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
-}
-
-/**
  * Read from SSML document
  * @param handle
  * @param data
@@ -411,6 +394,84 @@ static switch_status_t ssml_file_read(switch_file_handle_t *handle, void *data, 
 		status = switch_core_file_read(&context->fh, data, len);
 	}
 	return status;
+}
+
+/**
+ * SSML playback state
+ */
+struct tts_context {
+	/** true if TTS opened */
+	int opened;
+	/** handle to TTS engine */
+	switch_speech_handle_t sh;
+	/** TTS flags */
+	switch_speech_flag_t flags;
+};
+
+/**
+ * Do TTS as file format
+ * @param handle
+ * @param path the inline SSML
+ * @return SWITCH_STATUS_SUCCESS if opened
+ */
+static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *path)
+{
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	struct tts_context *context = switch_core_alloc(handle->memory_pool, sizeof(*handle));
+	char *arg_string = switch_core_strdup(handle->memory_pool, path);
+	char *args[3] = { 0 };
+	int argc = switch_separate_string(arg_string, '|', args, (sizeof(args) / sizeof(args[0])));
+	char *module;
+	char *voice;
+	char *document;
+
+	/* path is module:(optional)profile|voice|{param1=val1,param2=val2}TTS document */
+	if (argc != 3) {
+		return SWITCH_STATUS_FALSE;
+	}
+	module = args[0];
+	voice = args[1];
+	document = args[2];
+
+	memset(context, 0, sizeof(*context));
+	context->flags = SWITCH_SPEECH_FLAG_NONE;
+	if ((status = switch_core_speech_open(&context->sh, module, voice, handle->samplerate, handle->interval, &context->flags, NULL)) == SWITCH_STATUS_SUCCESS) {
+		if ((status = switch_core_speech_feed_tts(&context->sh, document, &context->flags)) == SWITCH_STATUS_SUCCESS) {
+			context->opened = 1;
+		} else {
+			switch_core_speech_close(&context->sh, &context->flags);
+		}
+	}
+	handle->private_info = context;
+	return status;
+}
+
+/**
+ * Read audio from TTS engine
+ * @param handle
+ * @param data
+ * @param len
+ * @return
+ */
+static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, size_t *len)
+{
+	struct tts_context *context = (struct tts_context *)handle->private_info;
+	return switch_core_speech_read_tts(&context->sh, data, len, &context->flags);
+}
+
+/**
+ * Close TTS engine
+ * @param handle
+ * @return SWITCH_STATUS_SUCCESS
+ */
+static switch_status_t tts_file_close(switch_file_handle_t *handle)
+{
+	struct tts_context *context = (struct tts_context *)handle->private_info;
+	if (context->opened) {
+		switch_core_speech_close(&context->sh, &context->flags);
+		context->opened = 0;
+	}
+	return SWITCH_STATUS_SUCCESS;
 }
 
 /**
@@ -474,7 +535,8 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-static char *supported_formats[] = { "ssml" };
+static char *ssml_supported_formats[] = { "ssml" };
+static char *tts_supported_formats[] = { "tts" };
 
 SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 {
@@ -483,11 +545,17 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = modname;
-	file_interface->extens = supported_formats;
+	file_interface->extens = ssml_supported_formats;
 	file_interface->file_open = ssml_file_open;
 	file_interface->file_close = ssml_file_close;
 	file_interface->file_read = ssml_file_read;
-	file_interface->file_seek = ssml_file_seek;
+
+	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
+	file_interface->interface_name = modname;
+	file_interface->extens = tts_supported_formats;
+	file_interface->file_open = tts_file_open;
+	file_interface->file_close = tts_file_close;
+	file_interface->file_read = tts_file_read;
 
 	switch_core_hash_init(&globals.voice_cache, pool);
 	switch_core_hash_init(&globals.voice_map, pool);
