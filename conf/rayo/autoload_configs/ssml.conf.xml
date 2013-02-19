@@ -8,9 +8,9 @@
 		<voice name="awb" language="en-US" gender="male" prefix="tts://flite|awb|"/>
 	</voices>
 
-	<!-- map interpret-as to phrase macros -->
-	<interpret-as>
-		<!--map name="cardinal" prefix="phrase:number:"/-->
-	</interpret-as>
+	<!-- map interpret-as to say macros -->
+	<macros>
+		<macro name="cardinal" method="" type="number"/>
+	</macros>
 
 </configuration>
