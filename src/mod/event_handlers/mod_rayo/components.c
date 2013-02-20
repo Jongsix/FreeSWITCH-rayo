@@ -31,7 +31,9 @@
 
 #include "mod_rayo.h"
 #include "iks_helpers.h"
+#include "srgs.h"
 
+#define MAX_DTMF 1024
 
 /**
  * Create a UUID
@@ -117,6 +119,7 @@ static void send_component_ref(switch_core_session_t *session, iks *iq, const ch
  * @param jid the component JID
  * @param reason the completion reason
  * @param reason_namespace the completion reason namespace
+ * @param reason_detail optional detail
  */
 static void send_component_complete(switch_core_session_t *session, const char *jid, const char *reason, const char *reason_namespace)
 {
@@ -138,6 +141,34 @@ static void send_component_complete(switch_core_session_t *session, const char *
 	switch_safe_free(response);
 }
 
+/**
+ * Send DTMF match to client
+ * @param session the sesion that created the component_ref
+ * @param jid the component JID
+ * @param digits the matching digits 
+ */
+static void send_input_component_dtmf_match(switch_core_session_t *session, const char *jid, const char *digits)
+{
+	switch_event_t *event;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	char *response = NULL;
+	
+	response = switch_mprintf(
+		"<presence from='%s' to='%s' type='unavailable'>"
+		"<complete xmlns='urn:xmpp:rayo:ext:1'><match xmlns='urn:xmpp:rayo:input:complete:1'>"
+		"<result xmlns='http://www.w3c.org/2000/11/nlsml' xmlns:xf='http://www.w3.org/2000/xforms'>"
+		"<input><input mode='dtmf' confidence='100'>%s</input></input></match></complete></presence>",
+		jid,
+		switch_channel_get_variable(channel, "rayo_dcp_jid"),
+		digits);
+
+	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		switch_channel_event_set_data(channel, event);
+		switch_event_add_body(event, "%s", response);
+		switch_event_fire(&event);
+	}
+	switch_safe_free(response);
+}
 
 /**
  * Assign value to attribute if valid input mode (
@@ -149,7 +180,9 @@ static int is_input_mode(struct iks_attrib *attrib, const char *value) {
 	attrib->type = IAT_STRING;
 	attrib->test = "(any || dtmf || speech)";
 	attrib->v.s = (char *)value;
-	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value);
+	/* for now, only allow dtmf;
+	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value); */
+	return !strcmp("dtmf", value);
 }
 
 /**
@@ -182,7 +215,105 @@ struct input_attribs {
 	struct iks_attrib max_silence;
 };
 
-#define INPUT_FINISHED "success", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_INITIAL_TIMEOUT "initial-timeout", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_MAX_SILENCE "max-silence", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_MIN_CONFIDENCE "min-confidence", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_NOMATCH "nomatch", "urn:xmpp:rayo:input:complete:1"
+
+#define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
+
+/**
+ * Current digit collection state
+ */
+struct input_handler {
+	int num_digits;
+	char digits[MAX_DTMF * 2 + 1];
+	struct srgs_parser *parser;
+	struct rayo_call *call;
+};
+
+/**
+ * Process hangup
+ */
+static switch_status_t input_component_on_hangup(switch_core_session_t *session)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (handler) {
+		switch_channel_set_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR, NULL);
+		if (handler->parser) {
+			srgs_destroy(handler->parser);
+			handler->parser = NULL;
+		}
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Process DTMF press
+ */
+static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction)
+{
+	/* TODO digit timeouts */
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (handler) {
+		enum match_type match;
+		handler->digits[handler->num_digits * 2] = dtmf->digit;
+		handler->digits[handler->num_digits * 2 + 1] = ' ';
+		handler->num_digits++;
+		handler->digits[handler->num_digits * 2] = '\0';
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
+
+		/* check for match */
+		match = srgs_match(handler->parser, handler->digits);
+		switch (match) {
+			case MT_NOT_ENOUGH_INPUT: {
+				/* don't care */
+				break;
+			}
+			case MT_NO_MATCH: {
+				/* notify of no-match and remove input handler */
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
+				switch_mutex_lock(handler->call->mutex);
+				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+
+				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				srgs_destroy(handler->parser);
+				handler->parser = NULL;
+				handler->call->input_jid = "";
+				switch_mutex_unlock(handler->call->mutex);
+				break;
+			}	
+			case MT_MATCH: {
+				/* notify of match and remove input handler */
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GOT MATCH = %s\n", handler->digits);
+				switch_mutex_lock(handler->call->mutex);
+				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
+
+				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				srgs_destroy(handler->parser);
+				handler->parser = NULL;
+				handler->call->input_jid = "";
+				switch_mutex_unlock(handler->call->mutex);
+				break;
+			}
+		}
+	}
+    return SWITCH_STATUS_SUCCESS;
+}
+
+static const switch_state_handler_table_t input_component_state_handlers = {
+    /*.on_init */ NULL,
+    /*.on_routing */ NULL,
+    /*.on_execute */ NULL,
+    /*.on_hangup */ input_component_on_hangup,
+    /*.on_exchange_media */ NULL,
+    /*.on_soft_execute */ NULL,
+    /*.on_consume_media */ NULL,
+    /*.on_hibernate */ NULL
+};
 
 /**
  * Start execution of input component
@@ -192,9 +323,14 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	struct input_attribs i_attribs;
 	char *ref = NULL;
 	iks *input = iks_child(iq);
-	
+	iks *grammar = NULL;
+	char *content_type = NULL;
+	char *srgs = NULL;
+	struct srgs_parser *parser = NULL;
+	struct input_handler *handler = NULL;
+
 	switch_mutex_lock(call->mutex);
-	
+
 	/* already have input component? */
 	if (!zstr(call->input_jid)) {
 		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
@@ -205,19 +341,74 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	/* validate input attributes */
 	memset(&i_attribs, 0, sizeof(i_attribs));
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
-	
-	/* acknowledge command */
+
+	/* missing grammar */
+	grammar = iks_find(input, "grammar");
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		return;
+	}
+
+	/* only support srgs */
+	content_type = iks_find_attrib(grammar, "content-type");
+	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		return;
+	}
+
+	/* missing grammar body */
+	srgs = iks_find_cdata(input, "grammar");
+	if (zstr(srgs)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		return;
+	}
+
+	/* parse the grammar */
+	parser = srgs_parser_new();
+	if (!srgs_parse(parser, srgs)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		srgs_destroy(parser);
+		return;
+	}
+
+	/* create input handler */
+	handler = (struct input_handler *)switch_channel_get_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (!handler) {
+		handler = switch_core_session_alloc(session, sizeof(*handler));
+		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
+	} else if (handler->parser) {
+		srgs_destroy(handler->parser);
+	}
+	handler->parser = parser;
+	handler->num_digits = 0;
+	handler->digits[0] = '\0';
+	handler->call = call;
+
+	/* create JID */
 	ref = create_uuid_str(session);
 	call->input_jid = create_call_component_jid(session, call, ref);
+	
+	/* install input callbacks */
+	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
+	switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
+
+	/* all good, acknowledge command */
 	send_component_ref(session, iq, ref);
-	
+
 	switch_mutex_unlock(call->mutex);
-	
-	/* TODO setup input */
 }
 
 /**
@@ -233,7 +424,11 @@ static const struct iks_attrib_definition output_attribs_def[] = {
 	LAST_ATTRIB
 };
 
-#define OUTPUT_FINISHED "success", "urn:xmpp:rayo:output:complete:1"
+
+/* adhearsion uses incorrect reason for finish... this is a temporary fix */
+#define OUTPUT_FINISH_AHN "success", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_FINISH "finish", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_MAX_TIME "max-time", "urn:xmpp:rayo:output:complete:1"
 
 /**
  * <output> component attributes
@@ -323,7 +518,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 
 	/* done */
 	switch_mutex_lock(call->mutex);
-	send_component_complete(session, call->output_jid, OUTPUT_FINISHED);
+	send_component_complete(session, call->output_jid, OUTPUT_FINISH_AHN);
 	call->output_jid = "";
 	switch_mutex_unlock(call->mutex);
 }
