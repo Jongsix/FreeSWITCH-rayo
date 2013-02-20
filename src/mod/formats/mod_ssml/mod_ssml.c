@@ -390,6 +390,44 @@ static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
 }
 
 /**
+ * Process <break>- this is a period of silence
+ */
+static void process_break(struct ssml_parser *parsed_data, char **atts)
+{
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Process <break>\n");
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("time", atts[i])) {
+				char *t = atts[i + 1];
+				if (!zstr(t) && parsed_data->num_files < parsed_data->max_files) {
+					int timeout_ms = 0;
+					char *unit;
+					if ((unit = strstr(t, "ms"))) {
+						*unit = '\0';
+						if (switch_is_number(t)) {
+							timeout_ms = atoi(t);
+						}
+					} else if ((unit = strstr(t, "s"))) {
+						*unit = '\0';
+						if (switch_is_number(t)) {
+							timeout_ms = atoi(t) * 1000;
+						}
+					}
+					if (timeout_ms > 0) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <break>: \"%s\"\n", t);
+						parsed_data->files[parsed_data->num_files].name = switch_core_sprintf(parsed_data->pool, "silence_stream://%i", timeout_ms);
+						parsed_data->files[parsed_data->num_files++].prefix = NULL;
+					}
+				}
+				return;
+			}
+			i += 2;
+		}
+	}
+}
+
+/**
  * Process <audio>- this is a URL to play
  */
 static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
@@ -444,6 +482,8 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 				process_voice_open(parsed_data, atts);
 			} else if (!strcmp("say-as", name)) {
 				process_say_as_open(parsed_data, atts);
+			} else if (!strcmp("break", name)) {
+				process_break(parsed_data, atts);
 			} else {
 				process_default_open(parsed_data, name, atts);
 			}
@@ -458,6 +498,9 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 			break;
 		}
 		case IKS_SINGLE:
+			if (!strcmp("break", name)) {
+				process_break(parsed_data, atts);
+			}
 			break;
 	}
 	return IKS_OK;
@@ -500,8 +543,6 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 			gender = "neuter";
 		}
 	}
-
-	/* TODO prefix */
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language->language, to_say, say_macro->type, say_macro->method, gender);
 
