@@ -36,7 +36,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load);
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_ssml_shutdown);
 SWITCH_MODULE_DEFINITION(mod_ssml, mod_ssml_load, mod_ssml_shutdown, NULL);
 
-#define MAX_VOICE_FILES 1024
+#define MAX_VOICE_FILES 256
 #define MAX_VOICE_PRIORITY 999
 #define VOICE_NAME_PRIORITY 1000
 #define VOICE_GENDER_PRIORITY 1000
@@ -46,13 +46,29 @@ SWITCH_MODULE_DEFINITION(mod_ssml, mod_ssml_load, mod_ssml_shutdown, NULL);
  * Module configuration
  */
 static struct {
-	/** Mapping of language-gender to voice */
+	/** Mapping of mod-name-language-gender to voice */
 	switch_hash_t *voice_cache;
 	/** Mapping of voice names */
-	switch_hash_t *voice_map;
+	switch_hash_t *say_voice_map;
+	/** Mapping of voice names */
+	switch_hash_t *tts_voice_map;
 	/** Mapping of interpret-as value to macro */
 	switch_hash_t *interpret_as_map;
+	/** Mapping of ISO language code to say-module */
+	switch_hash_t *language_map;
 } globals;
+
+/** 
+ * A say language
+ */
+struct language {
+	/** The ISO language code */
+	char *iso;
+	/** The FreeSWITCH language code */
+	char *language;
+	/** The say module name */
+	char *say_module;
+};
 
 /**
  * A say macro
@@ -102,11 +118,21 @@ struct ssml_voice_attribs {
 	/** requested gender */
 	char gender[GENDER_LEN];
 	/** voice to use */
-	struct voice *voice;
-	/** macro to use */
-	struct macro *macro;
+	struct voice *tts_voice;
+	/** say macro to use */
+	struct macro *say_macro;
 	/** previous attribs */
 	struct ssml_voice_attribs *parent;
+};
+
+/**
+ * A file to play
+ */
+struct ssml_file {
+	/** prefix to add to file handle */
+	char *prefix;
+	/** the file to play */
+	const char *name;
 };
 
 /**
@@ -116,7 +142,7 @@ struct ssml_parser {
 	/** current attribs */
 	struct ssml_voice_attribs *attribs;
 	/** files to play */
-	const char **files;
+	struct ssml_file *files;
 	/** number of files */
 	int num_files;
 	/** max files to play */
@@ -134,7 +160,7 @@ struct ssml_context {
 	/** handle to current file */
 	switch_file_handle_t fh;
 	/** files to play */
-	const char **files;
+	struct ssml_file *files;
 	/** number of files */
 	int num_files;
 	/** current file being played */
@@ -145,9 +171,10 @@ struct ssml_context {
  * Score the voice on how close it is to desired language, name, and gender
  * @param voice the voice to score
  * @param attribs the desired voice attributes
+ * @param lang_required if true, language must match
  * @return the score
  */
-static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs)
+static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs, int lang_required)
 {
 	/* language > gender,name > priority */
 	int score = voice->priority;
@@ -159,6 +186,8 @@ static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs)
 	}
 	if (!zstr_buf(attribs->language) && !strcmp(attribs->language, voice->language)) {
 		score += VOICE_LANG_PRIORITY;
+	} else if (lang_required) {
+		score = 0;
 	}
 	return score;
 }
@@ -166,17 +195,20 @@ static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs)
 /**
  * Search for best voice based on attributes
  * @param attribs the desired voice attributes
+ * @param map the map to search
+ * @param type "say" or "tts"
+ * @param lang_required if true, language must match
  * @return the voice or NULL
  */
-static struct voice *find_voice(struct ssml_voice_attribs *attribs)
+static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_t *map, char *type, int lang_required)
 {
 	switch_hash_index_t *hi = NULL;
-	struct voice *voice = (struct voice *)switch_core_hash_find(globals.voice_map, attribs->name);
+	struct voice *voice = (struct voice *)switch_core_hash_find(map, attribs->name);
 	char *lang_name_gender = NULL;
 	int best_score = 0;
 
 	/* check cache */
-	lang_name_gender = switch_mprintf("%s-%s-%s", attribs->language, attribs->name, attribs->gender);
+	lang_name_gender = switch_mprintf("%s-%s-%s-%s", type, attribs->language, attribs->name, attribs->gender);
 	voice = (struct voice *)switch_core_hash_find(globals.voice_cache, lang_name_gender);
 	if (voice) {
 		/* that was easy! */
@@ -184,15 +216,15 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs)
 	}
 
 	/* find best language, name, gender match */
-	for (hi = switch_hash_first(NULL, globals.voice_map); hi; hi = switch_hash_next(hi)) {
+	for (hi = switch_hash_first(NULL, map); hi; hi = switch_hash_next(hi)) {
 		const void *key;
 		void *val;
 		struct voice *candidate;
 		int candidate_score = 0;
 		switch_hash_this(hi, &key, NULL, &val);
 		candidate = (struct voice *)val;
-		candidate_score = score_voice(candidate, attribs);
-		if (candidate_score > best_score) {
+		candidate_score = score_voice(candidate, attribs, lang_required);
+		if (candidate_score > 0 && candidate_score > best_score) {
 			voice = candidate;
 			best_score = candidate_score;
 		}
@@ -206,6 +238,26 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs)
 	switch_safe_free(lang_name_gender);
 
 	return voice;
+}
+
+/**
+ * Search for best voice based on attributes
+ * @param attribs the desired voice attributes
+ * @return the voice or NULL
+ */
+static struct voice *find_tts_voice(struct ssml_voice_attribs *attribs)
+{
+	return find_voice(attribs, globals.tts_voice_map, "tts", 0);
+}
+
+/**
+ * Search for best voice based on attributes
+ * @param attribs the desired voice attributes
+ * @return the voice or NULL
+ */
+static struct voice *find_say_voice(struct ssml_voice_attribs *attribs)
+{
+	return find_voice(attribs, globals.say_voice_map, "say", 1);
 }
 
 /**
@@ -229,7 +281,9 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		return SWITCH_STATUS_FALSE;
 	}
 
-	file = context->files[context->index];
+	
+	file = context->files[context->index].name;
+	context->fh.prefix = context->files[context->index].prefix;
 
 	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
 		/* unsupported */
@@ -278,7 +332,7 @@ static void process_default_open(struct ssml_parser *parsed_data, char *name, ch
 			}
 		}
 	}
-	attribs->voice = find_voice(attribs);
+	attribs->tts_voice = find_tts_voice(attribs);
 }
 
 /**
@@ -309,7 +363,7 @@ static void process_voice_open(struct ssml_parser *parsed_data, char **atts)
 			i += 2;
 		}
 	}
-	attribs->voice = find_voice(attribs);
+	attribs->tts_voice = find_tts_voice(attribs);
 }
 
 /**
@@ -325,14 +379,14 @@ static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
 				char *interpret_as = atts[i + 1];
 				if (!zstr(interpret_as)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "interpret-as: %s\n", atts[i + 1]);
-					attribs->macro = (struct macro *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
+					attribs->say_macro = (struct macro *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
 				}
 				break;
 			}
 			i += 2;
 		}
 	}
-	attribs->voice = find_voice(attribs);
+	attribs->tts_voice = find_tts_voice(attribs);
 }
 
 /**
@@ -348,7 +402,8 @@ static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
 				if (!zstr(src) && parsed_data->num_files < parsed_data->max_files) {
 					/* get the URI */
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <audio>: \"%s\"\n", src);
-					parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, src);
+					parsed_data->files[parsed_data->num_files].name = switch_core_strdup(parsed_data->pool, src);
+					parsed_data->files[parsed_data->num_files++].prefix = NULL;
 				}
 				return;
 			}
@@ -377,8 +432,8 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 				new_attribs->gender[0] = '\0';
 				new_attribs->parent = NULL;
 			}
-			new_attribs->voice = NULL;
-			new_attribs->macro = NULL;
+			new_attribs->tts_voice = NULL;
+			new_attribs->say_macro = NULL;
 			strncpy(new_attribs->tag_name, name, TAG_LEN);
 			new_attribs->tag_name[TAG_LEN - 1] = '\0';
 			parsed_data->attribs = new_attribs;
@@ -417,44 +472,51 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 {
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	struct macro *say_macro = attribs->say_macro;
+	struct voice *say_voice = find_say_voice(attribs);
+	struct language *language;
 	char *file_string = NULL;
-	char language[3];
 	char *gender = NULL;
 	switch_say_interface_t *si;
 
-	/* language is required */
-	if (zstr_buf(attribs->language)) {
+	/* voice is required */
+	if (!say_voice) {
 		return 0;
 	}
 
-	/* convert ISO language to FS language */
-	strncpy(language, attribs->language, 3);
-	language[2] = '\0';
+	language = switch_core_hash_find(globals.language_map, say_voice->language);
+	/* language is required */
+	if (!language) {
+		return 0;
+	}
 
 	/* convert SSML gender to FS gender */
-	if (!zstr_buf(attribs->gender)) {
-		if (!strcmp("male", attribs->gender)) {
+	if (!zstr_buf(say_voice->gender)) {
+		if (!strcmp("male", say_voice->gender)) {
 			gender = "masculine";
-		} else if (!strcmp("female", attribs->gender)) {
+		} else if (!strcmp("female", say_voice->gender)) {
 			gender = "feminine";
-		} else if (!strcmp("neutral", attribs->gender)) {
+		} else if (!strcmp("neutral", say_voice->gender)) {
 			gender = "neuter";
 		}
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language, to_say, attribs->macro->type, attribs->macro->method, gender);
+	/* TODO prefix */
 
-	if ((si = switch_loadable_module_get_say_interface(language)) && si->say_string_function) {
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language->language, to_say, say_macro->type, say_macro->method, gender);
+
+	if ((si = switch_loadable_module_get_say_interface(language->say_module)) && si->say_string_function) {
 		switch_say_args_t say_args = {0};
-		say_args.type = switch_ivr_get_say_type_by_name(attribs->macro->type);
-		say_args.method = switch_ivr_get_say_method_by_name(attribs->macro->method);
+		say_args.type = switch_ivr_get_say_type_by_name(say_macro->type);
+		say_args.method = switch_ivr_get_say_method_by_name(say_macro->method);
 		say_args.gender = switch_ivr_get_say_gender_by_name(gender);
 		say_args.ext = "wav";
 		si->say_string_function(NULL, to_say, &say_args, &file_string);
 	}
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding macro: \"%s\"\n", file_string);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding macro: \"%s\", prefix=\"%s\"\n", file_string, say_voice->prefix);
 	if (!zstr(file_string)) {
-		parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, file_string);
+		parsed_data->files[parsed_data->num_files].name = switch_core_strdup(parsed_data->pool, file_string);
+		parsed_data->files[parsed_data->num_files++].prefix = switch_core_strdup(parsed_data->pool, say_voice->prefix);
 		return 1;
 	}
 	switch_safe_free(file_string);
@@ -468,9 +530,10 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 static int get_file_from_voice(struct ssml_parser *parsed_data, char *to_say)
 {
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", attribs->voice->prefix, to_say);
+	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", attribs->tts_voice->prefix, to_say);
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: \"%s\"\n", attribs->tag_name, file);
-	parsed_data->files[parsed_data->num_files++] = file;
+	parsed_data->files[parsed_data->num_files].name = file;
+	parsed_data->files[parsed_data->num_files++].prefix = NULL;
 	return 1;
 }
 
@@ -481,7 +544,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 {
 	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	if (len && attribs && attribs->voice &&
+	if (len && attribs && attribs->tts_voice &&
 			parsed_data->num_files < parsed_data->max_files &&
 			(!strcmp("speak", attribs->tag_name) ||
 			!strcmp("voice", attribs->tag_name) ||
@@ -506,7 +569,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 		to_say = malloc(len + 1);
 		strncpy(to_say, data, len);
 		to_say[len] = '\0';
-		if (!attribs->macro || !get_file_from_macro(parsed_data, to_say)) {
+		if (!attribs->say_macro || !get_file_from_macro(parsed_data, to_say)) {
 			/* use voice instead */
 			get_file_from_voice(parsed_data, to_say);
 		}
@@ -534,7 +597,7 @@ static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *
 		struct ssml_parser *parsed_data = switch_core_alloc(handle->memory_pool, sizeof(*parsed_data));
 		iksparser *parser = iks_sax_new(parsed_data, tag_hook, cdata_hook);
 		parsed_data->attribs = NULL;
-		parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(const char *) * MAX_VOICE_FILES);
+		parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(struct ssml_file) * MAX_VOICE_FILES);
 		parsed_data->max_files = MAX_VOICE_FILES;
 		parsed_data->num_files = 0;
 		parsed_data->pool = handle->memory_pool;
@@ -702,6 +765,36 @@ static switch_status_t tts_file_close(switch_file_handle_t *handle)
 }
 
 /**
+ * Configure voices
+ * @param pool memory pool to use
+ * @param map voice map to load
+ * @param type type of voices (for logging)
+ */
+static void do_config_voices(switch_memory_pool_t *pool, switch_xml_t voices, switch_hash_t *map, const char *type)
+{
+	if (voices) {
+		int priority = MAX_VOICE_PRIORITY;
+		switch_xml_t voice;
+		for (voice = switch_xml_child(voices, "voice"); voice; voice = voice->next) {
+			const char *name = switch_xml_attr_soft(voice, "name");
+			const char *language = switch_xml_attr_soft(voice, "language");
+			const char *gender = switch_xml_attr_soft(voice, "gender");
+			const char *prefix = switch_xml_attr_soft(voice, "prefix");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s map (%s, %s, %s) = %s\n", type, name, language, gender, prefix);
+			if (!zstr(name) && !zstr(prefix)) {
+				struct voice *v = (struct voice *)switch_core_alloc(pool, sizeof(*v));
+				v->name = switch_core_strdup(pool, name);
+				v->language = switch_core_strdup(pool, language);
+				v->gender = switch_core_strdup(pool, gender);
+				v->prefix = switch_core_strdup(pool, prefix);
+				v->priority = priority--;
+				switch_core_hash_insert(map, name, v);
+			}
+		}
+	}
+}
+
+/**
  * Configure module
  * @param pool memory pool to use
  * @return SWITCH_STATUS_SUCCESS if module is configured
@@ -717,30 +810,30 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	}
 
 	/* get voices */
+	do_config_voices(pool, switch_xml_child(cfg, "tts-voices"), globals.tts_voice_map, "tts");
+	do_config_voices(pool, switch_xml_child(cfg, "say-voices"), globals.say_voice_map, "say");
+
+	/* get languages */
 	{
-		int priority = MAX_VOICE_PRIORITY;
-		switch_xml_t voices = switch_xml_child(cfg, "voices");
-		if (voices) {
-			switch_xml_t voice;
-			for (voice = switch_xml_child(voices, "voice"); voice; voice = voice->next) {
-				const char *name = switch_xml_attr_soft(voice, "name");
-				const char *language = switch_xml_attr_soft(voice, "language");
-				const char *gender = switch_xml_attr_soft(voice, "gender");
-				const char *prefix = switch_xml_attr_soft(voice, "prefix");
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "voice map (%s, %s, %s) = %s\n", name, language, gender, prefix);
-				if (!zstr(name) && !zstr(prefix)) {
-					struct voice *v = (struct voice *)switch_core_alloc(pool, sizeof(*v));
-					v->name = switch_core_strdup(pool, name);
-					v->language = switch_core_strdup(pool, language);
-					v->gender = switch_core_strdup(pool, gender);
-					v->prefix = switch_core_strdup(pool, prefix);
-					v->priority = priority--;
-					switch_core_hash_insert(globals.voice_map, name, v);
+		switch_xml_t languages = switch_xml_child(cfg, "language-map");
+		if (languages) {
+			switch_xml_t language;
+			for (language = switch_xml_child(languages, "language"); language; language = language->next) {
+				const char *iso = switch_xml_attr_soft(language, "iso");
+				const char *say_module = switch_xml_attr_soft(language, "say-module");
+				const char *lang = switch_xml_attr_soft(language, "language");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "language map: %s = (%s, %s) \n", iso, say_module, lang);
+				if (!zstr(iso) && !zstr(say_module) && !zstr(lang)) {
+					struct language *l = (struct language *)switch_core_alloc(pool, sizeof(*l));
+					l->iso = switch_core_strdup(pool, iso);
+					l->say_module = switch_core_strdup(pool, say_module);
+					l->language = switch_core_strdup(pool, lang);
+					switch_core_hash_insert(globals.language_map, iso, l);
 				}
 			}
 		}
 	}
-
+	
 	/* get macros */
 	{
 		switch_xml_t macros = switch_xml_child(cfg, "macros");
@@ -790,8 +883,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	file_interface->file_read = tts_file_read;
 
 	switch_core_hash_init(&globals.voice_cache, pool);
-	switch_core_hash_init(&globals.voice_map, pool);
+	switch_core_hash_init(&globals.tts_voice_map, pool);
+	switch_core_hash_init(&globals.say_voice_map, pool);
 	switch_core_hash_init(&globals.interpret_as_map, pool);
+	switch_core_hash_init(&globals.language_map, pool);
 	return do_config(pool);
 }
 

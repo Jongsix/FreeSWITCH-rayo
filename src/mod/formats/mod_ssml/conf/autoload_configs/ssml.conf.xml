@@ -1,12 +1,22 @@
 <configuration name="ssml.conf" description="SSML parser config">
 
 	<!-- voices in order of preference -->
-	<voices>
+	<tts-voices>
 		<voice name="kal" language="en-US" gender="male" prefix="tts://flite|kal|"/>
 		<voice name="slt" language="en-US" gender="female" prefix="tts://flite|slt|"/>
 		<voice name="rms" language="en-US" gender="male" prefix="tts://flite|rms|"/>
 		<voice name="awb" language="en-US" gender="male" prefix="tts://flite|awb|"/>
-	</voices>
+	</tts-voices>
+
+	<!-- maps ISO language to say module -->
+	<language-map>
+		<language iso="en-US" say-module="en" language="en"/>
+	</language-map>
+
+	<!-- say voices in order of preference -->
+	<say-voices>
+		<voice name="callie" language="en-US" gender="female" prefix="$${sounds_dir}/en/us/callie/"/>
+	</say-voices>
 
 	<!-- map interpret-as to say macros -->
 	<macros>
