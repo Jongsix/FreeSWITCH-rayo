@@ -243,6 +243,7 @@ static switch_status_t input_component_on_hangup(switch_core_session_t *session)
 	if (handler) {
 		switch_channel_set_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR, NULL);
 		if (handler->parser) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroying SRGS parser\n");
 			srgs_destroy(handler->parser);
 			handler->parser = NULL;
 		}
@@ -280,8 +281,6 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-				srgs_destroy(handler->parser);
-				handler->parser = NULL;
 				handler->call->input_jid = "";
 				switch_mutex_unlock(handler->call->mutex);
 				break;
@@ -293,8 +292,6 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-				srgs_destroy(handler->parser);
-				handler->parser = NULL;
 				handler->call->input_jid = "";
 				switch_mutex_unlock(handler->call->mutex);
 				break;
@@ -326,7 +323,6 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	iks *grammar = NULL;
 	char *content_type = NULL;
 	char *srgs = NULL;
-	struct srgs_parser *parser = NULL;
 	struct input_handler *handler = NULL;
 
 	switch_mutex_lock(call->mutex);
@@ -334,8 +330,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	/* already have input component? */
 	if (!zstr(call->input_jid)) {
 		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
-		switch_mutex_unlock(call->mutex);
-		return;
+		goto done;
 	}
 
 	/* validate input attributes */
@@ -343,8 +338,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
-		return;
+		goto done;
 	}
 
 	/* missing grammar */
@@ -352,8 +346,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
-		return;
+		goto done;
 	}
 
 	/* only support srgs */
@@ -361,8 +354,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
-		return;
+		goto done;
 	}
 
 	/* missing grammar body */
@@ -370,32 +362,29 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
-		return;
+		goto done;
 	}
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
 
-	/* parse the grammar */
-	parser = srgs_parser_new();
-	if (!srgs_parse(parser, srgs)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
-		srgs_destroy(parser);
-		return;
-	}
-
-	/* create input handler */
+	/* set up input handler for new detection */
 	handler = (struct input_handler *)switch_channel_get_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (!handler) {
+		/* create input handler */
 		handler = switch_core_session_alloc(session, sizeof(*handler));
+		handler->parser = srgs_parser_new();
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
-	} else if (handler->parser) {
-		srgs_destroy(handler->parser);
+		switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
 	}
-	handler->parser = parser;
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
 	handler->call = call;
+
+	/* parse the grammar */
+	if (!srgs_parse(handler->parser, srgs)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		goto done;
+	}
 
 	/* create JID */
 	ref = create_uuid_str(session);
@@ -403,10 +392,11 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
-	switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
 
 	/* all good, acknowledge command */
 	send_component_ref(session, iq, ref);
+
+done:
 
 	switch_mutex_unlock(call->mutex);
 }
