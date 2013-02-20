@@ -30,7 +30,6 @@
 #include <switch.h>
 #include <iksemel.h>
 
-#include "xml_attrib.h"
 #include "iks_helpers.h"
 #include "sasl.h"
 
@@ -945,6 +944,8 @@ static int on_iq_set(void *user_data, ikspak *pak)
 		from = zstr(from) ? rsession->server_jid : from;
 		to = zstr(to) ? rsession->client_jid_full : to;
 		reply = iks_new_iq_error(iq, from, to, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		iks_send(rsession->parser, reply);
+		iks_delete(reply);
 	}
 
 	return IKS_FILTER_EAT;
@@ -1326,6 +1327,13 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 
   done:
 
+	if (parser) {
+		iks_parser_delete(parser);
+	}
+	if (rsession && rsession->filter) {
+		iks_filter_delete(rsession->filter);
+	}
+
 	rayo_session_destroy(rsession);
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 
@@ -1629,31 +1637,25 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
  * @param iq the request that caused the error
  * @param error the error message
  */
-static void app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, const char *error_name, const char *error_type)
+static void app_send_iq_error(switch_core_session_t *session, iks *iq, const char *error_name, const char *error_type)
 {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	char *command = switch_xml_toxml(iq->child, SWITCH_FALSE);
-	char *response = switch_mprintf(
-		"<iq id='%s' from='%s' to='%s' type='error'>"
-		"%s<error type='%s'>"
-		"<%s xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>",
-		switch_xml_attr_soft(iq, "id"),
+	iks *response = iks_new_iq_error(iq, 
 		switch_channel_get_variable(channel, "rayo_call_jid"),
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		command,
-		error_type,
-		error_name);
+		error_name, error_type);
 
 	/* send message to Rayo session via event */
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		char *response_str = iks_string(NULL, response);
 		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response);
+		switch_event_add_body(event, "%s", response_str);
 		switch_event_fire(&event);
+		iks_free(response_str);
 	}
 
-	switch_safe_free(command);
-	switch_safe_free(response);
+	iks_delete(response);
 }
 
 /**
@@ -1662,24 +1664,28 @@ static void app_send_iq_error(switch_core_session_t *session, switch_xml_t iq, c
  * @param iq the request that requested the component
  * @param ref the component ref
  */
-static void app_send_component_ref(switch_core_session_t *session, switch_xml_t iq, const char *ref)
+static void app_send_component_ref(switch_core_session_t *session, iks *iq, const char *ref)
 {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	char *response = switch_mprintf(
-		"<iq id='%s' from='%s' to='%s' type='result'>"
-		"<ref xmlns='urn:xmpp:rayo:1' id='%s'/></iq>",
-		switch_xml_attr_soft(iq, "id"),
+	iks *x, *response = NULL;
+
+	response = iks_new_iq_result(
 		switch_channel_get_variable(channel, "rayo_call_jid"),
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		ref);
+		iks_find_attrib(iq, "id"));
+	x = iks_insert(response, "ref");
+	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:1");
+	iks_insert_attrib(x, "id", ref);
 
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		char *response_str = iks_string(NULL, response);
 		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response);
+		switch_event_add_body(event, "%s", response_str);
 		switch_event_fire(&event);
+		iks_free(response_str);
 	}
-	switch_safe_free(response);
+	iks_delete(response);
 }
 
 /**
@@ -1712,8 +1718,8 @@ static void app_send_component_complete(switch_core_session_t *session, const ch
 /**
  * <prompt> component validation
  */
-static const struct xml_attrib_definition prompt_attribs_def[] = {
-	{ "barge-in", "true", xml_attrib_is_bool, SWITCH_FALSE },
+static const struct iks_attrib_definition prompt_attribs_def[] = {
+	{ "barge-in", "true", iks_attrib_is_bool, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -1722,19 +1728,19 @@ static const struct xml_attrib_definition prompt_attribs_def[] = {
  */
 struct prompt_attribs {
 	int size;
-	struct xml_attrib barge_in;
+	struct iks_attrib barge_in;
 };
 
 /**
  * <output> component validation
  */
-static const struct xml_attrib_definition output_attribs_def[] = {
-	{ "start-offset", "0", xml_attrib_is_not_negative, SWITCH_FALSE },
-	{ "start-paused", "false", xml_attrib_is_bool, SWITCH_FALSE },
-	{ "repeat-interval", "0", xml_attrib_is_not_negative, SWITCH_FALSE },
-	{ "repeat-times", "1", xml_attrib_is_positive, SWITCH_FALSE },
-	{ "max-time", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "renderer", "", xml_attrib_is_any, SWITCH_FALSE },
+static const struct iks_attrib_definition output_attribs_def[] = {
+	{ "start-offset", "0", iks_attrib_is_not_negative, SWITCH_FALSE },
+	{ "start-paused", "false", iks_attrib_is_bool, SWITCH_FALSE },
+	{ "repeat-interval", "0", iks_attrib_is_not_negative, SWITCH_FALSE },
+	{ "repeat-times", "1", iks_attrib_is_positive, SWITCH_FALSE },
+	{ "max-time", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "renderer", "", iks_attrib_is_any, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -1743,12 +1749,12 @@ static const struct xml_attrib_definition output_attribs_def[] = {
  */
 struct output_attribs {
 	int size;
-	struct xml_attrib start_offset;
-	struct xml_attrib start_paused;
-	struct xml_attrib repeat_interval;
-	struct xml_attrib repeat_times;
-	struct xml_attrib max_time;
-	struct xml_attrib renderer;
+	struct iks_attrib start_offset;
+	struct iks_attrib start_paused;
+	struct iks_attrib repeat_interval;
+	struct iks_attrib repeat_times;
+	struct iks_attrib max_time;
+	struct iks_attrib renderer;
 };
 
 /**
@@ -1757,8 +1763,8 @@ struct output_attribs {
  * @param value assigned
  * @return SWTICH_TRUE if value is valid
  */
-static switch_bool_t is_input_mode(struct xml_attrib *attrib, const char *value) {
-	attrib->type = XAT_STRING;
+static int is_input_mode(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_STRING;
 	attrib->test = "(any || dtmf || speech)";
 	attrib->v.s = (char *)value;
 	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value);
@@ -1767,15 +1773,15 @@ static switch_bool_t is_input_mode(struct xml_attrib *attrib, const char *value)
 /**
  * <input> component validation
  */
-static const struct xml_attrib_definition input_attribs_def[] = {
+static const struct iks_attrib_definition input_attribs_def[] = {
 	{ "mode", "any", is_input_mode, SWITCH_FALSE },
-	{ "terminator", "", xml_attrib_is_any, SWITCH_FALSE },
-	{ "recognizer", "en-US", xml_attrib_is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
-	{ "initial-timeout", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "inter-digit-timeout", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "sensitivity", "0.5", xml_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "min-confidence", "0", xml_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "max-silence", "-1", xml_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "terminator", "", iks_attrib_is_any, SWITCH_FALSE },
+	{ "recognizer", "en-US", iks_attrib_is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
+	{ "initial-timeout", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "inter-digit-timeout", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	{ "sensitivity", "0.5", iks_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "min-confidence", "0", iks_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
+	{ "max-silence", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
 	LAST_ATTRIB
 };
 
@@ -1784,14 +1790,14 @@ static const struct xml_attrib_definition input_attribs_def[] = {
  */
 struct input_attribs {
 	int size;
-	struct xml_attrib mode;
-	struct xml_attrib terminator;
-	struct xml_attrib recognizer;
-	struct xml_attrib initial_timeout;
-	struct xml_attrib inter_digit_timeout;
-	struct xml_attrib sensitivity;
-	struct xml_attrib min_confidence;
-	struct xml_attrib max_silence;
+	struct iks_attrib mode;
+	struct iks_attrib terminator;
+	struct iks_attrib recognizer;
+	struct iks_attrib initial_timeout;
+	struct iks_attrib inter_digit_timeout;
+	struct iks_attrib sensitivity;
+	struct iks_attrib min_confidence;
+	struct iks_attrib max_silence;
 };
 
 /**
@@ -1801,7 +1807,7 @@ struct input_attribs {
  * @param args input args
  * @return status
  */
-switch_status_t play_document(switch_core_session_t *session, switch_xml_t document, switch_input_args_t *args)
+switch_status_t play_document(switch_core_session_t *session, iks *document, switch_input_args_t *args)
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
 	char *name;
@@ -1809,13 +1815,13 @@ switch_status_t play_document(switch_core_session_t *session, switch_xml_t docum
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No document to play!\n");
 		return SWITCH_STATUS_FALSE;
 	}
-	name = switch_xml_name(document);
+	name = iks_name(document);
 	if (!strcmp("speak", name)) {
-		char *ssml = switch_xml_toxml(document, SWITCH_FALSE);
+		char *ssml = iks_string(NULL, document);
 		char *inline_ssml = switch_mprintf("ssml://%s", ssml);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", inline_ssml);
 		status = switch_ivr_play_file(session, NULL, inline_ssml, args);
-		switch_safe_free(ssml);
+		iks_free(ssml);
 		switch_safe_free(inline_ssml);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <speak>, got: <%s>!\n", name);
@@ -1832,10 +1838,10 @@ switch_status_t play_document(switch_core_session_t *session, switch_xml_t docum
  */
 SWITCH_STANDARD_APP(rayo_play_app)
 {
-	switch_xml_t iq, output, prompt, input;
+	iksparser *parser = NULL;
+	iks *iq, *output, *prompt, *input;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
-	char *iq_str = switch_core_session_strdup(session, data);
 	char *command;
 	struct output_attribs o_attribs;
 	struct input_attribs i_attribs;
@@ -1848,73 +1854,78 @@ SWITCH_STANDARD_APP(rayo_play_app)
 		switch_mutex_unlock(call->mutex);
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "No Rayo client controlling this session!\n");
-		return;
+		goto done;
 	}
 	switch_mutex_unlock(call->mutex);
 
-	if (zstr(iq_str)) {
+	if (zstr(data)) {
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Missing args!\n");
 		/* can't send iq error- no <iq> request! */
-		return;
+		goto done;
 	}
 
-	iq = switch_xml_parse_str(iq_str, strlen(iq_str));
-	if (!iq) {
+	parser = iks_dom_new(&iq);
+	if (!parser) {
+		goto done;
+	}
+	if (iks_parse(parser, data, 0, 1) != IKS_OK) {
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Bad request!\n");
 		/* can't send iq error- no <iq> request! */
-		return;
+		goto done;
 	}
 
-	if (!iq->child) {
+	if (!iks_child(iq)) {
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Bad request!\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		goto done;
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
 
 	/* is this <prompt>, <output>, or <input>? */
-	command = switch_xml_name(iq->child);
+	command = iks_name(iks_child(iq));
 	if (!strcmp("prompt", command)) {
-		output = switch_xml_child(iq->child, "output");
-		input = switch_xml_child(iq->child, "input");
-		prompt = iq->child;
+		prompt = iks_child(iq);
+		output = iks_find(prompt, "output");
+		input = iks_find(prompt, "input");
 	} else if (!strcmp("output", command)) {
-		output = iq->child;
+		prompt = NULL;
+		output = iks_child(iq);
 		input = NULL;
-		prompt = NULL;
 	} else if (!strcmp("input", command)) {
-		output = NULL;
-		input = iq->child;
 		prompt = NULL;
-		return;
+		output = NULL;
+		input = iks_child(iq);
 	} else {
+		prompt = NULL;
+		output = NULL;
+		input = NULL;
 		app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-		return;
+		goto done;
 	}
 
 	/* need at least one... */
 	if (!output && !input) {
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		goto done;
 	}
 
 	/* validate output attributes */
 	if (output) {
 		memset(&o_attribs, 0, sizeof(o_attribs));
-		if (!xml_attrib_parse(session, output, output_attribs_def, (struct xml_attribs *)&o_attribs)) {
+		if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-			return;
+			goto done;
 		}
 	}
 
 	/* validate input attributes */
 	if (input) {
 		memset(&i_attribs, 0, sizeof(i_attribs));
-		if (!xml_attrib_parse(session, input, input_attribs_def, (struct xml_attribs *)&i_attribs)) {
+		if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		}
 	}
@@ -1922,7 +1933,7 @@ SWITCH_STANDARD_APP(rayo_play_app)
 	/* validate prompt attributes */
 	if (prompt) {
 		memset(&p_attribs, 0, sizeof(p_attribs));
-		if (!xml_attrib_parse(session, prompt, prompt_attribs_def, (struct xml_attribs *)&p_attribs)) {
+		if (!iks_attrib_parse(session, prompt, prompt_attribs_def, (struct iks_attribs *)&p_attribs)) {
 			app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		}
 	}
@@ -1944,15 +1955,20 @@ SWITCH_STANDARD_APP(rayo_play_app)
 
 	/* render document(s) */
 	if (output) {
-		switch_xml_t document = switch_xml_child(output, "document");
+		iks *document = iks_find(output, "document");
 		if (!document) {
-			play_document(session, output->child, NULL);
+			play_document(session, iks_child(output), NULL);
 		} else {
-			for (; document; document = document->next) {
-				play_document(session, document->child, NULL);
+			for (; document; document = iks_next(document)) {
+				play_document(session, iks_child(document), NULL);
 			}
 		}
 		app_send_component_complete(session, component_jid, OUTPUT_FINISHED);
+	}
+
+done:
+	if (parser) {
+		iks_parser_delete(parser);
 	}
 
 	switch_mutex_lock(call->mutex);
@@ -2022,6 +2038,7 @@ SWITCH_STANDARD_APP(rayo_app)
 done:
 
 	if (offered) {
+		/* TODO detect idle session (rayo-client has stopped controlling call) and terminate call */
 		switch_ivr_park(session, NULL);
 	} else {
 		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);

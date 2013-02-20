@@ -773,7 +773,7 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 	if (*len > context->frame_size) {
 		*len = context->frame_size;
 	}
-	rlen = *len * 2;
+	rlen = *len * 2; /* rlen (bytes) = len (samples) * 2 */
 
 	if (context->lead) {
 		memset(data, 0, *len);
@@ -789,7 +789,7 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 		memset(data, 0, *len);
 		status = SWITCH_STATUS_FALSE;
 	}
-	*len = rlen / 2;
+	*len = rlen / 2; /* len (samples) = rlen (bytes) / 2 */
 	return status;
 }
 

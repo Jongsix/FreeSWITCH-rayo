@@ -31,6 +31,7 @@
 #define IKS_EXT_H
 
 #include <iksemel.h>
+#include <switch.h>
 
 /* See RFC-3920 XMPP core for error definitions */
 #define STANZA_ERROR_BAD_REQUEST "bad-request", "modify"
@@ -59,6 +60,61 @@ extern iks *iks_new_iq_result(const char *from, const char *to, const char *id);
 extern char *iks_find_attrib_soft(iks *xml, const char *attrib);
 extern const char *iks_node_type_to_string(int type);
 extern const char *iks_net_error_to_string(int err);
+
+
+/**
+ * Type of attribute value
+ */
+enum iks_attrib_type {
+	IAT_STRING = 0,
+	IAT_INTEGER,
+	IAT_DECIMAL
+};
+
+/**
+ * An attribute in XML node
+ */
+struct iks_attrib {
+	union {
+		char *s;
+		int i;
+		double d;
+	} v;
+	enum iks_attrib_type type;
+	const char *test;
+};
+
+/** A function to validate and convert string attrib */
+typedef int (*iks_attrib_conversion_function)(struct iks_attrib *, const char *);
+
+/**
+ * Defines rules for attribute validation
+ */
+struct iks_attrib_definition {
+	const char *name;
+	const char *default_value;
+	iks_attrib_conversion_function fn;
+	int is_last;
+};
+
+#define LAST_ATTRIB { NULL, NULL, NULL, SWITCH_TRUE }
+
+/**
+ * Attributes to get
+ */
+struct iks_attribs {
+	int size;
+	struct iks_attrib attrib[];
+};
+
+extern int iks_attrib_is_bool(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_not_negative(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_positive_or_neg_one(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_any(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_is_decimal_between_zero_and_one(struct iks_attrib *attrib, const char *value);
+extern int iks_attrib_parse(switch_core_session_t *session, iks *node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs);
 
 #endif
 

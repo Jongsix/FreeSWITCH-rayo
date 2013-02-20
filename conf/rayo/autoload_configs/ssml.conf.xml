@@ -2,8 +2,8 @@
 
 	<!-- voices in order of preference -->
 	<tts-voices>
-		<voice name="kal" language="en-US" gender="male" prefix="tts://flite|kal|"/>
 		<voice name="slt" language="en-US" gender="female" prefix="tts://flite|slt|"/>
+		<voice name="kal" language="en-US" gender="male" prefix="tts://flite|kal|"/>
 		<voice name="rms" language="en-US" gender="male" prefix="tts://flite|rms|"/>
 		<voice name="awb" language="en-US" gender="male" prefix="tts://flite|awb|"/>
 	</tts-voices>

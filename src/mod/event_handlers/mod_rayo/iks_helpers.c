@@ -130,6 +130,147 @@ const char *iks_net_error_to_string(int err)
 	}
 }
 
+/**
+ * Assign value to attribute if boolean
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_bool(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_INTEGER;
+	attrib->test = "(true || false)";
+	if (!zstr(value) && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
+		attrib->v.i = switch_true(value);
+		return SWITCH_TRUE;
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Assign value to attribute if not negative
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_not_negative(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_INTEGER;
+	attrib->test = "(>= 0)";
+	if (!zstr(value) && switch_is_number(value)) {
+		attrib->v.i = atoi(value);
+		if (attrib->v.i >= 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Assign value to attribute if positive
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_INTEGER;
+	attrib->test = "(> 0)";
+	if (!zstr(value) && switch_is_number(value)) {
+		attrib->v.i = atoi(value);
+		if (attrib->v.i > 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Assign value to attribute if positive or -1
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_positive_or_neg_one(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_INTEGER;
+	attrib->test = "(-1 || > 0)";
+	if (!zstr(value) && switch_is_number(value)) {
+		attrib->v.i = atoi(value);
+		if (attrib->v.i == -1 || attrib->v.i > 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Assign value to attribute
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_any(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_STRING;
+	attrib->test = "(*)";
+	attrib->v.s = (char *)value;
+	return SWITCH_TRUE;
+}
+
+/**
+ * Assign value to attribute if 0.0 <= x <= 1.0
+ * @param attrib to assign to
+ * @param value assigned
+ * @return SWTICH_TRUE if value is valid
+ */
+int iks_attrib_is_decimal_between_zero_and_one(struct iks_attrib *attrib, const char *value) {
+	attrib->type = IAT_DECIMAL;
+	attrib->test = "(>= 0.0 && <= 1.0)";
+	if (!zstr(value) && switch_is_number(value)) {
+		attrib->v.d = atof(value);
+		if (attrib->v.d >= 0.0 || attrib->v.d <= 1.0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Search node for attribute, returning default if not set
+ * @param attrib_def the attribute validation definition
+ * @param attrib the attribute to set
+ * @param node XML node to search
+ * @return SWITCH_TRUE if successful
+ */
+static int get_attrib(const struct iks_attrib_definition *attrib_def, struct iks_attrib *attrib, iks *node)
+{
+	const char *value = iks_find_attrib(node, attrib_def->name);
+	value = zstr(value) ? attrib_def->default_value : value;
+	if (attrib_def->fn(attrib, value)) {
+		return SWITCH_TRUE;
+	}
+	attrib->type = IAT_STRING;
+	attrib->v.s = (char *)value; /* remember bad value */
+	return SWITCH_FALSE;
+}
+
+/**
+ * Get attribs from XML node
+ * @param session the session getting the attribs
+ * @param node the XML node to search
+ * @param attrib_def the attributes to get
+ * @param attribs struct to fill
+ * @return SWITCH_TRUE if the attribs are valid
+ */
+int iks_attrib_parse(switch_core_session_t *session, iks* node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs)
+{
+	struct iks_attrib *attrib = attribs->attrib;
+	int success = SWITCH_TRUE;
+	for (; success && !attrib_def->is_last; attrib_def++) {
+		success &= get_attrib(attrib_def, attrib, node);
+		if (!success) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", iks_name(node), attrib_def->name, attrib->v.s, attrib->test);
+		}
+		attrib++;
+	}
+	return success;
+}
 
 /* For Emacs:
  * Local Variables:
