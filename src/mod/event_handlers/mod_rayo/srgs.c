@@ -32,6 +32,8 @@
 
 #include "srgs.h"
 
+#define MAX_RULES 256
+
 /**
  * A rule to match
  */
@@ -44,8 +46,10 @@ struct srgs_rule {
  * The parser state
  */ 
 struct srgs_parser {
-	struct srgs_rule **rules;
 	int num_rules;
+	struct srgs_rule rules[MAX_RULES];
+	iks *srgs;
+	iksparser *p;
 };
 
 /**
@@ -54,7 +58,11 @@ struct srgs_parser {
  */
 struct srgs_parser *srgs_parser_new(void)
 {
-	return malloc(sizeof(struct srgs_parser));
+	struct srgs_parser *parser = malloc(sizeof(struct srgs_parser));
+	memset(parser, sizeof(*parser), 0);
+	parser->srgs = NULL;
+	parser->p = iks_dom_new(&parser->srgs);
+	return parser;
 }
 
 /**
@@ -64,6 +72,15 @@ struct srgs_parser *srgs_parser_new(void)
  */
 int srgs_parse(struct srgs_parser *parser, const char *document)
 {
+	if (zstr(document)) {
+		return 0;
+	}
+
+	iks_parser_reset(parser->p);
+	if (iks_parse(parser->p, document, 0, 1) != IKS_OK) {
+		return 0;
+	}
+	
 	return 1;
 }
 
