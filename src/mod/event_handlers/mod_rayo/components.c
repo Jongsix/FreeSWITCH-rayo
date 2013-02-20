@@ -182,7 +182,7 @@ struct input_attribs {
 	struct iks_attrib max_silence;
 };
 
-#define INPUT_FINISHED "finish", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_FINISHED "success", "urn:xmpp:rayo:input:complete:1"
 
 /**
  * Start execution of input component
@@ -233,7 +233,7 @@ static const struct iks_attrib_definition output_attribs_def[] = {
 	LAST_ATTRIB
 };
 
-#define OUTPUT_FINISHED "finish", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_FINISHED "success", "urn:xmpp:rayo:output:complete:1"
 
 /**
  * <output> component attributes
