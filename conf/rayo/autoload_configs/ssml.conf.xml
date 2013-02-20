@@ -10,7 +10,7 @@
 
 	<!-- map interpret-as to say macros -->
 	<macros>
-		<macro name="cardinal" method="" type="number"/>
+		<macro name="cardinal" method="pronounced" type="number"/>
 	</macros>
 
 </configuration>
