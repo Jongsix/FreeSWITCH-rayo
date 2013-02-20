@@ -90,7 +90,7 @@ struct voice {
 #define GENDER_LEN 8
 
 /**
- * SSML voice state 
+ * SSML voice state
  */
 struct ssml_voice_attribs {
 	/** tag name */
@@ -123,6 +123,8 @@ struct ssml_parser {
 	int max_files;
 	/** memory pool to use */
 	switch_memory_pool_t *pool;
+	/** desired sample rate */
+	int sample_rate;
 };
 
 /**
@@ -260,7 +262,7 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 static void process_default_open(struct ssml_parser *parsed_data, char *name, char **atts)
 {
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	
+
 	/* only allow language change in <speak>, <p>, and <s> */
 	if (!strcmp("speak", name) || !strcmp("p", name) || !strcmp("s", name)) {
 		if (atts) {
@@ -345,7 +347,7 @@ static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
 				char *src = atts[i + 1];
 				if (!zstr(src) && parsed_data->num_files < parsed_data->max_files) {
 					/* get the URI */
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <audio>: %s\n", src);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <audio>: \"%s\"\n", src);
 					parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, src);
 				}
 				return;
@@ -371,8 +373,8 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 				new_attribs->parent = parent;
 			} else {
 				new_attribs->name[0] = '\0';
-				new_attribs->language[0] = '\0'; 
-				new_attribs->gender[0] = '\0'; 
+				new_attribs->language[0] = '\0';
+				new_attribs->gender[0] = '\0';
 				new_attribs->parent = NULL;
 			}
 			new_attribs->voice = NULL;
@@ -380,7 +382,7 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 			strncpy(new_attribs->tag_name, name, TAG_LEN);
 			new_attribs->tag_name[TAG_LEN - 1] = '\0';
 			parsed_data->attribs = new_attribs;
-			
+
 			if (!strcmp("audio", name)) {
 				process_audio_open(parsed_data, atts);
 			} else if (!strcmp("voice", name)) {
@@ -408,8 +410,8 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 
 /**
  * Try to get file(s) from say module
- * @param parsed_data 
- * @param to_say 
+ * @param parsed_data
+ * @param to_say
  * @return 1 if successful
  */
 static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
@@ -418,12 +420,16 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 	char *file_string = NULL;
 	char language[3];
 	char *gender = NULL;
+	switch_say_interface_t *si;
+
+	/* language is required */
+	if (zstr_buf(attribs->language)) {
+		return 0;
+	}
 
 	/* convert ISO language to FS language */
-	if (!zstr_buf(attribs->language)) {
-		strncpy(language, attribs->language, 3);
-		language[2] = '\0';
-	}
+	strncpy(language, attribs->language, 3);
+	language[2] = '\0';
 
 	/* convert SSML gender to FS gender */
 	if (!zstr_buf(attribs->gender)) {
@@ -436,15 +442,24 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 		}
 	}
 
-	/* get file_string from Say module */
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language, to_say, attribs->macro->type, attribs->macro->method, gender);
-	if (switch_ivr_say_string(NULL, language, NULL, to_say, NULL, attribs->macro->type, attribs->macro->method, gender, &file_string) != SWITCH_STATUS_SUCCESS) {
-		switch_safe_free(file_string);
-		return 0;
+
+	if ((si = switch_loadable_module_get_say_interface(language)) && si->say_string_function) {
+		switch_say_args_t say_args = {0};
+		say_args.type = switch_ivr_get_say_type_by_name(attribs->macro->type);
+		say_args.method = switch_ivr_get_say_method_by_name(attribs->macro->method);
+		say_args.gender = switch_ivr_get_say_gender_by_name(gender);
+		say_args.ext = "wav";
+		si->say_string_function(NULL, to_say, &say_args, &file_string);
 	}
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding macro: %s\n", file_string);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding macro: \"%s\"\n", file_string);
+	if (!zstr(file_string)) {
+		parsed_data->files[parsed_data->num_files++] = switch_core_strdup(parsed_data->pool, file_string);
+		return 1;
+	}
 	switch_safe_free(file_string);
-	return 1;
+
+	return 0;
 }
 
 /**
@@ -454,7 +469,7 @@ static int get_file_from_voice(struct ssml_parser *parsed_data, char *to_say)
 {
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
 	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", attribs->voice->prefix, to_say);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: %s\n", attribs->tag_name, file);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: \"%s\"\n", attribs->tag_name, file);
 	parsed_data->files[parsed_data->num_files++] = file;
 	return 1;
 }
@@ -467,20 +482,20 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
 	struct ssml_voice_attribs *attribs = parsed_data->attribs;
 	if (len && attribs && attribs->voice &&
-			parsed_data->num_files < parsed_data->max_files && 
+			parsed_data->num_files < parsed_data->max_files &&
 			(!strcmp("speak", attribs->tag_name) ||
 			!strcmp("voice", attribs->tag_name) ||
 			!strcmp("say-as", attribs->tag_name) ||
 			!strcmp("s", attribs->tag_name) ||
 			!strcmp("p", attribs->tag_name))) {
-		
+
 		int i = 0;
 		int empty = 1;
 		char *to_say;
 
 		/* is CDATA empty? */
 		for (i = 0; i < len && empty; i++) {
-			empty &= isspace(data[i]);
+			empty &= !isgraph(data[i]);
 		}
 		if (empty) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skipping empty tts\n");
@@ -523,6 +538,7 @@ static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *
 		parsed_data->max_files = MAX_VOICE_FILES;
 		parsed_data->num_files = 0;
 		parsed_data->pool = handle->memory_pool;
+		parsed_data->sample_rate = handle->samplerate;
 		if (iks_parse(parser, path, 0, 1) == IKS_OK && parsed_data->num_files) {
 			context->files = parsed_data->files;
 			context->num_files = parsed_data->num_files;
@@ -684,14 +700,6 @@ static switch_status_t tts_file_close(switch_file_handle_t *handle)
 	switch_core_speech_close(&context->sh, &context->flags);
 	return SWITCH_STATUS_SUCCESS;
 }
-
-/**
- * Phrase playback state
- */
-struct phrase_context {
-	/** done flag */
-	int done;
-};
 
 /**
  * Configure module
