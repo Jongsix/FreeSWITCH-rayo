@@ -533,16 +533,8 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 		return 0;
 	}
 
-	/* convert SSML gender to FS gender */
-	if (!zstr_buf(say_voice->gender)) {
-		if (!strcmp("male", say_voice->gender)) {
-			gender = "masculine";
-		} else if (!strcmp("female", say_voice->gender)) {
-			gender = "feminine";
-		} else if (!strcmp("neutral", say_voice->gender)) {
-			gender = "neuter";
-		}
-	}
+	/* TODO need to_say gender, not voice gender */
+	gender = "neuter";
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Trying macro: %s, %s, %s, %s, %s\n", language->language, to_say, say_macro->type, say_macro->method, gender);
 
