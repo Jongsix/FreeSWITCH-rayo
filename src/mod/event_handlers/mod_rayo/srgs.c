@@ -94,12 +94,16 @@ struct srgs_node {
  * The SRGS SAX parser
  */
 struct srgs_parser {
+	/** parser memory pool */
+	switch_memory_pool_t *pool;
 	/** The SAX parser */
 	iksparser *p;
 	/** The document root */
 	struct srgs_node *root;
 	/** current node being parsed */
 	struct srgs_node *cur;
+	/** grammar cache */
+	switch_hash_t *cache;
 };
 
 /**
@@ -149,13 +153,13 @@ static const char *node_type_to_string(enum srgs_node_type type)
 
 /**
  * Create a new node
+ * @param pool to use
  * @param type of node
  * @return the node
  */
-static struct srgs_node *sn_new(enum srgs_node_type type)
+static struct srgs_node *sn_new(switch_memory_pool_t *pool, enum srgs_node_type type)
 {
-	struct srgs_node *node = malloc(sizeof(*node));
-	memset(node, 0, sizeof(*node));
+	struct srgs_node *node = switch_core_alloc(pool, sizeof(*node));
 	node->type = type;
 	return node;
 }
@@ -174,14 +178,15 @@ static struct srgs_node *sn_find_last_sibling(struct srgs_node *node)
 
 /**
  * Add child node
+ * @param pool to use
  * @param parent node to add child to
  * @param type the child node type
  * @return the child node
  */
-static struct srgs_node *sn_insert(struct srgs_node *parent, enum srgs_node_type type)
+static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node *parent, enum srgs_node_type type)
 {
 	struct srgs_node *sibling = sn_find_last_sibling(parent->child);
-	struct srgs_node *child = sn_new(type);
+	struct srgs_node *child = sn_new(pool, type);
 	child->parent = parent;
 	child->next = NULL;
 	if (sibling) {
@@ -194,12 +199,13 @@ static struct srgs_node *sn_insert(struct srgs_node *parent, enum srgs_node_type
 
 /**
  * Add digit child node
+ * @param pool to use
  * @param parent node to add digit to
  * @return the digit child node
  */
-static struct srgs_node *sn_insert_digit(struct srgs_node *parent, char digit)
+static struct srgs_node *sn_insert_digit(switch_memory_pool_t *pool, struct srgs_node *parent, char digit)
 {
-	struct srgs_node *child = sn_insert(parent, SNT_DIGIT);
+	struct srgs_node *child = sn_insert(pool, parent, SNT_DIGIT);
 	child->value.digit = digit;
 	return child;
 }
@@ -224,41 +230,6 @@ void sn_output(struct srgs_node *node) {
 		if (node->next) {
 			sn_output(node->next);
 		}
-	}
-}
-
-/**
- * Delete tree
- * @param node the root node
- */
-static void sn_delete(struct srgs_node *node)
-{
-	if (node) {
-		if (node->child) {
-			sn_delete(node->child);
-			node->child = NULL;
-		}
-		if (node->next) {
-			sn_delete(node->next);
-			node->next = NULL;
-		}
-		switch (node->type) {
-			case SNT_RULE:
-				if (node->value.rule.id) {
-					free(node->value.rule.id);
-					node->value.rule.id = NULL;
-				}
-				break;
-			case SNT_UNRESOLVED_REF:
-				if (node->value.ref.uri) {
-					free(node->value.ref.uri);
-					node->value.ref.uri = NULL;
-				}
-				break;
-			default:
-				break;
-		}
-		free(node);
 	}
 }
 
@@ -346,7 +317,7 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<rule scope=\'%s\'>  is_public = %i\n", atts[i + 1], rule->value.rule.is_public);
 			} else if (!strcmp("id", atts[i])) {
 				if (!zstr(atts[i + 1])) {
-					rule->value.rule.id = strdup(atts[i + 1]);
+					rule->value.rule.id = switch_core_strdup(parser->pool, atts[i + 1]);
 				}
 			}
 			i += 2;
@@ -379,7 +350,7 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 				if (uri[0] != '#') {
 					return IKS_BADXML;
 				}
-				ruleref->value.ref.uri = strdup(uri);
+				ruleref->value.ref.uri = switch_core_strdup(parser->pool, uri);
 				return IKS_OK;
 			}
 			i += 2;
@@ -453,7 +424,7 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 	switch (type) {
 		case IKS_OPEN: {
 			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "PUSH <%s> <- <%s>\n", node_type_to_string(parser->cur->type), name);
-			parser->cur = sn_insert(parser->cur, ntype);
+			parser->cur = sn_insert(parser->pool, parser->cur, ntype);
 			if (ntype == SNT_UNRESOLVED_REF) {
 				return process_ruleref(parser, atts);
 			} else if (ntype == SNT_ITEM) {
@@ -491,7 +462,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 			for (i = 0; i < len; i++) {
 				if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
 					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<%s> Add digit %c\n", node_type_to_string(parser->cur->type), data[i]);
-					digit = sn_insert_digit(digit, data[i]);
+					digit = sn_insert_digit(parser->pool, digit, data[i]);
 				}
 			}
 		}
@@ -505,9 +476,13 @@ static int cdata_hook(void *user_data, char *data, size_t len)
  */
 struct srgs_parser *srgs_parser_new(void)
 {
-	struct srgs_parser *parser = malloc(sizeof(struct srgs_parser));
-	memset(parser, 0, sizeof(*parser));
+	struct srgs_parser *parser = NULL;
+	switch_memory_pool_t *pool;
+	switch_core_new_memory_pool(&pool);
+	parser = switch_core_alloc(pool, sizeof(*parser));
+	parser->pool = pool;
 	parser->p = iks_sax_new(parser, tag_hook, cdata_hook);
+	switch_core_hash_init(&parser->cache, pool);
 	return parser;
 }
 
@@ -531,17 +506,21 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
 		return 0;
 	}
 
-	iks_parser_reset(parser->p);
-	if (parser->root) {
-		sn_delete(parser->root);
+	/* check for cached grammar */
+	parser->root = (struct srgs_node *)switch_core_hash_find(parser->cache, document);
+	if (!parser->root) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Parsing new grammar\n");
+		parser->root = sn_new(parser->pool, SNT_ROOT);
+		parser->cur = parser->root;
+		iks_parser_reset(parser->p);
+		if (iks_parse(parser->p, document, 0, 1) != IKS_OK || !resolve_refs(parser)) {
+			return 0;
+		}
+		switch_core_hash_insert(parser->cache, document, parser->root);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using cached grammar\n");
 	}
-	parser->root = sn_new(SNT_ROOT);
-	parser->cur = parser->root;
-	if (iks_parse(parser->p, document, 0, 1) != IKS_OK) {
-		return 0;
-	}
-	
-	return resolve_refs(parser);
+	return 1;
 }
 
 /**
@@ -577,15 +556,12 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 void srgs_destroy(struct srgs_parser *parser)
 {
 	if (parser) {
-		if (parser->root) {
-			sn_delete(parser->root);
-			parser->root = NULL;
-			parser->cur = NULL;
-		}
 		if (parser->p) {
 			iks_parser_delete(parser->p);
 		}
-		free(parser);
+		if (parser->pool) {
+			switch_core_destroy_memory_pool(&parser->pool);
+		}
 	}
 }
 
