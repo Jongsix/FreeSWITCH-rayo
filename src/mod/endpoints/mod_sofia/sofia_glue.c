@@ -6292,6 +6292,7 @@ int sofia_glue_init_sql(sofia_profile_t *profile)
 		
 	switch_cache_db_handle_t *dbh = sofia_glue_get_db_handle(profile);
 	char *test2;
+	char *err;
 
 	if (!dbh) {
 		return 0;
@@ -6309,14 +6310,20 @@ int sofia_glue_init_sql(sofia_profile_t *profile)
 	
 	test2 = switch_mprintf("%s;%s", test_sql, test_sql);
 			
-	if (switch_cache_db_execute_sql(dbh, test2, NULL) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "GREAT SCOTT!!! Cannot execute batched statements!\n"
-						  "If you are using mysql, make sure you are using MYODBC 3.51.18 or higher and enable FLAG_MULTI_STATEMENTS\n");
-		
-		switch_cache_db_release_db_handle(&dbh);
-		free(test2);
-		free(test_sql);
-		return 0;
+	if (switch_cache_db_execute_sql(dbh, test2, &err) != SWITCH_STATUS_SUCCESS) {
+
+		if (switch_stristr("read-only", err)) {
+			free(err);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "GREAT SCOTT!!! Cannot execute batched statements! [%s]\n"
+							  "If you are using mysql, make sure you are using MYODBC 3.51.18 or higher and enable FLAG_MULTI_STATEMENTS\n", err);
+			
+			switch_cache_db_release_db_handle(&dbh);
+			free(test2);
+			free(test_sql);
+			free(err);
+			return 0;
+		}
 	}
 
 	free(test2);
@@ -7083,7 +7090,21 @@ char *sofia_glue_gen_contact_str(sofia_profile_t *profile, sip_t const *sip, nua
 		np->is_nat = NULL;
 	}
 
-	if (np->is_nat && np->fs_path) {
+	if (sip->sip_record_route && sip->sip_record_route->r_url) {
+		char *full_contact = sip_header_as_string(nh->nh_home, (void *) contact);
+		char *route = sofia_glue_strip_uri(sip_header_as_string(nh->nh_home, (void *) sip->sip_record_route));
+		char *full_contact_dup;
+		char *route_encoded;
+		int route_encoded_len;
+		full_contact_dup = sofia_glue_get_url_from_contact(full_contact, 1);
+		route_encoded_len = (int)(strlen(route) * 3) + 1;
+		switch_zmalloc(route_encoded, route_encoded_len);
+		switch_url_encode(route, route_encoded, route_encoded_len);
+		contact_str = switch_mprintf("%s <%s;fs_path=%s>", display, full_contact_dup, route_encoded);
+		free(full_contact_dup);
+		free(route_encoded);
+	}
+	else if (np->is_nat && np->fs_path) {
 		char *full_contact = sip_header_as_string(nh->nh_home, (void *) contact);
 		char *full_contact_dup;
 		char *path_encoded;

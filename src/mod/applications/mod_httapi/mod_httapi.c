@@ -1607,6 +1607,8 @@ static switch_status_t httapi_sync(client_t *client)
 	if (client->profile->cookie_file) {
 		switch_curl_easy_setopt(curl_handle, CURLOPT_COOKIEJAR, client->profile->cookie_file);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_COOKIEFILE, client->profile->cookie_file);
+	} else {
+		switch_curl_easy_setopt(curl_handle, CURLOPT_COOKIE, "");
 	}
 
 	if (client->profile->bind_local) {
@@ -2754,6 +2756,7 @@ static switch_status_t http_file_file_open(switch_file_handle_t *handle, const c
 	handle->speed = context->fh.speed;
 	handle->interval = context->fh.interval;
 	handle->channels = context->fh.channels;
+	handle->flags |= SWITCH_FILE_NOMUX;
 
 	if (switch_test_flag((&context->fh), SWITCH_FILE_NATIVE)) {
 		switch_set_flag(handle, SWITCH_FILE_NATIVE);
