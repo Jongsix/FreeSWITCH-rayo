@@ -59,6 +59,8 @@ struct rayo_call {
 	char *input_jid;
 	/** output component JID */
 	char *output_jid;
+	/** next component ref */
+	int next_ref;
 };
 
 #endif

@@ -36,14 +36,11 @@
 #define MAX_DTMF 1024
 
 /**
- * Create a UUID
+ * Create a component ref
  */
-static char *create_uuid_str(switch_core_session_t *session)
+static char *create_component_ref(switch_core_session_t *session, struct rayo_call *call, const char *type) 
 {
-	char ref[SWITCH_UUID_FORMATTED_LENGTH + 1];
-	ref[SWITCH_UUID_FORMATTED_LENGTH] = '\0';
-	switch_uuid_str(ref, sizeof(ref));
-	return switch_core_session_strdup(session, ref);
+	return switch_core_session_sprintf(session, "%s-%d", type, call->next_ref++);
 }
 
 /**
@@ -151,23 +148,40 @@ static void send_input_component_dtmf_match(switch_core_session_t *session, cons
 {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	char *response = NULL;
+	iks *response = iks_new("presence");
+	iks *x;
 	
-	response = switch_mprintf(
-		"<presence from='%s' to='%s' type='unavailable'>"
-		"<complete xmlns='urn:xmpp:rayo:ext:1'><match xmlns='urn:xmpp:rayo:input:complete:1'>"
-		"<result xmlns='http://www.w3c.org/2000/11/nlsml' xmlns:xf='http://www.w3.org/2000/xforms'>"
-		"<input><input mode='dtmf' confidence='100'>%s</input></input></match></complete></presence>",
-		jid,
-		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		digits);
-
+	iks_insert_attrib(response, "from", jid);
+	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
+	iks_insert_attrib(response, "type", "unavailable");
+	x = iks_insert(response, "complete");
+	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+	x = iks_insert(x, "success"); /* TODO rayo spec says this should be "match" */
+	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:input:complete:1");
+	iks_insert_attrib(x, "mode", "dtmf");
+	iks_insert_attrib(x, "confidence", "1.0");
+	x = iks_insert(x, "utterance");
+	iks_insert_cdata(x, digits, strlen(digits));
+#if 0
+	x = iks_insert(x, "result");
+	iks_insert_attrib(x, "xmlns", "http://www.w3c.org/2000/11/nlsml");
+	iks_insert_attrib(x, "xmlns:xf", "http://www.w3.org/2000/xforms");
+	//iks_insert_attrib(x, "grammar", "foo");
+	x = iks_insert(x, "input");
+	x = iks_insert(x, "input");
+	iks_insert_attrib(x, "mode", "dtmf");
+	iks_insert_attrib(x, "confidence", "100");
+	iks_insert_cdata(x, digits, strlen(digits));
+#endif
+	
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		char *response_str = iks_string(NULL, response);
 		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response);
+		switch_event_add_body(event, "%s", response_str);
 		switch_event_fire(&event);
+		iks_free(response_str);
 	}
-	switch_safe_free(response);
+	iks_delete(response);
 }
 
 /**
@@ -215,11 +229,17 @@ struct input_attribs {
 	struct iks_attrib max_silence;
 };
 
-#define INPUT_INITIAL_TIMEOUT "initial-timeout", "urn:xmpp:rayo:input:complete:1"
-#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", "urn:xmpp:rayo:input:complete:1"
-#define INPUT_MAX_SILENCE "max-silence", "urn:xmpp:rayo:input:complete:1"
-#define INPUT_MIN_CONFIDENCE "min-confidence", "urn:xmpp:rayo:input:complete:1"
+/* not yet supported by adhearsion */
+//#define INPUT_INITIAL_TIMEOUT "initial-timeout", "urn:xmpp:rayo:input:complete:1"
+//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", "urn:xmpp:rayo:input:complete:1"
+//#define INPUT_MAX_SILENCE "max-silence", "urn:xmpp:rayo:input:complete:1"
+//#define INPUT_MIN_CONFIDENCE "min-confidence", "urn:xmpp:rayo:input:complete:1"
+
+
 #define INPUT_NOMATCH "nomatch", "urn:xmpp:rayo:input:complete:1"
+
+/* this is not part of rayo spec */
+#define INPUT_NOINPUT "noinput", "urn:xmpp:rayo:input:complete:1"
 
 #define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
 
@@ -386,7 +406,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	}
 
 	/* create JID */
-	ref = create_uuid_str(session);
+	ref = create_component_ref(session, call, "input");
 	call->input_jid = create_call_component_jid(session, call, ref);
 	
 	/* install input callbacks */
@@ -489,7 +509,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	}
 
 	/* acknowledge command */
-	ref = create_uuid_str(session);
+	ref = create_component_ref(session, call, "output");
 	call->output_jid = create_call_component_jid(session, call, ref);
 	send_component_ref(session, iq, ref);
 	
