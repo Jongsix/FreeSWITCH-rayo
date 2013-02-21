@@ -96,14 +96,14 @@ struct srgs_node {
 struct srgs_parser {
 	/** parser memory pool */
 	switch_memory_pool_t *pool;
-	/** The SAX parser */
-	iksparser *p;
 	/** The document root */
 	struct srgs_node *root;
 	/** current node being parsed */
 	struct srgs_node *cur;
 	/** grammar cache */
 	switch_hash_t *cache;
+	/** optional uuid for logging */
+	const char *uuid;
 };
 
 /**
@@ -314,9 +314,10 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("scope", atts[i])) {
 				rule->value.rule.is_public = !zstr(atts[i + 1]) && !strcmp("public", atts[i + 1]);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<rule scope=\'%s\'>  is_public = %i\n", atts[i + 1], rule->value.rule.is_public);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<rule scope=\'%s\'>  is_public = %i\n", atts[i + 1], rule->value.rule.is_public);
 			} else if (!strcmp("id", atts[i])) {
 				if (!zstr(atts[i + 1])) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<rule id=\'%s\'>\n", atts[i + 1]);
 					rule->value.rule.id = switch_core_strdup(parser->pool, atts[i + 1]);
 				}
 			}
@@ -343,6 +344,7 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("uri", atts[i])) {
 				char *uri = atts[i + 1];
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<ruleref uri=\'%s\'>\n", uri);
 				if (zstr(uri)) {
 					return IKS_BADXML;
 				}
@@ -375,6 +377,7 @@ static int process_item(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("repeat", atts[i])) {
 				char *repeat = atts[i + 1];
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<item repeat=\"%s\">\n", repeat);
 				if (zstr(repeat)) {
 					return IKS_BADXML;
 				}
@@ -471,17 +474,16 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 }
 
 /**
- * Create a new parser.  Call srgs_destroy() when done
- * @param parser the created parser
+ * Create a new parser.
+ * @param pool the pool to use
+ * @param uuid optional uuid for logging
+ * @return the created parser
  */
-struct srgs_parser *srgs_parser_new(void)
+struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid)
 {
-	struct srgs_parser *parser = NULL;
-	switch_memory_pool_t *pool;
-	switch_core_new_memory_pool(&pool);
-	parser = switch_core_alloc(pool, sizeof(*parser));
+	struct srgs_parser *parser = switch_core_alloc(pool, sizeof(*parser));
 	parser->pool = pool;
-	parser->p = iks_sax_new(parser, tag_hook, cdata_hook);
+	parser->uuid = zstr(uuid) ? "" : uuid;
 	switch_core_hash_init(&parser->cache, pool);
 	return parser;
 }
@@ -503,22 +505,26 @@ int resolve_refs(struct srgs_parser *parser)
 int srgs_parse(struct srgs_parser *parser, const char *document)
 {
 	if (zstr(document)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Missing grammar document\n");
 		return 0;
 	}
 
 	/* check for cached grammar */
 	parser->root = (struct srgs_node *)switch_core_hash_find(parser->cache, document);
 	if (!parser->root) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Parsing new grammar\n");
+		int result = 0;
+		iksparser *p = iks_sax_new(parser, tag_hook, cdata_hook);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
 		parser->root = sn_new(parser->pool, SNT_ROOT);
 		parser->cur = parser->root;
-		iks_parser_reset(parser->p);
-		if (iks_parse(parser->p, document, 0, 1) != IKS_OK || !resolve_refs(parser)) {
-			return 0;
+		result = (iks_parse(p, document, 0, 1) == IKS_OK && resolve_refs(parser));
+		iks_parser_delete(p);
+		if (result) {
+			switch_core_hash_insert(parser->cache, document, parser->root);
 		}
-		switch_core_hash_insert(parser->cache, document, parser->root);
+		return result;
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using cached grammar\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
 	}
 	return 1;
 }
@@ -538,7 +544,7 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 		for (rule = parser->root->child; rule && !(match & MT_MATCH); rule = rule->next) {
 			if (rule->type == SNT_RULE && rule->value.rule.is_public) {
 				/* detects partial (0x2) and full matches (0x1) */
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
 				match |= sn_match(rule, input);
 			}
 		}
@@ -548,21 +554,6 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 		}
 	}
 	return match;
-}
-
-/**
- * Destroy the parser
- */
-void srgs_destroy(struct srgs_parser *parser)
-{
-	if (parser) {
-		if (parser->p) {
-			iks_parser_delete(parser->p);
-		}
-		if (parser->pool) {
-			switch_core_destroy_memory_pool(&parser->pool);
-		}
-	}
 }
 
 /* For Emacs:

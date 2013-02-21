@@ -30,6 +30,8 @@
 #ifndef SRGS_H
 #define SRGS_H
 
+#include <switch.h>
+
 struct srgs_parser;
 
 enum match_type {
@@ -38,7 +40,7 @@ enum match_type {
 	MT_NOT_ENOUGH_INPUT
 };
 
-extern struct srgs_parser *srgs_parser_new(void);
+extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
 extern int srgs_parse(struct srgs_parser *parser, const char *document);
 extern enum match_type srgs_match(struct srgs_parser *parser, const char *input);
 extern void srgs_destroy(struct srgs_parser *parser);

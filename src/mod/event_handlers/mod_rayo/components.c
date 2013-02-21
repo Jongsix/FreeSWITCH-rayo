@@ -35,6 +35,7 @@
 
 #define MAX_DTMF 1024
 
+
 /**
  * Create a component ref
  */
@@ -251,25 +252,11 @@ struct input_handler {
 	char digits[MAX_DTMF + 1];
 	struct srgs_parser *parser;
 	struct rayo_call *call;
+	char *terminators;
+	int initial_timeout;
+	int inter_digit_timeout;
+	int max_silence;
 };
-
-/**
- * Process hangup
- */
-static switch_status_t input_component_on_hangup(switch_core_session_t *session)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler) {
-		switch_channel_set_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR, NULL);
-		if (handler->parser) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroying SRGS parser\n");
-			srgs_destroy(handler->parser);
-			handler->parser = NULL;
-		}
-	}
-	return SWITCH_STATUS_SUCCESS;
-}
 
 /**
  * Process DTMF press
@@ -319,17 +306,6 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 	}
     return SWITCH_STATUS_SUCCESS;
 }
-
-static const switch_state_handler_table_t input_component_state_handlers = {
-    /*.on_init */ NULL,
-    /*.on_routing */ NULL,
-    /*.on_execute */ NULL,
-    /*.on_hangup */ input_component_on_hangup,
-    /*.on_exchange_media */ NULL,
-    /*.on_soft_execute */ NULL,
-    /*.on_consume_media */ NULL,
-    /*.on_hibernate */ NULL
-};
 
 /**
  * Start execution of input component
@@ -383,20 +359,23 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
+	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
 
 	/* set up input handler for new detection */
 	handler = (struct input_handler *)switch_channel_get_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (!handler) {
 		/* create input handler */
 		handler = switch_core_session_alloc(session, sizeof(*handler));
-		handler->parser = srgs_parser_new();
+		handler->parser = srgs_parser_new(switch_core_session_get_pool(session), switch_core_session_get_uuid(session));
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
-		switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
 	}
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
 	handler->call = call;
+	handler->terminators = strdup(i_attribs.terminator.v.s);
+	handler->initial_timeout = i_attribs.initial_timeout.v.i;
+	handler->inter_digit_timeout = i_attribs.inter_digit_timeout.v.i;
+	handler->max_silence = i_attribs.max_silence.v.i;
 
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs)) {
