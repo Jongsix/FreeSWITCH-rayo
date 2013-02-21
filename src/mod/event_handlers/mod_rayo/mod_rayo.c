@@ -1653,7 +1653,7 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 	}
 
 	/* execute the component */
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
+	//switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
 	command = iks_name(iks_child(iq));
 	if (!strcmp("prompt", command)) {
 		start_prompt_component(session, call, iq);

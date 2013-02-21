@@ -228,7 +228,7 @@ struct input_attribs {
  */
 struct input_handler {
 	int num_digits;
-	char digits[MAX_DTMF * 2 + 1];
+	char digits[MAX_DTMF + 1];
 	struct srgs_parser *parser;
 	struct rayo_call *call;
 };
@@ -261,10 +261,9 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
 		enum match_type match;
-		handler->digits[handler->num_digits * 2] = dtmf->digit;
-		handler->digits[handler->num_digits * 2 + 1] = ' ';
+		handler->digits[handler->num_digits] = dtmf->digit;
 		handler->num_digits++;
-		handler->digits[handler->num_digits * 2] = '\0';
+		handler->digits[handler->num_digits] = '\0';
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
 
 		/* check for match */
