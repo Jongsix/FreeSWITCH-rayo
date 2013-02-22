@@ -326,7 +326,13 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 		} else if (handler->inter_digit_timeout > 0 && handler->got_first_digit && elapsed > (handler->inter_digit_timeout * 1000)) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%i inter-digit-timeout\n", handler->inter_digit_timeout);
 			switch_mutex_lock(handler->call->mutex);
-			send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+
+			if (handler->lazy_match) {
+				/* enough digits have been collected */
+				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
+			} else {
+				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+			}
 
 			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
