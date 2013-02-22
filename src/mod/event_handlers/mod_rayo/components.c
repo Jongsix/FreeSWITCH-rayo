@@ -163,18 +163,7 @@ static void send_input_component_dtmf_match(switch_core_session_t *session, cons
 	iks_insert_attrib(x, "confidence", "1.0");
 	x = iks_insert(x, "utterance");
 	iks_insert_cdata(x, digits, strlen(digits));
-#if 0
-	x = iks_insert(x, "result");
-	iks_insert_attrib(x, "xmlns", "http://www.w3c.org/2000/11/nlsml");
-	iks_insert_attrib(x, "xmlns:xf", "http://www.w3.org/2000/xforms");
-	//iks_insert_attrib(x, "grammar", "foo");
-	x = iks_insert(x, "input");
-	x = iks_insert(x, "input");
-	iks_insert_attrib(x, "mode", "dtmf");
-	iks_insert_attrib(x, "confidence", "100");
-	iks_insert_cdata(x, digits, strlen(digits));
-#endif
-	
+
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
 		char *response_str = iks_string(NULL, response);
 		switch_channel_event_set_data(channel, event);
@@ -185,13 +174,8 @@ static void send_input_component_dtmf_match(switch_core_session_t *session, cons
 	iks_delete(response);
 }
 
-/**
- * Assign value to attribute if valid input mode (
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
- */
-static int is_input_mode(struct iks_attrib *attrib, const char *value) {
+static ATTRIB_RULE(input_mode)
+{
 	attrib->type = IAT_STRING;
 	attrib->test = "(any || dtmf || speech)";
 	attrib->v.s = (char *)value;
@@ -204,14 +188,14 @@ static int is_input_mode(struct iks_attrib *attrib, const char *value) {
  * <input> component validation
  */
 static const struct iks_attrib_definition input_attribs_def[] = {
-	{ "mode", "any", is_input_mode, SWITCH_FALSE },
-	{ "terminator", "", iks_attrib_is_any, SWITCH_FALSE },
-	{ "recognizer", "en-US", iks_attrib_is_any /* should be ISO 639-3 codes */, SWITCH_FALSE },
-	{ "initial-timeout", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "inter-digit-timeout", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "sensitivity", "0.5", iks_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "min-confidence", "0", iks_attrib_is_decimal_between_zero_and_one, SWITCH_FALSE },
-	{ "max-silence", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
+	ATTRIB(mode, any, input_mode),
+	ATTRIB(terminator,, any),
+	ATTRIB(recognizer, en-US, any),
+	ATTRIB(initial-timeout, -1, positive_or_neg_one),
+	ATTRIB(inter-digit-timeout, -1, positive_or_neg_one),
+	ATTRIB(sensitivity, 0.5, decimal_between_zero_and_one),
+	ATTRIB(min-confidence, 0, decimal_between_zero_and_one),
+	ATTRIB(max-silence, -1, positive_or_neg_one),
 	LAST_ATTRIB
 };
 
@@ -235,8 +219,6 @@ struct input_attribs {
 //#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", "urn:xmpp:rayo:input:complete:1"
 //#define INPUT_MAX_SILENCE "max-silence", "urn:xmpp:rayo:input:complete:1"
 //#define INPUT_MIN_CONFIDENCE "min-confidence", "urn:xmpp:rayo:input:complete:1"
-
-
 #define INPUT_NOMATCH "nomatch", "urn:xmpp:rayo:input:complete:1"
 
 /* this is not part of rayo spec */
@@ -403,20 +385,14 @@ done:
  * <output> component validation
  */
 static const struct iks_attrib_definition output_attribs_def[] = {
-	{ "start-offset", "0", iks_attrib_is_not_negative, SWITCH_FALSE },
-	{ "start-paused", "false", iks_attrib_is_bool, SWITCH_FALSE },
-	{ "repeat-interval", "0", iks_attrib_is_not_negative, SWITCH_FALSE },
-	{ "repeat-times", "1", iks_attrib_is_positive, SWITCH_FALSE },
-	{ "max-time", "-1", iks_attrib_is_positive_or_neg_one, SWITCH_FALSE },
-	{ "renderer", "", iks_attrib_is_any, SWITCH_FALSE },
+	ATTRIB(start-offset, 0, not_negative),
+	ATTRIB(start-paused, false, bool),
+	ATTRIB(repeat-interval, 0, not_negative),
+	ATTRIB(repeat-times, 1, positive),
+	ATTRIB(max-time, -1, positive_or_neg_one),
+	ATTRIB(renderer,, any),
 	LAST_ATTRIB
 };
-
-
-/* adhearsion uses incorrect reason for finish... this is a temporary fix */
-#define OUTPUT_FINISH_AHN "success", "urn:xmpp:rayo:output:complete:1"
-#define OUTPUT_FINISH "finish", "urn:xmpp:rayo:output:complete:1"
-#define OUTPUT_MAX_TIME "max-time", "urn:xmpp:rayo:output:complete:1"
 
 /**
  * <output> component attributes
@@ -430,6 +406,11 @@ struct output_attribs {
 	struct iks_attrib max_time;
 	struct iks_attrib renderer;
 };
+
+/* adhearsion uses incorrect reason for finish... this is a temporary fix */
+#define OUTPUT_FINISH_AHN "success", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_FINISH "finish", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_MAX_TIME "max-time", "urn:xmpp:rayo:output:complete:1"
 
 /**
  * <output> a document
@@ -515,7 +496,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
  * <prompt> component validation
  */
 static const struct iks_attrib_definition prompt_attribs_def[] = {
-	{ "barge-in", "true", iks_attrib_is_bool, SWITCH_FALSE },
+	ATTRIB(barge-in, true, bool),
 	LAST_ATTRIB
 };
 
