@@ -395,7 +395,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	handler->call = call;
 	handler->last_digit_time = switch_micro_time_now();
 	handler->got_first_digit = 0;
-	handler->terminators = strdup(i_attribs.terminator.v.s);
+	handler->terminators = switch_core_session_strdup(session, i_attribs.terminator.v.s);
 	handler->initial_timeout = i_attribs.initial_timeout.v.i;
 	handler->inter_digit_timeout = i_attribs.inter_digit_timeout.v.i;
 	handler->max_silence = i_attribs.max_silence.v.i;
@@ -458,10 +458,10 @@ struct output_attribs {
  * <output> a document
  * @param session the session to play to
  * @param document the document to play
- * @param args input args
+ * @param max_time_ms maximum time to play in ms.  -1 if unbounded.
  * @return status
  */
-switch_status_t output_document(switch_core_session_t *session, iks *document, switch_input_args_t *args)
+switch_status_t output_document(switch_core_session_t *session, iks *document, int max_time_ms)
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
 	char *name;
@@ -472,11 +472,17 @@ switch_status_t output_document(switch_core_session_t *session, iks *document, s
 	name = iks_name(document);
 	if (!strcmp("speak", name)) {
 		char *ssml = iks_string(NULL, document);
-		char *inline_ssml = switch_mprintf("ssml://%s", ssml);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", inline_ssml);
-		status = switch_ivr_play_file(session, NULL, inline_ssml, args);
+		char *filename = NULL;
+
+		/* append timeout param and SSML file format and the SSML document */
+		filename = switch_mprintf("{timeout=%i}ssml://%s", max_time_ms, ssml);
+
+		/* play the file */
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", filename);
+		status = switch_ivr_play_file(session, NULL, filename, NULL);
+
 		iks_free(ssml);
-		switch_safe_free(inline_ssml);
+		switch_safe_free(filename);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <speak>, got: <%s>!\n", name);
 	}
@@ -492,6 +498,8 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	char *ref = NULL;
 	iks *output = iks_child(iq);
 	iks *document = NULL;
+	switch_time_t start_time = switch_micro_time_now();
+	int max_time_ms;
 
 	switch_mutex_lock(call->mutex);
 	
@@ -509,6 +517,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
+	max_time_ms = o_attribs.max_time.v.i;
 
 	/* acknowledge command */
 	ref = create_component_ref(session, call, "output");
@@ -520,16 +529,29 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	/* render document(s) */
 	document = iks_find(output, "document");
 	if (!document) {
-		output_document(session, iks_child(output), NULL);
+		output_document(session, iks_child(output), max_time_ms);
 	} else {
 		for (; document; document = iks_next(document)) {
-			output_document(session, iks_child(document), NULL);
+			if (max_time_ms > 0) {
+				int elapsed_time_ms = (int)(switch_micro_time_now() - start_time) / 1000;
+				if (elapsed_time_ms < max_time_ms) {
+					output_document(session, iks_child(document), max_time_ms - elapsed_time_ms);
+				} else {
+					break;
+				}
+			} else {
+				output_document(session, iks_child(document), -1);
+			}
 		}
 	}
 
 	/* done */
 	switch_mutex_lock(call->mutex);
-	send_component_complete(session, call->output_jid, OUTPUT_FINISH_AHN);
+	if (max_time_ms > 0 && (int)(switch_micro_time_now() - start_time) / 1000 > max_time_ms) {
+		send_component_complete(session, call->output_jid, OUTPUT_MAX_TIME);
+	} else {
+		send_component_complete(session, call->output_jid, OUTPUT_FINISH_AHN);
+	}
 	call->output_jid = "";
 	switch_mutex_unlock(call->mutex);
 }
