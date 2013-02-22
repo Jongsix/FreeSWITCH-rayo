@@ -32,6 +32,8 @@
 
 #include "srgs.h"
 
+#define MAX_RECURSION 100
+
 /**
  * SRGS node types
  */
@@ -75,6 +77,8 @@ union ref_value {
 struct srgs_node {
 	/** Type of node */
 	enum srgs_node_type type;
+	/** True if node has been inspected for loops */
+	char visited;
 	/** Node value */
 	union {
 		char digit;
@@ -102,6 +106,8 @@ struct srgs_parser {
 	struct srgs_node *cur;
 	/** grammar cache */
 	switch_hash_t *cache;
+	/** rule names mapped to node */
+	switch_hash_t *rules;
 	/** optional uuid for logging */
 	const char *uuid;
 };
@@ -161,6 +167,7 @@ static struct srgs_node *sn_new(switch_memory_pool_t *pool, enum srgs_node_type 
 {
 	struct srgs_node *node = switch_core_alloc(pool, sizeof(*node));
 	node->type = type;
+	node->visited = 0;
 	return node;
 }
 
@@ -237,9 +244,10 @@ void sn_output(struct srgs_node *node) {
  * Check <rule> for match against input
  * @param rule to match
  * @param input to match
+ * @param level recursion level
  * @return MATCH, NO_MATCH, NOT_ENOUGH_INPUT
  */
-static enum match_type sn_match(struct srgs_node *node, const char *input)
+static enum match_type sn_match(struct srgs_node *node, const char *input, int level)
 {
 	if (!node) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "NULL node\n");
@@ -250,17 +258,22 @@ static enum match_type sn_match(struct srgs_node *node, const char *input)
 		return MT_NOT_ENOUGH_INPUT;
 	}
 	
+	if (level > MAX_RECURSION) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Match recursion too deep!\n");
+		return MT_NO_MATCH;
+	}
+	
 	switch (node->type) {
 		case SNT_ONE_OF: {
 			struct srgs_node *item;
 			enum match_type match = MT_NO_MATCH;
 			
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <one-of> %s\n", input);
-			
+
 			/* check for matches in items... this is an OR operation */
 			for (item = node->child; item && !(match & MT_MATCH); item = item->next) {
 				/* detects partial (0x2) and full matches (0x1) */
-				match |= sn_match(item, input);
+				match |= sn_match(item, input, level + 1);
 			}
 			if (match & MT_MATCH) {
 				return MT_MATCH;
@@ -276,7 +289,7 @@ static enum match_type sn_match(struct srgs_node *node, const char *input)
 			
 			/* check for matches in items... this is an AND operation */
 			for (child = node->child; child && match == MT_MATCH; child = child->next) {
-				match = sn_match(child, input);
+				match = sn_match(child, input, level + 1);
 			}
 			return match;
 		}
@@ -286,7 +299,7 @@ static enum match_type sn_match(struct srgs_node *node, const char *input)
 				return MT_NO_MATCH;
 			}
 			if (node->child) {
-				return sn_match(node->child, input + 1);
+				return sn_match(node->child, input + 1, level + 1);
 			}
 			return MT_MATCH;
 		}
@@ -325,8 +338,16 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 		}
 	}
 	if (zstr(rule->value.rule.id)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id);
 		return IKS_BADXML;
 	}
+	
+	if (switch_core_hash_find(parser->rules, rule->value.rule.id)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id);
+		return IKS_BADXML;
+	}
+	switch_core_hash_insert(parser->rules, rule->value.rule.id, rule);
+	
 	return IKS_OK;
 }
 
@@ -349,7 +370,7 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 					return IKS_BADXML;
 				}
 				/* only allow local reference */
-				if (uri[0] != '#') {
+				if (uri[0] != '#' || strlen(uri) < 2) {
 					return IKS_BADXML;
 				}
 				ruleref->value.ref.uri = switch_core_strdup(parser->pool, uri);
@@ -485,15 +506,64 @@ struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid
 	parser->pool = pool;
 	parser->uuid = zstr(uuid) ? "" : uuid;
 	switch_core_hash_init(&parser->cache, pool);
+	switch_core_hash_init(&parser->rules, pool);
 	return parser;
 }
 
 /**
- * Resolve all unresolved references
+ * Resolve all unresolved references and detect loops.
+ * @param parser the parser
+ * @param node the current node
+ * @param level the recursion level
  */
-int resolve_refs(struct srgs_parser *parser)
+int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
 {
-	/* TODO */
+	if (node->visited) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Loop detected.\n");
+		return 0;
+	}
+	node->visited = 1;
+
+	if (level > MAX_RECURSION) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Recursion too deep.\n");
+		return 0;
+	}
+
+	if (node->type == SNT_UNRESOLVED_REF) {
+		/* resolve reference to local rule- drop first character # from URI */
+		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(parser->rules, node->value.ref.uri + 1);
+		if (!rule) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Local rule not found: %s\n", node->value.ref.uri);
+			return 0;
+		}
+
+		/* link to rule */
+		node->type = SNT_REF;
+		node->value.ref.node = rule;
+	}
+
+	/* travel through rule to detect loops */
+	if (node->type == SNT_REF) {
+		if (!resolve_refs(parser, node->value.ref.node, level + 1)) {
+			return 0;
+		}
+	}
+
+	/* resolve children refs */
+	if (node->child) {
+		if (!resolve_refs(parser, node->child, level + 1)) {
+			return 0;
+		}
+	}
+
+	/* resolve sibling refs */
+	if (node->next) {
+		if (!resolve_refs(parser, node->next, level)) {
+			return 0;
+		}
+	}
+
+	node->visited = 0;
 	return 1;
 }
 
@@ -505,7 +575,7 @@ int resolve_refs(struct srgs_parser *parser)
 int srgs_parse(struct srgs_parser *parser, const char *document)
 {
 	if (zstr(document)) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Missing grammar document\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing grammar document\n");
 		return 0;
 	}
 
@@ -517,7 +587,8 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
 		parser->root = sn_new(parser->pool, SNT_ROOT);
 		parser->cur = parser->root;
-		result = (iks_parse(p, document, 0, 1) == IKS_OK && resolve_refs(parser));
+		switch_core_hash_delete_multi(parser->rules, NULL, NULL);
+		result = (iks_parse(p, document, 0, 1) == IKS_OK && resolve_refs(parser, parser->root, 0));
 		iks_parser_delete(p);
 		if (result) {
 			switch_core_hash_insert(parser->cache, document, parser->root);
@@ -545,7 +616,7 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 			if (rule->type == SNT_RULE && rule->value.rule.is_public) {
 				/* detects partial (0x2) and full matches (0x1) */
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
-				match |= sn_match(rule, input);
+				match |= sn_match(rule, input, 0);
 			}
 		}
 		if (match & MT_MATCH) {
