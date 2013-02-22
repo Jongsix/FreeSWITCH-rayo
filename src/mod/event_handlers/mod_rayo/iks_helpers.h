@@ -94,10 +94,8 @@ struct iks_attrib_definition {
 	const char *name;
 	const char *default_value;
 	iks_attrib_conversion_function fn;
-	int is_last;
 };
 
-#define LAST_ATTRIB { NULL, NULL, NULL, SWITCH_TRUE }
 
 /**
  * Attributes to get
@@ -107,13 +105,18 @@ struct iks_attribs {
 	struct iks_attrib attrib[];
 };
 
-extern int iks_attrib_is_bool(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_not_negative(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_positive_or_neg_one(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_any(struct iks_attrib *attrib, const char *value);
-extern int iks_attrib_is_decimal_between_zero_and_one(struct iks_attrib *attrib, const char *value);
+#define LAST_ATTRIB { NULL, NULL, NULL }
+#define EMPTY_ATTRIB(name, rule) { #name, "", iks_attrib_is_ ## rule }
+#define ATTRIB(name, default_value, rule) { #name, #default_value, iks_attrib_is_ ## rule }
+#define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (struct iks_attrib *attrib, const char *value)
+
+extern ATTRIB_RULE(bool);
+extern ATTRIB_RULE(not_negative);
+extern ATTRIB_RULE(positive);
+extern ATTRIB_RULE(positive_or_neg_one);
+extern ATTRIB_RULE(any);
+extern ATTRIB_RULE(decimal_between_zero_and_one);
+
 extern int iks_attrib_parse(switch_core_session_t *session, iks *node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs);
 
 #endif
