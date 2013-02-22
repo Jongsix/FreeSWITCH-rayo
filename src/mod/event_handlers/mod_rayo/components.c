@@ -238,14 +238,49 @@ struct input_handler {
 	int initial_timeout;
 	int inter_digit_timeout;
 	int max_silence;
+	switch_time_t last_digit_time;
+	int got_first_digit;
 };
+
+static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
+
+/**
+ * Monitor DTMF timeouts
+ */
+static switch_status_t input_component_on_read_frame(switch_core_session_t *session, switch_frame_t **frame, switch_io_flag_t flags, int i)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (handler) {
+		switch_time_t elapsed = switch_time_now() - handler->last_digit_time;
+		if (handler->initial_timeout > 0 && !handler->got_first_digit && elapsed > (handler->initial_timeout * 1000)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%i initial-timeout\n", handler->initial_timeout);
+			switch_mutex_lock(handler->call->mutex);
+			send_component_complete(session, handler->call->input_jid, INPUT_NOINPUT);
+
+			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+			handler->call->input_jid = "";
+			switch_mutex_unlock(handler->call->mutex);
+		} else if (handler->inter_digit_timeout > 0 && handler->got_first_digit && elapsed > (handler->inter_digit_timeout * 1000)) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%i inter-digit-timeout\n", handler->inter_digit_timeout);
+			switch_mutex_lock(handler->call->mutex);
+			send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+
+			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+			handler->call->input_jid = "";
+			switch_mutex_unlock(handler->call->mutex);
+		}
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
 
 /**
  * Process DTMF press
  */
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction)
 {
-	/* TODO digit timeouts */
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
@@ -253,7 +288,9 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		handler->digits[handler->num_digits] = dtmf->digit;
 		handler->num_digits++;
 		handler->digits[handler->num_digits] = '\0';
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
+		handler->last_digit_time = switch_micro_time_now();
+		handler->got_first_digit = 1;
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
 
 		/* check for match */
 		match = srgs_match(handler->parser, handler->digits);
@@ -264,22 +301,24 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 			}
 			case MT_NO_MATCH: {
 				/* notify of no-match and remove input handler */
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
 				switch_mutex_lock(handler->call->mutex);
 				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
 				handler->call->input_jid = "";
 				switch_mutex_unlock(handler->call->mutex);
 				break;
 			}	
 			case MT_MATCH: {
 				/* notify of match and remove input handler */
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "GOT MATCH = %s\n", handler->digits);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
 				switch_mutex_lock(handler->call->mutex);
 				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
 				handler->call->input_jid = "";
 				switch_mutex_unlock(handler->call->mutex);
 				break;
@@ -354,6 +393,8 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
 	handler->call = call;
+	handler->last_digit_time = switch_micro_time_now();
+	handler->got_first_digit = 0;
 	handler->terminators = strdup(i_attribs.terminator.v.s);
 	handler->initial_timeout = i_attribs.initial_timeout.v.i;
 	handler->inter_digit_timeout = i_attribs.inter_digit_timeout.v.i;
@@ -372,6 +413,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
+	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
 
 	/* all good, acknowledge command */
 	send_component_ref(session, iq, ref);
