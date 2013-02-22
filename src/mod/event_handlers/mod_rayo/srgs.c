@@ -245,7 +245,7 @@ void sn_output(struct srgs_node *node) {
  * @param rule to match
  * @param input to match
  * @param level recursion level
- * @return MATCH, NO_MATCH, NOT_ENOUGH_INPUT
+ * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
  */
 static enum match_type sn_match(struct srgs_node *node, const char *input, int level)
 {
@@ -255,28 +255,24 @@ static enum match_type sn_match(struct srgs_node *node, const char *input, int l
 	}
 	if (!*input) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "End of input\n");
-		return MT_NOT_ENOUGH_INPUT;
+		return MT_MATCH_PARTIAL;
 	}
-	
+
 	if (level > MAX_RECURSION) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Match recursion too deep!\n");
 		return MT_NO_MATCH;
 	}
-	
+
 	switch (node->type) {
 		case SNT_ONE_OF: {
 			struct srgs_node *item;
 			enum match_type match = MT_NO_MATCH;
-			
+
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <one-of> %s\n", input);
 
 			/* check for matches in items... this is an OR operation */
 			for (item = node->child; item && !(match & MT_MATCH); item = item->next) {
-				/* detects partial (0x2) and full matches (0x1) */
 				match |= sn_match(item, input, level + 1);
-			}
-			if (match & MT_MATCH) {
-				return MT_MATCH;
 			}
 			return match;
 		}
@@ -284,7 +280,7 @@ static enum match_type sn_match(struct srgs_node *node, const char *input, int l
 		case SNT_ITEM: {
 			struct srgs_node *child;
 			enum match_type match = MT_MATCH;
-			
+
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <%s> %s\n", node_type_to_string(node->type), input);
 			
 			/* check for matches in items... this is an AND operation */
@@ -614,7 +610,6 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 		struct srgs_node *rule;
 		for (rule = parser->root->child; rule && !(match & MT_MATCH); rule = rule->next) {
 			if (rule->type == SNT_RULE && rule->value.rule.is_public) {
-				/* detects partial (0x2) and full matches (0x1) */
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
 				match |= sn_match(rule, input, 0);
 			}
