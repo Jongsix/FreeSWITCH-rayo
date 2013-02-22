@@ -262,7 +262,7 @@ int iks_attrib_parse(switch_core_session_t *session, iks* node, const struct iks
 {
 	struct iks_attrib *attrib = attribs->attrib;
 	int success = SWITCH_TRUE;
-	for (; success && !attrib_def->is_last; attrib_def++) {
+	for (; success && attrib_def->name; attrib_def++) {
 		success &= get_attrib(attrib_def, attrib, node);
 		if (!success) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", iks_name(node), attrib_def->name, attrib->v.s, attrib->test);
