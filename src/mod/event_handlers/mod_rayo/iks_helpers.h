@@ -96,7 +96,6 @@ struct iks_attrib_definition {
 	iks_attrib_conversion_function fn;
 };
 
-
 /**
  * Attributes to get
  */
@@ -105,9 +104,8 @@ struct iks_attribs {
 	struct iks_attrib attrib[];
 };
 
-#define LAST_ATTRIB { NULL, NULL, NULL }
-#define EMPTY_ATTRIB(name, rule) { #name, "", iks_attrib_is_ ## rule }
 #define ATTRIB(name, default_value, rule) { #name, #default_value, iks_attrib_is_ ## rule }
+#define LAST_ATTRIB { NULL, NULL, NULL }
 #define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (struct iks_attrib *attrib, const char *value)
 
 extern ATTRIB_RULE(bool);
