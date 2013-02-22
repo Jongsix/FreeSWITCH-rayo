@@ -500,6 +500,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	iks *document = NULL;
 	switch_time_t start_time = switch_micro_time_now();
 	int max_time_ms;
+	int using_document = 1;
 
 	switch_mutex_lock(call->mutex);
 	
@@ -519,6 +520,23 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	}
 	max_time_ms = o_attribs.max_time.v.i;
 
+	/* TODO open SSML files here.. then play the open handles below- if bad XML, we'll detect it */
+
+	/* find document to speak */
+	document = iks_find(output, "document");
+	if (!document) {
+		/* adhearsion non-standard <output> request */
+		document = iks_find(output, "speak");
+		using_document = 0;
+	}
+
+	/* nothing to speak? */
+	if (!document) {
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		return;
+	}
+
 	/* acknowledge command */
 	ref = create_component_ref(session, call, "output");
 	call->output_jid = create_call_component_jid(session, call, ref);
@@ -527,20 +545,21 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	switch_mutex_unlock(call->mutex);
 
 	/* render document(s) */
-	document = iks_find(output, "document");
-	if (!document) {
-		output_document(session, iks_child(output), max_time_ms);
+	if (!using_document) {
+		output_document(session, document, max_time_ms);
 	} else {
-		for (; document; document = iks_next(document)) {
-			if (max_time_ms > 0) {
-				int elapsed_time_ms = (int)(switch_micro_time_now() - start_time) / 1000;
-				if (elapsed_time_ms < max_time_ms) {
-					output_document(session, iks_child(document), max_time_ms - elapsed_time_ms);
+		for (; document; document = iks_next_tag(document)) {
+			if (!strcmp("document", iks_name(document))) {
+				if (max_time_ms > 0) {
+					int elapsed_time_ms = (int)(switch_micro_time_now() - start_time) / 1000;
+					if (elapsed_time_ms < max_time_ms) {
+						output_document(session, iks_child(document), max_time_ms - elapsed_time_ms);
+					} else {
+						break;
+					}
 				} else {
-					break;
+					output_document(session, iks_child(document), -1);
 				}
-			} else {
-				output_document(session, iks_child(document), -1);
 			}
 		}
 	}
