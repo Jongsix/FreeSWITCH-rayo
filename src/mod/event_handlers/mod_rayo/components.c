@@ -230,17 +230,78 @@ struct input_attribs {
  * Current digit collection state
  */
 struct input_handler {
+	/** Number of collected digits */
 	int num_digits;
+	/** The collected digits */
 	char digits[MAX_DTMF + 1];
+	/** The grammar parser */
 	struct srgs_parser *parser;
+	/** The call */
 	struct rayo_call *call;
-	char *terminators;
+	/** terminating digits */
+	int term_digit_mask;
+	/** timeout before digits have been collected */
 	int initial_timeout;
+	/** timeout between digits */
 	int inter_digit_timeout;
+	/** TODO */
 	int max_silence;
+	/** Time last digit was received */
 	switch_time_t last_digit_time;
+	/** True if first digit has been collected */
 	int got_first_digit;
+	/** True if enough digits have been collected, but more can still be collected */
+	int lazy_match;
 };
+
+/**
+ * Get digit mask
+ * @param digit to mask
+ * @return mask value
+ */
+static int get_digit_mask(char digit)
+{
+	switch (digit) {
+		case '0': return 1;
+		case '1': return 1 << 1;
+		case '2': return 1 << 2;
+		case '3': return 1 << 3;
+		case '4': return 1 << 4;
+		case '5': return 1 << 5;
+		case '6': return 1 << 6;
+		case '7': return 1 << 7;
+		case '8': return 1 << 8;
+		case '9': return 1 << 9;
+		case 'A':
+		case 'a': return 1 << 10;
+		case 'B':
+		case 'b': return 1 << 11;
+		case 'C':
+		case 'c': return 1 << 12;
+		case 'D':
+		case 'd': return 1 << 13;
+		case '*': return 1 << 14;
+		case '#': return 1 << 15;
+	}
+	return 0;
+}
+
+/**
+ * Get digit mask from digit string
+ * @param digits the digits
+ * @return the mask
+ */
+static int get_digit_mask_from_string(const char *digits)
+{
+	int mask = 0;
+	if (digits) {
+		while (*digits) {
+			mask |= get_digit_mask(*digits);
+			digits++;
+		}
+	}
+	return mask;
+}
 
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
 
@@ -293,11 +354,25 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
 
 		/* check for match */
-		match = srgs_match(handler->parser, handler->digits);
+		if (get_digit_mask(dtmf->digit) & handler->term_digit_mask) {
+			/* got terminating digit */
+			if (handler->lazy_match) {
+				match = MT_MATCH;
+			} else {
+				match = MT_NO_MATCH;
+			}
+		} else {
+			match = srgs_match(handler->parser, handler->digits);
+		}
+
 		switch (match) {
-			case MT_NOT_ENOUGH_INPUT: {
-				/* don't care */
+			case MT_MATCH_PARTIAL: {
+				/* need more digits */
 				break;
+			}
+			case MT_MATCH_LAZY: {
+				/* If we get a term digit or there is a timeout, this is a good enough match */
+				handler->lazy_match = 1;
 			}
 			case MT_NO_MATCH: {
 				/* notify of no-match and remove input handler */
@@ -310,7 +385,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				handler->call->input_jid = "";
 				switch_mutex_unlock(handler->call->mutex);
 				break;
-			}	
+			}
 			case MT_MATCH: {
 				/* notify of match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
@@ -395,7 +470,8 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	handler->call = call;
 	handler->last_digit_time = switch_micro_time_now();
 	handler->got_first_digit = 0;
-	handler->terminators = switch_core_session_strdup(session, i_attribs.terminator.v.s);
+	handler->lazy_match = 0;
+	handler->term_digit_mask = get_digit_mask_from_string(i_attribs.terminator.v.s);
 	handler->initial_timeout = i_attribs.initial_timeout.v.i;
 	handler->inter_digit_timeout = i_attribs.inter_digit_timeout.v.i;
 	handler->max_silence = i_attribs.max_silence.v.i;

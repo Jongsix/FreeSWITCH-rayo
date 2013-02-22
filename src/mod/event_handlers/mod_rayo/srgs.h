@@ -35,9 +35,14 @@
 struct srgs_parser;
 
 enum match_type {
-	MT_NO_MATCH,
-	MT_MATCH,
-	MT_NOT_ENOUGH_INPUT
+	/* doesn't match anything */
+	MT_NO_MATCH = 0x0,
+	/* more digits needed to complete match */
+	MT_MATCH_PARTIAL = 0x1,
+	/* matches, but more repetitions are allowed */
+	MT_MATCH_LAZY = 0x3,
+	/* exact match */
+	MT_MATCH = 0x7
 };
 
 extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
