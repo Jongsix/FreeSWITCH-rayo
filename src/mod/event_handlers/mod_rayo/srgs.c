@@ -240,22 +240,125 @@ void sn_output(struct srgs_node *node) {
 	}
 }
 
+
+static enum match_type sn_match(struct srgs_node *node, const char *input, int *index, int level);
+
+/**
+ * Check <one-of> for match against input
+ * @param one-of to match
+ * @param input to match
+ * @param index number of digits compared
+ * @param level recursion level
+ * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
+ */
+static enum match_type sn_match_one_of(struct srgs_node *node, const char *input, int *index, int level)
+{
+	struct srgs_node *item;
+	enum match_type match = MT_NO_MATCH;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <one-of> %s\n", input);
+
+	/* check for matches in items... this is an OR operation */
+	for (item = node->child; item && !(match & MT_MATCH); item = item->next) {
+		int num_matched = *index;
+		match |= sn_match(item, input, &num_matched, level + 1);
+	}
+	return match;
+}
+
+/**
+ * Check <item> for match against input
+ * @param item to match
+ * @param input to match
+ * @param index number of digits compared
+ * @param level recursion level
+ * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
+ */
+static enum match_type sn_match_item(struct srgs_node *node, const char *input, int *index, int level)
+{
+	/* TODO min/max repeat */
+//	int i;
+//	int lazy_match = 0;
+	struct srgs_node *child;
+	enum match_type match = MT_MATCH;
+
+//	for (i = 0; i < node->value.item.repeat_max; i++) {
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match #%i <%s> %s\n", i, node_type_to_string(node->type), input);
+
+		/* check for matches in items... this is an AND operation */
+		for (child = node->child; child && match == MT_MATCH; child = child->next) {
+			match = sn_match(child, input, index, level + 1);
+		}
+//	}
+	return match;
+}
+
 /**
  * Check <rule> for match against input
  * @param rule to match
  * @param input to match
+ * @param index number of digits compared
  * @param level recursion level
  * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
  */
-static enum match_type sn_match(struct srgs_node *node, const char *input, int level)
+static enum match_type sn_match_rule(struct srgs_node *node, const char *input, int *index, int level)
+{
+	struct srgs_node *child;
+	enum match_type match = MT_MATCH;
+
+	/* check for matches in items... this is an AND operation */
+	for (child = node->child; child && match == MT_MATCH; child = child->next) {
+		match = sn_match(child, input, index, level + 1);
+	}
+	return match;
+}
+
+/**
+ * Check digit for match against input
+ * @param rule to match
+ * @param input to match
+ * @param index number of digits compared
+ * @param level recursion level
+ * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
+ */
+static enum match_type sn_match_digit(struct srgs_node *node, const char *input, int *index, int level)
+{
+	if (!*input) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "End of input\n");
+		return MT_MATCH_PARTIAL;
+	}
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "compare digits (input) %c == (node) %c\n", *input, node->value.digit);
+	if (node->value.digit != *input) {
+		return MT_NO_MATCH;
+	}
+
+	/* have more digits to match */
+	if (node->child) {
+		return sn_match(node->child, input, index, level + 1);
+	}
+
+	/* reached last digit and matched entire string */
+	if (*index + 1 == strlen(input)) {
+		return MT_MATCH;
+	}
+
+	/* still more input digits to match */
+	return MT_MATCH_PARTIAL;
+}
+
+/**
+ * Check for match against input
+ * @param rule to match
+ * @param input to match
+ * @param index number of digits compared
+ * @param level recursion level
+ * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
+ */
+static enum match_type sn_match(struct srgs_node *node, const char *input, int *index, int level)
 {
 	if (!node) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "NULL node\n");
 		return MT_NO_MATCH;
-	}
-	if (!*input) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "End of input\n");
-		return MT_MATCH_PARTIAL;
 	}
 
 	if (level > MAX_RECURSION) {
@@ -264,46 +367,18 @@ static enum match_type sn_match(struct srgs_node *node, const char *input, int l
 	}
 
 	switch (node->type) {
-		case SNT_ONE_OF: {
-			struct srgs_node *item;
-			enum match_type match = MT_NO_MATCH;
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <one-of> %s\n", input);
-
-			/* check for matches in items... this is an OR operation */
-			for (item = node->child; item && !(match & MT_MATCH); item = item->next) {
-				match |= sn_match(item, input, level + 1);
-			}
-			return match;
-		}
+		case SNT_ONE_OF:
+			return sn_match_one_of(node, input, index, level);
 		case SNT_RULE:
-		case SNT_ITEM: {
-			struct srgs_node *child;
-			enum match_type match = MT_MATCH;
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <%s> %s\n", node_type_to_string(node->type), input);
-			
-			/* check for matches in items... this is an AND operation */
-			for (child = node->child; child && match == MT_MATCH; child = child->next) {
-				match = sn_match(child, input, level + 1);
-			}
-			return match;
-		}
-		case SNT_DIGIT: {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "compare digits (input) %c == (node) %c\n", *input, node->value.digit);
-			if (node->value.digit != *input) {
-				return MT_NO_MATCH;
-			}
-			if (node->child) {
-				return sn_match(node->child, input + 1, level + 1);
-			}
-			return MT_MATCH;
-		}
+			return sn_match_rule(node, input, index, level);
+		case SNT_ITEM:
+			return sn_match_item(node, input, index, level);
+		case SNT_DIGIT:
+			return sn_match_digit(node, input, index, level);
 		default:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "unsuppored match <%s> %s\n", node_type_to_string(node->type), input);
 			break;
 	}
-
 	return MT_NO_MATCH;
 }
 
@@ -387,8 +462,8 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 static int process_item(struct srgs_parser *parser, char **atts)
 {
 	struct srgs_node *item = parser->cur;
-	item->value.item.repeat_min = 1; // min
-	item->value.item.repeat_max = 1; // max
+	item->value.item.repeat_min = 1;
+	item->value.item.repeat_max = 1;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
@@ -407,7 +482,7 @@ static int process_item(struct srgs_parser *parser, char **atts)
 					item->value.item.repeat_min = repeat_val;
 					return IKS_OK;
 				} else {
-					/* TODO support range */
+					/* TODO support repeat range */
 					return IKS_BADXML;
 				}
 			}
@@ -610,8 +685,9 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 		struct srgs_node *rule;
 		for (rule = parser->root->child; rule && !(match & MT_MATCH); rule = rule->next) {
 			if (rule->type == SNT_RULE && rule->value.rule.is_public) {
+				int index = 0;
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
-				match |= sn_match(rule, input, 0);
+				match |= sn_match(rule, input, &index, 0);
 			}
 		}
 		if (match & MT_MATCH) {
