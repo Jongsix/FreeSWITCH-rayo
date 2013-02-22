@@ -455,20 +455,36 @@ struct output_attribs {
 #define OUTPUT_MAX_TIME "max-time", "urn:xmpp:rayo:output:complete:1"
 
 /**
- * <output> a document
+ * <output> a <speak> document
  * @param session the session to play to
  * @param document the document to play
- * @param max_time_ms maximum time to play in ms.  -1 if unbounded.
+ * @param timeout the time to stop playing.  0 if unbounded.
  * @return status
  */
-switch_status_t output_document(switch_core_session_t *session, iks *document, int max_time_ms)
+switch_status_t output_speak_document(switch_core_session_t *session, iks *document, switch_time_t timeout)
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
 	char *name;
+	int max_time_ms = -1;
+
 	if (!document) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No document to play!\n");
 		return SWITCH_STATUS_FALSE;
 	}
+
+	/* calculate relative timeout */
+	if (timeout) {
+		switch_time_t now = switch_micro_time_now();
+		if (now >= timeout) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Reached <speak> timeout!\n");
+			return SWITCH_STATUS_FALSE;
+		}
+		max_time_ms = (int)((timeout - now) / 1000);
+
+		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
+		max_time_ms += 40; 
+	}
+
 	name = iks_name(document);
 	if (!strcmp("speak", name)) {
 		char *ssml = iks_string(NULL, document);
@@ -490,20 +506,84 @@ switch_status_t output_document(switch_core_session_t *session, iks *document, i
 }
 
 /**
+ * <output> a <speak> document
+ * @param session the session to play to
+ * @param silence_ms the duration of silence to play
+ * @param timeout the time to stop playing.  0 if unbounded.
+ * @return status
+ */
+switch_status_t output_silence(switch_core_session_t *session, int silence_ms, switch_time_t timeout)
+{
+	switch_status_t status;
+	char *filename = NULL;
+	int max_time_ms = -1;
+
+	/* calculate relative timeout */
+	if (timeout) {
+		switch_time_t now = switch_micro_time_now();
+		if (now >= timeout) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Reached <silence> timeout!\n");
+			return SWITCH_STATUS_FALSE;
+		}
+		max_time_ms = (int)((timeout - now) / 1000);
+
+		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
+		max_time_ms += 40; 
+	}
+
+	/* append timeout param and SSML file format and the SSML document */
+	filename = switch_mprintf("{timeout=%i}silence_stream://%i", max_time_ms, silence_ms);
+
+	/* play the file */
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", filename);
+	status = switch_ivr_play_file(session, NULL, filename, NULL);
+
+	switch_safe_free(filename);
+	
+	return status;
+}
+
+/**
+ * <output> <document>s
+ * @param session the session to play to
+ * @param document the document(s) to play
+ * @param timeout the time to stop playing.  0 if unbounded.
+ * @return status
+ */
+switch_status_t output_documents(switch_core_session_t *session, iks *document, switch_time_t timeout)
+{
+	/* play each <document> */
+	for (; document; document = iks_next_tag(document)) {
+		if (!strcmp("document", iks_name(document))) {
+			/* play the <speak> document */
+			switch_status_t status;
+			if ((status = output_speak_document(session, iks_child(document), timeout)) != SWITCH_STATUS_SUCCESS) {
+				return status;
+			}
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <document>, got: <%s>!\n", iks_name(document));
+		}
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
  * Start execution of output component
  */
 void start_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
 {
 	struct output_attribs o_attribs;
 	char *ref = NULL;
-	iks *output = iks_child(iq);
+	iks *output = iks_find(iq, "output");
 	iks *document = NULL;
-	switch_time_t start_time = switch_micro_time_now();
-	int max_time_ms;
+	switch_time_t timeout = 0;
 	int using_document = 1;
+	int i;
+	int repeat_times;
+	int repeat_interval;
 
 	switch_mutex_lock(call->mutex);
-	
+
 	/* already have output component? */
 	if (!zstr(call->output_jid)) {
 		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
@@ -518,7 +598,8 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
-	max_time_ms = o_attribs.max_time.v.i;
+	repeat_times = o_attribs.repeat_times.v.i;
+	repeat_interval = o_attribs.repeat_interval.v.i;
 
 	/* TODO open SSML files here.. then play the open handles below- if bad XML, we'll detect it */
 
@@ -528,6 +609,7 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 		/* adhearsion non-standard <output> request */
 		document = iks_find(output, "speak");
 		using_document = 0;
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Have <speak> instead of <document>\n");
 	}
 
 	/* nothing to speak? */
@@ -541,32 +623,39 @@ void start_output_component(switch_core_session_t *session, struct rayo_call *ca
 	ref = create_component_ref(session, call, "output");
 	call->output_jid = create_call_component_jid(session, call, ref);
 	send_component_ref(session, iq, ref);
-	
+
 	switch_mutex_unlock(call->mutex);
 
+	/* is a timeout requested? */
+	if (o_attribs.max_time.v.i > 0) {
+		timeout = switch_micro_time_now() + (o_attribs.max_time.v.i * 1000);
+	}
+
 	/* render document(s) */
-	if (!using_document) {
-		output_document(session, document, max_time_ms);
-	} else {
-		for (; document; document = iks_next_tag(document)) {
-			if (!strcmp("document", iks_name(document))) {
-				if (max_time_ms > 0) {
-					int elapsed_time_ms = (int)(switch_micro_time_now() - start_time) / 1000;
-					if (elapsed_time_ms < max_time_ms) {
-						output_document(session, iks_child(document), max_time_ms - elapsed_time_ms);
-					} else {
-						break;
-					}
-				} else {
-					output_document(session, iks_child(document), -1);
-				}
+	for (i = 0; i < repeat_times; i++) {
+
+		/* play silence between documents */
+		if (i > 0 && repeat_interval > 0) {
+			if (output_silence(session, repeat_interval, timeout) != SWITCH_STATUS_SUCCESS) {
+				break;
+			}
+		}
+
+		/* play document */
+		if (using_document) {
+			if (output_documents(session, document, timeout) != SWITCH_STATUS_SUCCESS) {
+				break;
+			}
+		} else {
+			if (output_speak_document(session, document, timeout) != SWITCH_STATUS_SUCCESS) {
+				break;
 			}
 		}
 	}
 
 	/* done */
 	switch_mutex_lock(call->mutex);
-	if (max_time_ms > 0 && (int)(switch_micro_time_now() - start_time) / 1000 > max_time_ms) {
+	if (timeout && switch_micro_time_now() >= timeout) {
 		send_component_complete(session, call->output_jid, OUTPUT_MAX_TIME);
 	} else {
 		send_component_complete(session, call->output_jid, OUTPUT_FINISH_AHN);
