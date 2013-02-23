@@ -1,0 +1,15 @@
+BASE=../../../../..
+
+IKS_DIR=$(BASE)/libs/iksemel
+IKS_LA=$(IKS_DIR)/src/libiksemel.la
+LOCAL_CFLAGS += -I$(BASE)/libs/iksemel/include -I../
+LOCAL_OBJS= $(IKS_LA) main.o ../srgs.o
+LOCAL_SOURCES= main.c
+include $(BASE)/build/modmake.rules
+
+$(IKS_LA): $(IKS_DIR) $(IKS_DIR)/.update
+	@cd $(IKS_DIR) && $(MAKE)
+	@$(TOUCH_TARGET)
+
+test: 
+	libtool --mode=link gcc main.o ../srgs.o -o test test_srgs.la
