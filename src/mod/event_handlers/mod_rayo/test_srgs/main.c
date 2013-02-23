@@ -321,6 +321,57 @@ static void test_parse_grammar(void)
 	switch_core_destroy_memory_pool(&pool);
 }
 
+static void test_initial_timeout(void)
+{
+	switch_memory_pool_t *pool;
+	struct srgs_parser *parser;
+	switch_time_t start = switch_time_now();
+	int elapsed_time_ms;
+	int i;
+
+	switch_core_new_memory_pool(&pool);
+	parser = srgs_parser_new(pool, "1234");
+
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, 200, -1, ""));
+
+	for (i = 0; i < 100; i++) {
+		switch_sleep(20 * 1000);
+		if (srgs_match(parser, NULL) == MT_TIMEOUT) {
+			break;
+		}
+	}
+	elapsed_time_ms = (switch_time_now() - start) / 1000;
+	ASSERT_EQUALS(1, elapsed_time_ms < 240);
+
+	switch_core_destroy_memory_pool(&pool);
+}
+
+static void test_digit_timeout(void)
+{
+	switch_memory_pool_t *pool;
+	struct srgs_parser *parser;
+	switch_time_t start = switch_time_now();
+	int elapsed_time_ms;
+	int i;
+
+	switch_core_new_memory_pool(&pool);
+	parser = srgs_parser_new(pool, "1234");
+
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, 200, ""));
+
+	srgs_match(parser, "0");
+	for (i = 0; i < 100; i++) {
+		switch_sleep(20 * 1000);
+		if (srgs_match(parser, NULL) == MT_TIMEOUT) {
+			break;
+		}
+	}
+	elapsed_time_ms = (switch_time_now() - start) / 1000;
+	ASSERT_EQUALS(1, elapsed_time_ms < 240);
+
+	switch_core_destroy_memory_pool(&pool);
+}
+
 /**
  * main program
  */
@@ -333,5 +384,7 @@ int main(int argc, char **argv)
 	TEST(test_match_multi_digit_grammar);
 	TEST(test_match_multi_rule_grammar);
 	TEST(test_match_rayo_example_grammar);
+	TEST(test_initial_timeout);
+	TEST(test_digit_timeout);
 	return 0;
 }
