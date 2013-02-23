@@ -35,20 +35,15 @@
 struct srgs_parser;
 
 enum match_type {
-	/* doesn't match anything */
-	MT_NO_MATCH = 0x0,
-	/* more digits needed to complete match */
-	MT_MATCH_PARTIAL = 0x1,
-	/* matches, but more repetitions are allowed */
-	MT_MATCH_LAZY = 0x3,
-	/* exact match */
-	MT_MATCH = 0x7
+	MT_NO_MATCH,
+	MT_MATCH,
+	MT_TIMEOUT
 };
 
 extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
-extern int srgs_parse(struct srgs_parser *parser, const char *document);
+extern void srgs_reset(struct srgs_parser *parser);
+extern int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms, const char *terminators);
 extern enum match_type srgs_match(struct srgs_parser *parser, const char *input);
-extern void srgs_destroy(struct srgs_parser *parser);
 
 #endif
 

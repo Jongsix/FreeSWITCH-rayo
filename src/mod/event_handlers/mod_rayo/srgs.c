@@ -56,16 +56,33 @@ enum srgs_node_type {
 	SNT_DIGIT
 };
 
+/**
+ * <grammar> value
+ */
+struct root_value {
+	char *regex;
+};
+
+/**
+ * <rule> value
+ */
 struct rule_value {
 	char is_public;
 	char *id;
+	char *regex;
 };
 
+/**
+ * <item> value
+ */
 struct item_value {
 	int repeat_min;
 	int repeat_max;
 };
 
+/**
+ * <ruleref> value
+ */
 union ref_value {
 	struct srgs_node *node;
 	char *uri;
@@ -81,6 +98,7 @@ struct srgs_node {
 	char visited;
 	/** Node value */
 	union {
+		struct root_value root;
 		char digit;
 		union ref_value ref;
 		struct rule_value rule;
@@ -110,6 +128,8 @@ struct srgs_parser {
 	switch_hash_t *rules;
 	/** optional uuid for logging */
 	const char *uuid;
+	/** digit binding machine */
+	switch_ivr_dmachine_t *dmachine;
 };
 
 /**
@@ -155,6 +175,71 @@ static const char *node_type_to_string(enum srgs_node_type type)
 		case SNT_UNKNOWN: return "UNKOWN";
 	}
 	return "UNKNOWN";
+}
+
+/**
+ * Log node
+ */
+static void sn_log_node_open(struct srgs_node *node)
+{
+	switch (node->type) {
+		case SNT_ROOT:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<grammar>\n");
+			return;
+		case SNT_RULE:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
+			return;
+		case SNT_ONE_OF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<one-of>\n");
+			return;
+		case SNT_ITEM:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<item repeat='%i'>\n", node->value.item.repeat_min);
+			return;
+		case SNT_UNRESOLVED_REF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
+			return;
+		case SNT_REF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
+			return;
+		case SNT_DIGIT:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%c\n", node->value.digit);
+			return;
+		case SNT_UNKNOWN:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<unknown>\n");
+			return;
+	}
+}
+
+/**
+ * Log node
+ */
+static void sn_log_node_close(struct srgs_node *node)
+{
+	switch (node->type) {
+		case SNT_ROOT:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</grammar>\n");
+			return;
+		case SNT_RULE:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</rule>\n");
+			return;
+		case SNT_ONE_OF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</one-of>\n");
+			return;
+		case SNT_ITEM:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</item>\n");
+			return;
+		case SNT_UNRESOLVED_REF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref (unresolved)>\n");
+			return;
+		case SNT_REF:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref>\n");
+			return;
+		case SNT_DIGIT:
+			return;
+		case SNT_UNKNOWN:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</unknown>\n");
+			return;
+	}
 }
 
 /**
@@ -218,171 +303,6 @@ static struct srgs_node *sn_insert_digit(switch_memory_pool_t *pool, struct srgs
 }
 
 /**
- * Print parsed tree to stdout
- * @param node the root node
- */
-void sn_output(struct srgs_node *node) {
-	if (node) {
-		if (node->type != SNT_DIGIT) {
-			printf("<%s>", node_type_to_string(node->type));
-		} else {
-			printf("%c", node->value.digit);
-		}
-		if (node->child) {
-			sn_output(node->child);
-		}
-		if (node->type != SNT_DIGIT) {
-			printf("</%s>", node_type_to_string(node->type));
-		}
-		if (node->next) {
-			sn_output(node->next);
-		}
-	}
-}
-
-
-static enum match_type sn_match(struct srgs_node *node, const char *input, int *index, int level);
-
-/**
- * Check <one-of> for match against input
- * @param one-of to match
- * @param input to match
- * @param index number of digits compared
- * @param level recursion level
- * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
- */
-static enum match_type sn_match_one_of(struct srgs_node *node, const char *input, int *index, int level)
-{
-	struct srgs_node *item;
-	enum match_type match = MT_NO_MATCH;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match <one-of> %s\n", input);
-
-	/* check for matches in items... this is an OR operation */
-	for (item = node->child; item && !(match & MT_MATCH); item = item->next) {
-		int num_matched = *index;
-		match |= sn_match(item, input, &num_matched, level + 1);
-	}
-	return match;
-}
-
-/**
- * Check <item> for match against input
- * @param item to match
- * @param input to match
- * @param index number of digits compared
- * @param level recursion level
- * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
- */
-static enum match_type sn_match_item(struct srgs_node *node, const char *input, int *index, int level)
-{
-	/* TODO min/max repeat */
-//	int i;
-//	int lazy_match = 0;
-	struct srgs_node *child;
-	enum match_type match = MT_MATCH;
-
-//	for (i = 0; i < node->value.item.repeat_max; i++) {
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match #%i <%s> %s\n", i, node_type_to_string(node->type), input);
-
-		/* check for matches in items... this is an AND operation */
-		for (child = node->child; child && match == MT_MATCH; child = child->next) {
-			match = sn_match(child, input, index, level + 1);
-		}
-//	}
-	return match;
-}
-
-/**
- * Check <rule> for match against input
- * @param rule to match
- * @param input to match
- * @param index number of digits compared
- * @param level recursion level
- * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
- */
-static enum match_type sn_match_rule(struct srgs_node *node, const char *input, int *index, int level)
-{
-	struct srgs_node *child;
-	enum match_type match = MT_MATCH;
-
-	/* check for matches in items... this is an AND operation */
-	for (child = node->child; child && match == MT_MATCH; child = child->next) {
-		match = sn_match(child, input, index, level + 1);
-	}
-	return match;
-}
-
-/**
- * Check digit for match against input
- * @param rule to match
- * @param input to match
- * @param index number of digits compared
- * @param level recursion level
- * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
- */
-static enum match_type sn_match_digit(struct srgs_node *node, const char *input, int *index, int level)
-{
-	if (!*input) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "End of input\n");
-		return MT_MATCH_PARTIAL;
-	}
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "compare digits (input) %c == (node) %c\n", *input, node->value.digit);
-	if (node->value.digit != *input) {
-		return MT_NO_MATCH;
-	}
-
-	/* have more digits to match */
-	if (node->child) {
-		return sn_match(node->child, input, index, level + 1);
-	}
-
-	/* reached last digit and matched entire string */
-	if (*index + 1 == strlen(input)) {
-		return MT_MATCH;
-	}
-
-	/* still more input digits to match */
-	return MT_MATCH_PARTIAL;
-}
-
-/**
- * Check for match against input
- * @param rule to match
- * @param input to match
- * @param index number of digits compared
- * @param level recursion level
- * @return NO_MATCH, MATCH_PARTIAL, MATCH_LAZY, MATCH
- */
-static enum match_type sn_match(struct srgs_node *node, const char *input, int *index, int level)
-{
-	if (!node) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "NULL node\n");
-		return MT_NO_MATCH;
-	}
-
-	if (level > MAX_RECURSION) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Match recursion too deep!\n");
-		return MT_NO_MATCH;
-	}
-
-	switch (node->type) {
-		case SNT_ONE_OF:
-			return sn_match_one_of(node, input, index, level);
-		case SNT_RULE:
-			return sn_match_rule(node, input, index, level);
-		case SNT_ITEM:
-			return sn_match_item(node, input, index, level);
-		case SNT_DIGIT:
-			return sn_match_digit(node, input, index, level);
-		default:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "unsuppored match <%s> %s\n", node_type_to_string(node->type), input);
-			break;
-	}
-	return MT_NO_MATCH;
-}
-
-/**
  * Process <rule> attributes
  * @param parser the parser state
  * @param atts the attributes
@@ -398,27 +318,26 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("scope", atts[i])) {
 				rule->value.rule.is_public = !zstr(atts[i + 1]) && !strcmp("public", atts[i + 1]);
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<rule scope=\'%s\'>  is_public = %i\n", atts[i + 1], rule->value.rule.is_public);
 			} else if (!strcmp("id", atts[i])) {
 				if (!zstr(atts[i + 1])) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<rule id=\'%s\'>\n", atts[i + 1]);
 					rule->value.rule.id = switch_core_strdup(parser->pool, atts[i + 1]);
 				}
 			}
 			i += 2;
 		}
 	}
+
 	if (zstr(rule->value.rule.id)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id);
 		return IKS_BADXML;
 	}
-	
+
 	if (switch_core_hash_find(parser->rules, rule->value.rule.id)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id);
 		return IKS_BADXML;
 	}
 	switch_core_hash_insert(parser->rules, rule->value.rule.id, rule);
-	
+
 	return IKS_OK;
 }
 
@@ -436,7 +355,6 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("uri", atts[i])) {
 				char *uri = atts[i + 1];
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<ruleref uri=\'%s\'>\n", uri);
 				if (zstr(uri)) {
 					return IKS_BADXML;
 				}
@@ -469,7 +387,6 @@ static int process_item(struct srgs_parser *parser, char **atts)
 		while (atts[i]) {
 			if (!strcmp("repeat", atts[i])) {
 				char *repeat = atts[i + 1];
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "<item repeat=\"%s\">\n", repeat);
 				if (zstr(repeat)) {
 					return IKS_BADXML;
 				}
@@ -479,7 +396,7 @@ static int process_item(struct srgs_parser *parser, char **atts)
 						return IKS_BADXML;
 					}
 					item->value.item.repeat_min = repeat_val;
-					item->value.item.repeat_min = repeat_val;
+					item->value.item.repeat_max = repeat_val;
 					return IKS_OK;
 				} else {
 					/* TODO support repeat range */
@@ -504,9 +421,9 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 {
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
 	enum srgs_node_type ntype = string_to_node_type(name);
-	
+
 	/* grammar only allowed at root */
-	if (ntype == SNT_ROOT) { 
+	if (ntype == SNT_ROOT) {
 		if (parser->cur->type != SNT_ROOT) {
 			return IKS_BADXML;
 		}
@@ -518,24 +435,34 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 
 	switch (type) {
 		case IKS_OPEN: {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "PUSH <%s> <- <%s>\n", node_type_to_string(parser->cur->type), name);
+			int result = IKS_OK;
 			parser->cur = sn_insert(parser->pool, parser->cur, ntype);
 			if (ntype == SNT_UNRESOLVED_REF) {
-				return process_ruleref(parser, atts);
+				result = process_ruleref(parser, atts);
 			} else if (ntype == SNT_ITEM) {
-				return process_item(parser, atts);
+				result = process_item(parser, atts);
 			} else if (ntype == SNT_RULE) {
-				return process_rule(parser, atts);
+				result = process_rule(parser, atts);
 			}
-			break;
+			sn_log_node_open(parser->cur);
+			return result;
 		}
 		case IKS_CLOSE: {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "POP <%s> <- <%s>\n", node_type_to_string(parser->cur->type), name);
+			sn_log_node_close(parser->cur);
 			parser->cur = parser->cur->parent;
 			break;
 		}
-		case IKS_SINGLE:
-			break;
+		case IKS_SINGLE: {
+			int result = IKS_OK;
+			parser->cur = sn_insert(parser->pool, parser->cur, ntype);
+			if (ntype == SNT_UNRESOLVED_REF) {
+				result = process_ruleref(parser, atts);
+			}
+			sn_log_node_open(parser->cur);
+			sn_log_node_close(parser->cur);
+			parser->cur = parser->cur->parent;
+			return result;
+		}
 	}
 	return IKS_OK;
 }
@@ -558,6 +485,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 				if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
 					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<%s> Add digit %c\n", node_type_to_string(parser->cur->type), data[i]);
 					digit = sn_insert_digit(parser->pool, digit, data[i]);
+					sn_log_node_open(digit);
 				}
 			}
 		}
@@ -573,12 +501,155 @@ static int cdata_hook(void *user_data, char *data, size_t len)
  */
 struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid)
 {
-	struct srgs_parser *parser = switch_core_alloc(pool, sizeof(*parser));
-	parser->pool = pool;
-	parser->uuid = zstr(uuid) ? "" : uuid;
-	switch_core_hash_init(&parser->cache, pool);
-	switch_core_hash_init(&parser->rules, pool);
+	struct srgs_parser *parser = NULL;
+	if (pool) {
+		parser = switch_core_alloc(pool, sizeof(*parser));
+		parser->pool = pool;
+		parser->uuid = zstr(uuid) ? "" : uuid;
+		switch_core_hash_init(&parser->cache, pool);
+		switch_core_hash_init(&parser->rules, pool);
+	}
 	return parser;
+}
+
+/**
+ * Create digit machine
+ */
+static int create_dmachine(struct srgs_parser *parser)
+{
+	char *regex = switch_core_sprintf(parser->pool, "~%s", parser->root->value.root.regex);
+	if (switch_ivr_dmachine_create(&parser->dmachine, "srgs", parser->pool, 0, 0, NULL, NULL, parser) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to create dmachine\n");
+		return 0;
+	}
+
+	if (switch_ivr_dmachine_bind(parser->dmachine, "srgs", regex, 0, NULL, parser) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to bind regex %s\n", regex);
+		return 0;
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Bind regex %s\n", regex);
+	}
+	return 1;
+}
+
+/**
+ * Create regexes
+ */
+static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, switch_stream_handle_t *stream)
+{
+	sn_log_node_open(node);
+	switch (node->type) {
+		case SNT_ROOT:
+			if (node->child) {
+				int first_rule = 1;
+				struct srgs_node *child = node->child;
+				switch_stream_handle_t new_stream = { 0 };
+				SWITCH_STANDARD_STREAM(new_stream);
+				new_stream.write_function(&new_stream, "%s", "(?:");
+				for (; child; child = child->next) {
+					if (!create_regexes(parser, child, &new_stream)) {
+						switch_safe_free(new_stream.data);
+						return 0;
+					}
+					if (child->type == SNT_RULE && child->value.rule.is_public) {
+						if (!first_rule) {
+							new_stream.write_function(&new_stream, "%s", "|");
+						}
+						new_stream.write_function(&new_stream, "%s", child->value.rule.regex);
+						first_rule = 0;
+					}
+				}
+				new_stream.write_function(&new_stream, "%s", ")");
+				node->value.root.regex = switch_core_strdup(parser->pool, new_stream.data);
+				switch_safe_free(new_stream.data);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", node->value.root.regex);
+			}
+			break;
+		case SNT_RULE:
+			if (node->value.rule.regex) {
+				return 1;
+			} else if (node->child) {
+				struct srgs_node *item = node->child;
+				switch_stream_handle_t new_stream = { 0 };
+				SWITCH_STANDARD_STREAM(new_stream);
+				for (; item; item = item->next) {
+					if (!create_regexes(parser, item, &new_stream)) {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s regex failed = %s\n", node->value.rule.id, node->value.rule.regex);
+						switch_safe_free(new_stream.data);
+						return 0;
+					}
+				}
+				node->value.rule.regex = switch_core_strdup(parser->pool, new_stream.data);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s regex = %s\n", node->value.rule.id, node->value.rule.regex);
+				switch_safe_free(new_stream.data);
+			}
+			break;
+		case SNT_DIGIT:
+			if (node->value.digit == '*') {
+				stream->write_function(stream, "%s", "\\");
+			}
+			stream->write_function(stream, "%c", node->value.digit);
+			if (node->child) {
+				if (!create_regexes(parser, node->child, stream)) {
+					return 0;
+				}
+			}
+			break;
+		case SNT_ITEM:
+			if (node->child) {
+				struct srgs_node *item = node->child;
+				if (node->value.item.repeat_min != 1 || node->value.item.repeat_max != 1) {
+					stream->write_function(stream, "%s", "(?:");
+				}
+				for(; item; item = item->next) {
+					if (!create_regexes(parser, item, stream)) {
+						return 0;
+					}
+				}
+				if (node->value.item.repeat_min != 1 || node->value.item.repeat_max != 1) {
+					if (node->value.item.repeat_min != node->value.item.repeat_max) {
+						stream->write_function(stream, "){%i,%i}", node->value.item.repeat_min, node->value.item.repeat_max);
+					} else {
+						stream->write_function(stream, "){%i}", node->value.item.repeat_min);
+					}
+				}
+			}
+			break;
+		case SNT_ONE_OF:
+			if (node->child) {
+				struct srgs_node *item = node->child;
+				stream->write_function(stream, "%s", "(?:");
+				for (; item; item = item->next) {
+					if (item != node->child) {
+						stream->write_function(stream, "%s", "|");
+					}
+					if (!create_regexes(parser, item, stream)) {
+						return 0;
+					}
+				}
+				stream->write_function(stream, "%s", ")");
+			}
+			break;
+		case SNT_REF: {
+			struct srgs_node *rule = node->value.ref.node;
+			if (!rule->value.rule.regex) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "ruleref: create %s regex\n", rule->value.rule.id);
+				if (!create_regexes(parser, rule, NULL)) {
+					return 0;
+				}
+			}
+			if (!rule->value.rule.regex) {
+				return 0;
+			}
+			stream->write_function(stream, "%s", rule->value.rule.regex);
+			break;
+		}
+		default:
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "create_regexes() bad type = %s\n", node_type_to_string(node->type));
+			return 0;
+	}
+	sn_log_node_close(node);
+	return 1;
 }
 
 /**
@@ -587,8 +658,9 @@ struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid
  * @param node the current node
  * @param level the recursion level
  */
-int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
+static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
 {
+	sn_log_node_open(node);
 	if (node->visited) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Loop detected.\n");
 		return 0;
@@ -622,19 +694,16 @@ int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
 
 	/* resolve children refs */
 	if (node->child) {
-		if (!resolve_refs(parser, node->child, level + 1)) {
-			return 0;
-		}
-	}
-
-	/* resolve sibling refs */
-	if (node->next) {
-		if (!resolve_refs(parser, node->next, level)) {
-			return 0;
+		struct srgs_node *child = node->child;
+		for (; child; child = child->next) {
+			if (!resolve_refs(parser, child, level + 1)) {
+				return 0;
+			}
 		}
 	}
 
 	node->visited = 0;
+	sn_log_node_close(node);
 	return 1;
 }
 
@@ -643,32 +712,76 @@ int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
  * @param parser the parser
  * @param document the document to parse
  */
-int srgs_parse(struct srgs_parser *parser, const char *document)
+int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms, const char *terminators)
 {
+	switch_ivr_dmachine_t *dmachine = NULL;
+	if (!parser) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "NULL parser!!\n");
+		return 0;
+	}
+
 	if (zstr(document)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing grammar document\n");
 		return 0;
 	}
 
 	/* check for cached grammar */
-	parser->root = (struct srgs_node *)switch_core_hash_find(parser->cache, document);
-	if (!parser->root) {
+	dmachine = (switch_ivr_dmachine_t *)switch_core_hash_find(parser->cache, document);
+	if (!dmachine) {
 		int result = 0;
 		iksparser *p = iks_sax_new(parser, tag_hook, cdata_hook);
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
 		parser->root = sn_new(parser->pool, SNT_ROOT);
 		parser->cur = parser->root;
 		switch_core_hash_delete_multi(parser->rules, NULL, NULL);
-		result = (iks_parse(p, document, 0, 1) == IKS_OK && resolve_refs(parser, parser->root, 0));
+		if (iks_parse(p, document, 0, 1) == IKS_OK) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Resolving references\n");
+			if (resolve_refs(parser, parser->root, 0)) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Creating rule regexes\n");
+				if (create_regexes(parser, parser->root, NULL)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Creating dmachine\n");
+					if (create_dmachine(parser)) {
+						result = 1;
+					}
+				}
+			}
+		}
 		iks_parser_delete(p);
 		if (result) {
 			switch_core_hash_insert(parser->cache, document, parser->root);
+			return 1;
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to parse grammar\n");
+			return 0;
 		}
-		return result;
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
 	}
+	if (input_timeout_ms < 0) {
+		input_timeout_ms = 0;
+	}
+	if (digit_timeout_ms < 0) {
+		digit_timeout_ms = 0;
+	}
+	if (zstr(terminators)) {
+		terminators = "";
+	}
+	switch_ivr_dmachine_clear(parser->dmachine);
+	switch_ivr_dmachine_set_terminators(parser->dmachine, terminators);
+	switch_ivr_dmachine_set_input_timeout_ms(parser->dmachine, input_timeout_ms);
+	switch_ivr_dmachine_set_digit_timeout_ms(parser->dmachine, digit_timeout_ms);
 	return 1;
+}
+
+/**
+ * Reset parser for a new match
+ * @param parser the parser
+ */
+void srgs_reset(struct srgs_parser *parser)
+{
+	if (parser->dmachine) {
+		switch_ivr_dmachine_clear(parser->dmachine);
+	}
 }
 
 /**
@@ -679,23 +792,30 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
  */
 enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 {
-	int match = MT_NO_MATCH;
-
-	if (parser->root) {
-		struct srgs_node *rule;
-		for (rule = parser->root->child; rule && !(match & MT_MATCH); rule = rule->next) {
-			if (rule->type == SNT_RULE && rule->value.rule.is_public) {
-				int index = 0;
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Testing rule: %s = %s\n", input, rule->value.rule.id);
-				match |= sn_match(rule, input, &index, 0);
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	switch_ivr_dmachine_match_t *match = NULL;
+	if (parser->dmachine) {
+		if (zstr(input)) {
+			status = switch_ivr_dmachine_ping(parser->dmachine, &match);
+		} else {
+			char digit[2];
+			digit[1] = '\0';
+			while (*input && status == SWITCH_STATUS_SUCCESS) {
+				digit[0] = *input;
+				status = switch_ivr_dmachine_feed(parser->dmachine, digit, &match);
+				input++;
 			}
 		}
-		if (match & MT_MATCH) {
-			/* return match */
-			return MT_MATCH;
+		if (status == SWITCH_STATUS_TIMEOUT) {
+			return MT_TIMEOUT;
+		}
+		if (zstr(input) && match) {
+			if (match->type == DM_MATCH_POSITIVE) {
+				return MT_MATCH;
+			}
 		}
 	}
-	return match;
+	return MT_NO_MATCH;
 }
 
 /* For Emacs:
