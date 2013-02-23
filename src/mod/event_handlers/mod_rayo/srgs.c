@@ -749,7 +749,6 @@ int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeo
 		iks_parser_delete(p);
 		if (result) {
 			switch_core_hash_insert(parser->cache, document, parser->root);
-			return 1;
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to parse grammar\n");
 			return 0;
@@ -807,10 +806,12 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 			}
 		}
 		if (status == SWITCH_STATUS_TIMEOUT) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "TIMEOUT\n");
 			return MT_TIMEOUT;
 		}
 		if (zstr(input) && match) {
 			if (match->type == DM_MATCH_POSITIVE) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "MATCH\n");
 				return MT_MATCH;
 			}
 		}
