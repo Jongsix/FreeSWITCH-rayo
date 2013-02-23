@@ -1,6 +1,6 @@
-
-int foo(int i)
+int dummy(int i)
 {
 	return 0;
 }
+
 

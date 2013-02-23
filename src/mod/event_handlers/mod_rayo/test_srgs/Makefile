@@ -11,5 +11,8 @@ $(IKS_LA): $(IKS_DIR) $(IKS_DIR)/.update
 	@cd $(IKS_DIR) && $(MAKE)
 	@$(TOUCH_TARGET)
 
-test: 
+local_all:
 	libtool --mode=link gcc main.o ../srgs.o -o test test_srgs.la
+
+local_clean:
+	-rm test

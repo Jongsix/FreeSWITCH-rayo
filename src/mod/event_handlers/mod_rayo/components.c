@@ -39,13 +39,13 @@
 /**
  * Create a component ref
  */
-static char *create_component_ref(switch_core_session_t *session, struct rayo_call *call, const char *type) 
+static char *create_component_ref(switch_core_session_t *session, struct rayo_call *call, const char *type)
 {
 	return switch_core_session_sprintf(session, "%s-%d", type, call->next_ref++);
 }
 
 /**
- * @param call 
+ * @param call
  * @param component_ref
  * @return JID for component
  */
@@ -64,7 +64,7 @@ void app_send_iq_error(switch_core_session_t *session, iks *iq, const char *erro
 {
 	switch_event_t *event;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	iks *response = iks_new_iq_error(iq, 
+	iks *response = iks_new_iq_error(iq,
 		switch_channel_get_variable(channel, "rayo_call_jid"),
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
 		error_name, error_type);
@@ -143,7 +143,7 @@ static void send_component_complete(switch_core_session_t *session, const char *
  * Send DTMF match to client
  * @param session the sesion that created the component_ref
  * @param jid the component JID
- * @param digits the matching digits 
+ * @param digits the matching digits
  */
 static void send_input_component_dtmf_match(switch_core_session_t *session, const char *jid, const char *digits)
 {
@@ -151,7 +151,7 @@ static void send_input_component_dtmf_match(switch_core_session_t *session, cons
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	iks *response = iks_new("presence");
 	iks *x;
-	
+
 	iks_insert_attrib(response, "from", jid);
 	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
 	iks_insert_attrib(response, "type", "unavailable");
@@ -238,70 +238,7 @@ struct input_handler {
 	struct srgs_parser *parser;
 	/** The call */
 	struct rayo_call *call;
-	/** terminating digits */
-	int term_digit_mask;
-	/** timeout before digits have been collected */
-	int initial_timeout;
-	/** timeout between digits */
-	int inter_digit_timeout;
-	/** TODO */
-	int max_silence;
-	/** Time last digit was received */
-	switch_time_t last_digit_time;
-	/** True if first digit has been collected */
-	int got_first_digit;
-	/** True if enough digits have been collected, but more can still be collected */
-	int lazy_match;
 };
-
-/**
- * Get digit mask
- * @param digit to mask
- * @return mask value
- */
-static int get_digit_mask(char digit)
-{
-	switch (digit) {
-		case '0': return 1;
-		case '1': return 1 << 1;
-		case '2': return 1 << 2;
-		case '3': return 1 << 3;
-		case '4': return 1 << 4;
-		case '5': return 1 << 5;
-		case '6': return 1 << 6;
-		case '7': return 1 << 7;
-		case '8': return 1 << 8;
-		case '9': return 1 << 9;
-		case 'A':
-		case 'a': return 1 << 10;
-		case 'B':
-		case 'b': return 1 << 11;
-		case 'C':
-		case 'c': return 1 << 12;
-		case 'D':
-		case 'd': return 1 << 13;
-		case '*': return 1 << 14;
-		case '#': return 1 << 15;
-	}
-	return 0;
-}
-
-/**
- * Get digit mask from digit string
- * @param digits the digits
- * @return the mask
- */
-static int get_digit_mask_from_string(const char *digits)
-{
-	int mask = 0;
-	if (digits) {
-		while (*digits) {
-			mask |= get_digit_mask(*digits);
-			digits++;
-		}
-	}
-	return mask;
-}
 
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
 
@@ -313,31 +250,36 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
-		switch_time_t elapsed = switch_time_now() - handler->last_digit_time;
-		if (handler->initial_timeout > 0 && !handler->got_first_digit && elapsed > (handler->initial_timeout * 1000)) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%i initial-timeout\n", handler->initial_timeout);
-			switch_mutex_lock(handler->call->mutex);
-			send_component_complete(session, handler->call->input_jid, INPUT_NOINPUT);
-
-			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-			handler->call->input_jid = "";
-			switch_mutex_unlock(handler->call->mutex);
-		} else if (handler->inter_digit_timeout > 0 && handler->got_first_digit && elapsed > (handler->inter_digit_timeout * 1000)) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%i inter-digit-timeout\n", handler->inter_digit_timeout);
-			switch_mutex_lock(handler->call->mutex);
-
-			if (handler->lazy_match) {
-				/* enough digits have been collected */
-				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
-			} else {
-				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+		enum match_type match = srgs_match(handler->parser, NULL);
+		switch (match) {
+			case MT_NO_MATCH: {
+				/* need more digits */
+				break;
 			}
-
-			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-			handler->call->input_jid = "";
-			switch_mutex_unlock(handler->call->mutex);
+			case MT_TIMEOUT: {
+				switch_mutex_lock(handler->call->mutex);
+				if (handler->num_digits == 0) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
+					send_component_complete(session, handler->call->input_jid, INPUT_NOINPUT);
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
+					send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+				}
+				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+				handler->call->input_jid = "";
+				switch_mutex_unlock(handler->call->mutex);
+				break;
+			}
+			case MT_MATCH: {
+				switch_mutex_lock(handler->call->mutex);
+				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
+				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+				handler->call->input_jid = "";
+				switch_mutex_unlock(handler->call->mutex);
+				break;
+			}
 		}
 	}
 	return SWITCH_STATUS_SUCCESS;
@@ -355,32 +297,16 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		handler->digits[handler->num_digits] = dtmf->digit;
 		handler->num_digits++;
 		handler->digits[handler->num_digits] = '\0';
-		handler->last_digit_time = switch_micro_time_now();
-		handler->got_first_digit = 1;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", handler->digits);
 
-		/* check for match */
-		if (get_digit_mask(dtmf->digit) & handler->term_digit_mask) {
-			/* got terminating digit */
-			if (handler->lazy_match) {
-				match = MT_MATCH;
-			} else {
-				match = MT_NO_MATCH;
-			}
-		} else {
-			match = srgs_match(handler->parser, handler->digits);
-		}
+		match = srgs_match(handler->parser, handler->digits + handler->num_digits - 1);
 
 		switch (match) {
-			case MT_MATCH_PARTIAL: {
+			case MT_NO_MATCH: {
 				/* need more digits */
 				break;
 			}
-			case MT_MATCH_LAZY: {
-				/* If we get a term digit or there is a timeout, this is a good enough match */
-				handler->lazy_match = 1;
-			}
-			case MT_NO_MATCH: {
+			case MT_TIMEOUT: {
 				/* notify of no-match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
 				switch_mutex_lock(handler->call->mutex);
@@ -474,16 +400,10 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
 	handler->call = call;
-	handler->last_digit_time = switch_micro_time_now();
-	handler->got_first_digit = 0;
-	handler->lazy_match = 0;
-	handler->term_digit_mask = get_digit_mask_from_string(i_attribs.terminator.v.s);
-	handler->initial_timeout = i_attribs.initial_timeout.v.i;
-	handler->inter_digit_timeout = i_attribs.inter_digit_timeout.v.i;
-	handler->max_silence = i_attribs.max_silence.v.i;
 
 	/* parse the grammar */
-	if (!srgs_parse(handler->parser, srgs)) {
+	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i,
+		i_attribs.terminator.v.s)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
@@ -492,7 +412,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	/* create JID */
 	ref = create_component_ref(session, call, "input");
 	call->input_jid = create_call_component_jid(session, call, ref);
-	
+
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
 	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
@@ -564,7 +484,7 @@ switch_status_t output_speak_document(switch_core_session_t *session, iks *docum
 		max_time_ms = (int)((timeout - now) / 1000);
 
 		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
-		max_time_ms += 40; 
+		max_time_ms += 40;
 	}
 
 	name = iks_name(document);
@@ -610,7 +530,7 @@ switch_status_t output_silence(switch_core_session_t *session, int silence_ms, s
 		max_time_ms = (int)((timeout - now) / 1000);
 
 		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
-		max_time_ms += 40; 
+		max_time_ms += 40;
 	}
 
 	/* append timeout param and SSML file format and the SSML document */
@@ -621,7 +541,7 @@ switch_status_t output_silence(switch_core_session_t *session, int silence_ms, s
 	status = switch_ivr_play_file(session, NULL, filename, NULL);
 
 	switch_safe_free(filename);
-	
+
 	return status;
 }
 
@@ -771,7 +691,7 @@ void start_prompt_component(switch_core_session_t *session, struct rayo_call *ca
 	iks *prompt = iks_child(iq);
 
 	switch_mutex_lock(call->mutex);
-	
+
 	if (!zstr(call->output_jid) || !zstr(call->input_jid)) {
 		/* already have output component */
 		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
@@ -787,9 +707,9 @@ void start_prompt_component(switch_core_session_t *session, struct rayo_call *ca
 		return;
 	}
 	switch_mutex_unlock(call->mutex);
-	
+
 	/* TODO implement */
-	
+
 	app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 }
 
