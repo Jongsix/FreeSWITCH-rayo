@@ -402,8 +402,7 @@ void start_input_component(switch_core_session_t *session, struct rayo_call *cal
 	handler->call = call;
 
 	/* parse the grammar */
-	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i,
-		i_attribs.terminator.v.s)) {
+	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
