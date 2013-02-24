@@ -42,7 +42,7 @@ enum match_type {
 
 extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
 extern void srgs_reset(struct srgs_parser *parser);
-extern int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms, const char *terminators);
+extern int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms);
 extern enum match_type srgs_match(struct srgs_parser *parser, const char *input);
 
 #endif

@@ -110,6 +110,8 @@ struct srgs_node {
 	struct srgs_node *child;
 	/** sibling node */
 	struct srgs_node *next;
+	/** number of child nodes */
+	int num_children;
 };
 
 /**
@@ -253,6 +255,7 @@ static struct srgs_node *sn_new(switch_memory_pool_t *pool, enum srgs_node_type 
 	struct srgs_node *node = switch_core_alloc(pool, sizeof(*node));
 	node->type = type;
 	node->visited = 0;
+	node->num_children = 0;
 	return node;
 }
 
@@ -281,6 +284,7 @@ static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node 
 	struct srgs_node *child = sn_new(pool, type);
 	child->parent = parent;
 	child->next = NULL;
+	parent->num_children++;
 	if (sibling) {
 		sibling->next = child;
 	} else {
@@ -483,7 +487,6 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 			int i;
 			for (i = 0; i < len; i++) {
 				if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-					//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<%s> Add digit %c\n", node_type_to_string(parser->cur->type), data[i]);
 					digit = sn_insert_digit(parser->pool, digit, data[i]);
 					sn_log_node_open(digit);
 				}
@@ -513,6 +516,25 @@ struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid
 }
 
 /**
+ * Initialize dmachine for new match
+ * @param parser the parser
+ * @param input_timeout_ms timeout before first digit
+ * @param digit_timeout_ms timeout after first digit
+ */
+static void setup_dmachine(struct srgs_parser *parser, int input_timeout_ms, int digit_timeout_ms)
+{
+	if (input_timeout_ms < 0) {
+		input_timeout_ms = 0;
+	}
+	if (digit_timeout_ms < 0) {
+		digit_timeout_ms = 0;
+	}
+	switch_ivr_dmachine_clear(parser->dmachine);
+	switch_ivr_dmachine_set_input_timeout_ms(parser->dmachine, input_timeout_ms);
+	switch_ivr_dmachine_set_digit_timeout_ms(parser->dmachine, digit_timeout_ms);
+}
+
+/**
  * Create digit machine
  */
 static int create_dmachine(struct srgs_parser *parser)
@@ -534,6 +556,10 @@ static int create_dmachine(struct srgs_parser *parser)
 
 /**
  * Create regexes
+ * @param parser the parser
+ * @param node root node
+ * @param stream set to NULL
+ * @return 1 if successful
  */
 static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, switch_stream_handle_t *stream)
 {
@@ -541,25 +567,33 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 	switch (node->type) {
 		case SNT_ROOT:
 			if (node->child) {
-				int first_rule = 1;
+				int num_rules = 0;
 				struct srgs_node *child = node->child;
 				switch_stream_handle_t new_stream = { 0 };
 				SWITCH_STANDARD_STREAM(new_stream);
-				new_stream.write_function(&new_stream, "%s", "(?:");
+				if (node->num_children > 1) {
+					new_stream.write_function(&new_stream, "%s", "^(?:");
+				} else {
+					new_stream.write_function(&new_stream, "%s", "^");
+				}
 				for (; child; child = child->next) {
 					if (!create_regexes(parser, child, &new_stream)) {
 						switch_safe_free(new_stream.data);
 						return 0;
 					}
 					if (child->type == SNT_RULE && child->value.rule.is_public) {
-						if (!first_rule) {
+						if (num_rules > 0) {
 							new_stream.write_function(&new_stream, "%s", "|");
 						}
 						new_stream.write_function(&new_stream, "%s", child->value.rule.regex);
-						first_rule = 0;
+						num_rules++;
 					}
 				}
-				new_stream.write_function(&new_stream, "%s", ")");
+				if (node->num_children > 1) {
+					new_stream.write_function(&new_stream, "%s", ")$");
+				} else {
+					new_stream.write_function(&new_stream, "%s", "$");
+				}
 				node->value.root.regex = switch_core_strdup(parser->pool, new_stream.data);
 				switch_safe_free(new_stream.data);
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", node->value.root.regex);
@@ -586,9 +620,10 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 			break;
 		case SNT_DIGIT:
 			if (node->value.digit == '*') {
-				stream->write_function(stream, "%s", "\\");
+				stream->write_function(stream, "\\*");
+			} else {
+				stream->write_function(stream, "%c", node->value.digit);
 			}
-			stream->write_function(stream, "%c", node->value.digit);
 			if (node->child) {
 				if (!create_regexes(parser, node->child, stream)) {
 					return 0;
@@ -618,7 +653,9 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 		case SNT_ONE_OF:
 			if (node->child) {
 				struct srgs_node *item = node->child;
-				stream->write_function(stream, "%s", "(?:");
+				if (node->num_children > 1) {
+					stream->write_function(stream, "%s", "(?:");
+				}
 				for (; item; item = item->next) {
 					if (item != node->child) {
 						stream->write_function(stream, "%s", "|");
@@ -627,7 +664,9 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 						return 0;
 					}
 				}
-				stream->write_function(stream, "%s", ")");
+				if (node->num_children > 1) {
+					stream->write_function(stream, "%s", ")");
+				}
 			}
 			break;
 		case SNT_REF: {
@@ -711,8 +750,11 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
  * Parse the document into rules to match
  * @param parser the parser
  * @param document the document to parse
+ * @param input_timeout_ms timeout before first digit
+ * @param digit_timeout_ms timeout after first digit
+ * @return true if successful
  */
-int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms, const char *terminators)
+int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms)
 {
 	switch_ivr_dmachine_t *dmachine = NULL;
 	if (!parser) {
@@ -756,19 +798,8 @@ int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeo
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
 	}
-	if (input_timeout_ms < 0) {
-		input_timeout_ms = 0;
-	}
-	if (digit_timeout_ms < 0) {
-		digit_timeout_ms = 0;
-	}
-	if (zstr(terminators)) {
-		terminators = "";
-	}
-	switch_ivr_dmachine_clear(parser->dmachine);
-	switch_ivr_dmachine_set_terminators(parser->dmachine, terminators);
-	switch_ivr_dmachine_set_input_timeout_ms(parser->dmachine, input_timeout_ms);
-	switch_ivr_dmachine_set_digit_timeout_ms(parser->dmachine, digit_timeout_ms);
+
+	setup_dmachine(parser, input_timeout_ms, digit_timeout_ms);
 	return 1;
 }
 

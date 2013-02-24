@@ -4,23 +4,36 @@
 #include "srgs.h"
 
 
-static void assert_equals(char *test, char *expected_str, int expected, int actual)
+static void assert_equals(char *test, char *expected_str, int expected, int actual, const char *file, int line)
 {
 	if (expected != actual) {
-		printf("TEST\t%s\tFAIL\t%s\t%i\t!=\t%i\n", test, expected_str, expected, actual);
+		printf("TEST\t%s\tFAIL\t%s\t%i\t!=\t%i\t%s:%i\n", test, expected_str, expected, actual, file, line);
 		exit(1);
 	} else {
 		printf("TEST\t%s\tPASS\n", test);
 	}
 }
 
-#define ASSERT_EQUALS(expected, actual) assert_equals(#actual, #expected, expected, actual)
+#define ASSERT_EQUALS(expected, actual) assert_equals(#actual, #expected, expected, actual, __FILE__, __LINE__)
 
 #define SKIP_ASSERT_EQUALS(expected, actual) if (0) { ASSERT_EQUALS(expected, actual); }
 
 #define TEST(name) printf("TEST BEGIN\t" #name "\n"); name(); printf("TEST END\t"#name "\tPASS\n");
 
 #define SKIP_TEST(name) if (0) { TEST(name) };
+
+static const char *ivr_menu_grammar =
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"inputdigits\">"
+	"  <rule id=\"menu\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"      <item>1</item>\n"
+	"      <item>2</item>\n"
+	"      <item>3</item>\n"
+	"      <item>4</item>\n"
+	"      <item>*</item>\n"
+	"    </one-of>\n"
+	"  </rule>\n"
+	"</grammar>\n";
 
 static const char *adhearsion_ask_grammar =
 	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"inputdigits\">"
@@ -52,7 +65,7 @@ static void test_match_adhearsion_ask_grammar(void)
 
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
-	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar, -1, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar, -1, -1));
 
 	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
 	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
@@ -105,7 +118,7 @@ static void test_match_multi_digit_grammar(void)
 
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
-	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, -1));
 
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
@@ -159,7 +172,7 @@ static void test_match_multi_rule_grammar(void)
 
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
-	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar, -1, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar, -1, -1));
 
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
@@ -223,7 +236,7 @@ static void test_match_rayo_example_grammar(void)
 
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
-	ASSERT_EQUALS(1, srgs_parse(parser, rayo_example_grammar, -1, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, rayo_example_grammar, -1, -1));
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
 	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
@@ -311,12 +324,12 @@ static void test_parse_grammar(void)
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
 
-	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar, -1, -1, ""));
-	ASSERT_EQUALS(0, srgs_parse(parser, adhearsion_ask_grammar_bad, -1, -1, ""));
-	ASSERT_EQUALS(0, srgs_parse(parser, NULL, -1, -1, ""));
-	ASSERT_EQUALS(0, srgs_parse(NULL, adhearsion_ask_grammar, -1, -1, ""));
-	ASSERT_EQUALS(0, srgs_parse(NULL, adhearsion_ask_grammar_bad, -1, -1, ""));
-	ASSERT_EQUALS(0, srgs_parse(parser, bad_ref_grammar, -1, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar, -1, -1));
+	ASSERT_EQUALS(0, srgs_parse(parser, adhearsion_ask_grammar_bad, -1, -1));
+	ASSERT_EQUALS(0, srgs_parse(parser, NULL, -1, -1));
+	ASSERT_EQUALS(0, srgs_parse(NULL, adhearsion_ask_grammar, -1, -1));
+	ASSERT_EQUALS(0, srgs_parse(NULL, adhearsion_ask_grammar_bad, -1, -1));
+	ASSERT_EQUALS(0, srgs_parse(parser, bad_ref_grammar, -1, -1));
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -332,7 +345,7 @@ static void test_initial_timeout(void)
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
 
-	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, 200, -1, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, 200, -1));
 
 	for (i = 0; i < 100; i++) {
 		switch_sleep(20 * 1000);
@@ -357,7 +370,7 @@ static void test_digit_timeout(void)
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
 
-	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, 200, ""));
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, 200));
 
 	srgs_match(parser, "0");
 	for (i = 0; i < 100; i++) {
@@ -368,6 +381,33 @@ static void test_digit_timeout(void)
 	}
 	elapsed_time_ms = (switch_time_now() - start) / 1000;
 	ASSERT_EQUALS(1, elapsed_time_ms < 240);
+
+	switch_core_destroy_memory_pool(&pool);
+}
+
+static void test_feed_digits(void)
+{
+	switch_memory_pool_t *pool;
+	struct srgs_parser *parser;
+
+	switch_core_new_memory_pool(&pool);
+	parser = srgs_parser_new(pool, "1234");
+
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, 200));
+
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8"));
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8"));
+	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "0"));
+
+	srgs_reset(parser);
+
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2"));
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2"));
+	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "3"));
+
+	ASSERT_EQUALS(1, srgs_parse(parser, ivr_menu_grammar, -1, -1));
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "7"));
+	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "#"));
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -386,5 +426,6 @@ int main(int argc, char **argv)
 	TEST(test_match_rayo_example_grammar);
 	TEST(test_initial_timeout);
 	TEST(test_digit_timeout);
+	TEST(test_feed_digits);
 	return 0;
 }
