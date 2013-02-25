@@ -105,7 +105,7 @@ static void send_component_ref(struct rayo_call *call, iks *iq, const char *ref)
 static void send_component_complete(struct rayo_call *call, const char *jid, const char *reason, const char *reason_namespace)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(call->session);
-	iks *response = iks_new("response");
+	iks *response = iks_new("presence");
 	iks *x;
 	iks_insert_attrib(response, "from", jid);
 	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
