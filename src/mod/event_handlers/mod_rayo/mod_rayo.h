@@ -31,15 +31,7 @@
 #define MOD_RAYO_H
 
 #include <switch.h>
-
-
-#define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
-#define RAYO_EVENT_OFFER "rayo::offer"
-
-#define RAYO_CAUSE_HANGUP "NORMAL_CLEARING"
-#define RAYO_CAUSE_DECLINE "CALL_REJECTED"
-#define RAYO_CAUSE_BUSY "USER_BUSY"
-#define RAYO_CAUSE_ERROR "TEMPORARY_FAILURE"
+#include <iksemel.h>
 
 /**
  * A call controlled by Rayo
@@ -62,6 +54,13 @@ struct rayo_call {
 	/** next component ref */
 	int next_ref;
 };
+
+extern struct rayo_call *get_rayo_call(switch_core_session_t *session);
+
+typedef iks *(*command_handler)(const char *server_jid, struct rayo_call *, iks *);
+extern void add_rayo_command_handler(const char *name, command_handler fn);
+
+extern void call_iks_send(struct rayo_call *call, iks *msg);
 
 #endif
 

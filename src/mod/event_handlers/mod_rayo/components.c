@@ -39,9 +39,9 @@
 /**
  * Create a component ref
  */
-static char *create_component_ref(switch_core_session_t *session, struct rayo_call *call, const char *type)
+static char *create_component_ref(struct rayo_call *call, const char *type)
 {
-	return switch_core_session_sprintf(session, "%s-%d", type, call->next_ref++);
+	return switch_core_session_sprintf(call->session, "%s-%d", type, call->next_ref++);
 }
 
 /**
@@ -49,48 +49,37 @@ static char *create_component_ref(switch_core_session_t *session, struct rayo_ca
  * @param component_ref
  * @return JID for component
  */
-static char *create_call_component_jid(switch_core_session_t *session, struct rayo_call *call, char *component_ref)
+static char *create_call_component_jid(struct rayo_call *call, char *component_ref)
 {
-	return switch_core_session_sprintf(session, "%s/%s", call->jid, component_ref);
+	return switch_core_session_sprintf(call->session, "%s/%s", call->jid, component_ref);
 }
 
 /**
  * Send IQ error to controlling client from call
- * @param session the session that detected the error
+ * @param call the call
  * @param iq the request that caused the error
  * @param error the error message
  */
-void app_send_iq_error(switch_core_session_t *session, iks *iq, const char *error_name, const char *error_type)
+void call_send_iq_error(struct rayo_call *call, iks *iq, const char *error_name, const char *error_type)
 {
-	switch_event_t *event;
-	switch_channel_t *channel = switch_core_session_get_channel(session);
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *response = iks_new_iq_error(iq,
 		switch_channel_get_variable(channel, "rayo_call_jid"),
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
 		error_name, error_type);
-
-	/* send message to Rayo session via event */
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		char *response_str = iks_string(NULL, response);
-		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response_str);
-		switch_event_fire(&event);
-		iks_free(response_str);
-	}
-
+	call_iks_send(call, response);
 	iks_delete(response);
 }
 
 /**
  * Send component ref to controlling client from call
- * @param session the session that created the component
+ * @param call the call
  * @param iq the request that requested the component
  * @param ref the component ref
  */
-static void send_component_ref(switch_core_session_t *session, iks *iq, const char *ref)
+static void send_component_ref(struct rayo_call *call, iks *iq, const char *ref)
 {
-	switch_event_t *event;
-	switch_channel_t *channel = switch_core_session_get_channel(session);
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *x, *response = NULL;
 
 	response = iks_new_iq_result(
@@ -101,54 +90,43 @@ static void send_component_ref(switch_core_session_t *session, iks *iq, const ch
 	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:1");
 	iks_insert_attrib(x, "id", ref);
 
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		char *response_str = iks_string(NULL, response);
-		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response_str);
-		switch_event_fire(&event);
-		iks_free(response_str);
-	}
+	call_iks_send(call, response);
 	iks_delete(response);
 }
 
 /**
  * Send component complete presence to client
- * @param session the session that created the component
+ * @param call the call
  * @param jid the component JID
  * @param reason the completion reason
  * @param reason_namespace the completion reason namespace
  * @param reason_detail optional detail
  */
-static void send_component_complete(switch_core_session_t *session, const char *jid, const char *reason, const char *reason_namespace)
+static void send_component_complete(struct rayo_call *call, const char *jid, const char *reason, const char *reason_namespace)
 {
-	switch_event_t *event;
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	char *response = switch_mprintf(
-		"<presence from='%s' to='%s' type='unavailable'>"
-		"<complete xmlns='urn:xmpp:rayo:ext:1'><%s xmlns='%s'/></complete></presence>",
-		jid,
-		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		reason,
-		reason_namespace);
-
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response);
-		switch_event_fire(&event);
-	}
-	switch_safe_free(response);
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	iks *response = iks_new("response");
+	iks *x;
+	iks_insert_attrib(response, "from", jid);
+	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
+	iks_insert_attrib(response, "type", "unavailable");
+	x = iks_insert(response, "complete");
+	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+	x = iks_insert(x, reason);
+	iks_insert_attrib(x, "xmlns", reason_namespace);
+	call_iks_send(call, response);
+	iks_delete(response);
 }
 
 /**
  * Send DTMF match to client
- * @param session the sesion that created the component_ref
+ * @param call the call that created the component_ref
  * @param jid the component JID
  * @param digits the matching digits
  */
-static void send_input_component_dtmf_match(switch_core_session_t *session, const char *jid, const char *digits)
+static void send_input_component_dtmf_match(struct rayo_call *call, const char *jid, const char *digits)
 {
-	switch_event_t *event;
-	switch_channel_t *channel = switch_core_session_get_channel(session);
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *response = iks_new("presence");
 	iks *x;
 
@@ -163,14 +141,7 @@ static void send_input_component_dtmf_match(switch_core_session_t *session, cons
 	iks_insert_attrib(x, "confidence", "1.0");
 	x = iks_insert(x, "utterance");
 	iks_insert_cdata(x, digits, strlen(digits));
-
-	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
-		char *response_str = iks_string(NULL, response);
-		switch_channel_event_set_data(channel, event);
-		switch_event_add_body(event, "%s", response_str);
-		switch_event_fire(&event);
-		iks_free(response_str);
-	}
+	call_iks_send(call, response);
 	iks_delete(response);
 }
 
@@ -260,10 +231,10 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 				switch_mutex_lock(handler->call->mutex);
 				if (handler->num_digits == 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
-					send_component_complete(session, handler->call->input_jid, INPUT_NOINPUT);
+					send_component_complete(handler->call, handler->call->input_jid, INPUT_NOINPUT);
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
-					send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+					send_component_complete(handler->call, handler->call->input_jid, INPUT_NOMATCH);
 				}
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
@@ -273,7 +244,7 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 			}
 			case MT_MATCH: {
 				switch_mutex_lock(handler->call->mutex);
-				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
+				send_input_component_dtmf_match(handler->call, handler->call->input_jid, handler->digits);
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
 				handler->call->input_jid = "";
@@ -310,7 +281,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				/* notify of no-match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
 				switch_mutex_lock(handler->call->mutex);
-				send_component_complete(session, handler->call->input_jid, INPUT_NOMATCH);
+				send_component_complete(handler->call, handler->call->input_jid, INPUT_NOMATCH);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
@@ -322,7 +293,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				/* notify of match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
 				switch_mutex_lock(handler->call->mutex);
-				send_input_component_dtmf_match(session, handler->call->input_jid, handler->digits);
+				send_input_component_dtmf_match(handler->call, handler->call->input_jid, handler->digits);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
@@ -352,7 +323,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 
 	/* already have input component? */
 	if (!zstr(call->input_jid)) {
-		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
+		call_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
 		goto done;
 	}
 
@@ -360,7 +331,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	memset(&i_attribs, 0, sizeof(i_attribs));
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
@@ -368,7 +339,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	grammar = iks_find(input, "grammar");
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
@@ -376,7 +347,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	content_type = iks_find_attrib(grammar, "content-type");
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
@@ -384,7 +355,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	srgs = iks_find_cdata(input, "grammar");
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
@@ -404,20 +375,20 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
 	/* create JID */
-	ref = create_component_ref(session, call, "input");
-	call->input_jid = create_call_component_jid(session, call, ref);
+	ref = create_component_ref(call, "input");
+	call->input_jid = create_call_component_jid(call, ref);
 
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
 	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
 
 	/* all good, acknowledge command */
-	send_component_ref(session, iq, ref);
+	send_component_ref(call, iq, ref);
 
 done:
 
@@ -587,7 +558,7 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 
 	/* already have output component? */
 	if (!zstr(call->output_jid)) {
-		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
+		call_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
@@ -595,7 +566,7 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
@@ -615,15 +586,15 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 
 	/* nothing to speak? */
 	if (!document) {
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
 
 	/* acknowledge command */
-	ref = create_component_ref(session, call, "output");
-	call->output_jid = create_call_component_jid(session, call, ref);
-	send_component_ref(session, iq, ref);
+	ref = create_component_ref(call, "output");
+	call->output_jid = create_call_component_jid(call, ref);
+	send_component_ref(call, iq, ref);
 
 	switch_mutex_unlock(call->mutex);
 
@@ -657,9 +628,9 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 	/* done */
 	switch_mutex_lock(call->mutex);
 	if (timeout && switch_micro_time_now() >= timeout) {
-		send_component_complete(session, call->output_jid, OUTPUT_MAX_TIME);
+		send_component_complete(call, call->output_jid, OUTPUT_MAX_TIME);
 	} else {
-		send_component_complete(session, call->output_jid, OUTPUT_FINISH_AHN);
+		send_component_complete(call, call->output_jid, OUTPUT_FINISH_AHN);
 	}
 	call->output_jid = "";
 	switch_mutex_unlock(call->mutex);
@@ -693,7 +664,7 @@ void start_call_prompt_component(switch_core_session_t *session, struct rayo_cal
 
 	if (!zstr(call->output_jid) || !zstr(call->input_jid)) {
 		/* already have output component */
-		app_send_iq_error(session, iq, STANZA_ERROR_CONFLICT);
+		call_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
@@ -701,7 +672,7 @@ void start_call_prompt_component(switch_core_session_t *session, struct rayo_cal
 	/* validate prompt attributes */
 	memset(&p_attribs, 0, sizeof(p_attribs));
 	if (!iks_attrib_parse(session, prompt, prompt_attribs_def, (struct iks_attribs *)&p_attribs)) {
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		switch_mutex_unlock(call->mutex);
 		return;
 	}
@@ -709,15 +680,35 @@ void start_call_prompt_component(switch_core_session_t *session, struct rayo_cal
 
 	/* TODO implement */
 
-	app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	call_send_iq_error(call, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 }
 
+/* 1000 Hz beep for 250ms */
+#define RECORD_BEEP "tone_stream://%(250,0,1000)"
+
+enum record_direction {
+	RD_DUPLEX,
+	RD_SEND,
+	RD_RECV
+};
+
+/**
+ * Validate <record direction="">
+ */
 static ATTRIB_RULE(record_direction)
 {
-	attrib->type = IAT_STRING;
+	attrib->type = IAT_INTEGER;
 	attrib->test = "(duplex || send || recv)";
-	attrib->v.s = (char *)value;
-	return !strcmp("duplex", value) || !strcmp("send", value) || !strcmp("recv", value);
+	if (!strcmp("duplex", value)) {
+		attrib->v.i = RD_DUPLEX;
+	} else if (!strcmp("send", value)) {
+		attrib->v.i = RD_SEND;
+	} else if (!strcmp("recv", value)) {
+		attrib->v.i = RD_RECV;
+	} else {
+		return 0;
+	}
+	return 1;
 }
 
 /**
@@ -731,7 +722,7 @@ static const struct iks_attrib_definition record_attribs_def[] = {
 	ATTRIB(max-duration, -1, positive_or_neg_one),
 	ATTRIB(initial-timeout, -1, positive_or_neg_one),
 	ATTRIB(final-timeout, -1, positive_or_neg_one),
-	ATTRIB(direction, "duplex", record_direction),
+	ATTRIB(direction, duplex, record_direction),
 	ATTRIB(mix, false, bool),
 	LAST_ATTRIB
 };
@@ -753,27 +744,238 @@ struct record_attribs {
 };
 
 /**
- * Start execution of prompt component
+ * Handle RECORD_STOP event from FreeSWITCH.
+ * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
+ */
+static void on_record_stop_event(switch_event_t *event)
+{
+	const char *dcp_jid = switch_event_get_header(event, "variable_rayo_dcp_jid");
+	if (!zstr(dcp_jid)) {
+		
+	}
+}
+
+/**
+ * Start execution of record component
  */
 void start_call_record_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
 {
 	struct record_attribs r_attribs;
 	iks *record = iks_child(iq);
-
-	switch_mutex_lock(call->mutex);
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	char *ref = NULL;
+	char *jid = NULL;
+	char *file = NULL;
+	int max_duration_sec = 0;
 
 	/* validate record attributes */
 	memset(&r_attribs, 0, sizeof(r_attribs));
 	if (!iks_attrib_parse(session, record, record_attribs_def, (struct iks_attribs *)&r_attribs)) {
-		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		return;
+	}
+
+	ref = create_component_ref(call, "record");
+	jid = create_call_component_jid(call, ref);
+
+	/* create record filename from component JID */
+	/* for example: 12345@192.168.1.10/record-30 = 12345@192.168.1.10/record-30.wav */
+	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, jid, r_attribs.format.v.s);
+
+	switch_channel_set_variable(channel, "RECORD_HANGUP_ON_ERROR", "false");
+	switch_channel_set_variable(channel, "RECORD_TOGGLE_ON_REPEAT", "");
+	switch_channel_set_variable(channel, "RECORD_CHECK_BRIDGE", "");
+	switch_channel_set_variable(channel, "RECORD_MIN_SEC", "0");
+	switch_channel_set_variable(channel, "RECORD_STEREO", "");
+	switch_channel_set_variable(channel, "RECORD_READ_ONLY", "");
+	switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "");
+	switch_channel_set_variable(channel, "RECORD_APPEND", "");
+	switch_channel_set_variable(channel, "RECORD_ANSWER_REQ", "");
+
+	// allow dialplan override for these variables
+	//switch_channel_set_variable(channel, "RECORD_PRE_BUFFER_FRAMES", "");
+	//switch_channel_set_variable(channel, "record_sample_rate", "");
+	//switch_channel_set_variable(channel, "enable_file_write_buffering", "");
+
+	/* max duration attribute is in milliseconds- convert to seconds */
+	if (r_attribs.max_duration.v.i > 0) {
+		max_duration_sec = ceil((double)r_attribs.max_duration.v.i / 1000.0);
+	}
+
+	switch (r_attribs.direction.v.i) {
+		case RD_DUPLEX:
+			if (r_attribs.mix.v.i) {
+				/* STEREO */
+				switch_channel_set_variable(channel, "RECORD_STEREO", "true");
+			} /* else MONO (default) */
+			break;
+		case RD_SEND:
+			/* record audio sent from the caller */
+			switch_channel_set_variable(channel, "RECORD_READ_ONLY", "true");
+			break;
+		case RD_RECV:
+			/* record audio received by the caller */
+			switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "true");
+			break;
+	};
+
+	if (r_attribs.start_beep.v.i) {
+		if (!switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL) != SWITCH_STATUS_SUCCESS) {
+			call_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		}
+	}
+
+	if (switch_ivr_record_session(session, file, max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started: file = %s\n", file);
+		send_component_ref(call, iq, ref);
+	} else {
+		call_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	}
+}
+
+#define RAYO_COMPONENT_USAGE ""
+/**
+ * Process call components (output, input, prompt, record)
+ */
+SWITCH_STANDARD_APP(rayo_call_component_app)
+{
+	iksparser *parser = NULL;
+	iks *iq;
+	char *command;
+	struct rayo_call *call = get_rayo_call(session);
+
+	switch_mutex_lock(call->mutex);
+	if (!call && zstr(call->dcp_jid)) {
+		switch_mutex_unlock(call->mutex);
+		/* shouldn't happen if APP was executed by this module */
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "No Rayo client controlling this session!\n");
+		goto done;
 	}
 	switch_mutex_unlock(call->mutex);
 
-	/* TODO implement */
+	if (zstr(data)) {
+		/* shouldn't happen if APP was executed by this module */
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Missing args!\n");
+		/* can't send iq error- no <iq> request! */
+		goto done;
+	}
 
-	app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	parser = iks_dom_new(&iq);
+	if (!parser) {
+		goto done;
+	}
+	if (iks_parse(parser, data, 0, 1) != IKS_OK) {
+		/* shouldn't happen if APP was executed by this module */
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Bad request!\n");
+		/* can't send iq error- no <iq> request! */
+		goto done;
+	}
+
+	if (!iks_has_children(iq)) {
+		/* shouldn't happen if APP was executed by this module */
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Bad request!\n");
+		call_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		goto done;
+	} 
+	
+	command = iks_name(iks_child(iq));
+	if (!strcmp("prompt", command)) {
+		start_call_prompt_component(session, call, iq);
+	} else if (!strcmp("input", command)) {
+		start_call_input_component(session, call, iq);
+	} else if (!strcmp("output", command)) {
+		start_call_output_component(session, call, iq);
+	} else if (!strcmp("record", command)) {
+		start_call_record_component(session, call, iq);
+	} else {
+		call_send_iq_error(call, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	}
+
+done:
+	if (iq) {
+		iks_delete(iq);
+	}
+	if (parser) {
+		iks_parser_delete(parser);
+	}
+}
+
+/**
+ * Handle Rayo call Component request
+ * @param server_jid the server JID
+ * @param call the Rayo call
+ * @param node the <iq> node
+ * @return the response
+ */
+static iks *on_rayo_call_component(const char *server_jid, struct rayo_call *call, iks *node)
+{
+	iks *response = NULL;
+	char *play = iks_string(NULL, node);
+	/* forward document to call thread by executing custom application */
+	if (!play || switch_core_session_execute_application_async(call->session, "rayo_call_component", play) != SWITCH_STATUS_SUCCESS) {
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to execute rayo_call_component!\n");
+	}
+	if (play) {
+		iks_free(play);
+	}
+	return response;
+}
+
+/**
+ * Handle <iq><stop> request
+ * @param server_jid the server JID
+ * @param call the Rayo call
+ * @param node the <iq> node
+ * @return the response
+ */
+static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *node)
+{
+	char *component_jid = iks_find_attrib(node, "to");
+	iks *response = NULL;
+	if (!strcmp(call->jid, component_jid) || !strcmp(server_jid, component_jid)) {
+		/* call/server instead of component */
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	} else if (zstr(call->output_jid) || strcmp(call->output_jid, component_jid)) {
+		/* component doesn't exist */
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+	} else if (switch_core_session_execute_application_async(call->session, "break", "") != SWITCH_STATUS_SUCCESS) {
+		/* failed to send break */
+		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	} else {
+		/* success */
+		response = iks_new_iq_result(component_jid, call->dcp_jid, iks_find_attrib(node, "id"));
+	}
+	return response;
+}
+
+/**
+ * Handle configuration
+ */
+switch_status_t load_components(switch_loadable_module_interface_t **module_interface)
+{
+	switch_application_interface_t *app_interface;
+	
+	add_rayo_command_handler("urn:xmpp:rayo:ext:1:stop", on_rayo_stop);
+	add_rayo_command_handler("urn:xmpp:rayo:output:1:output", on_rayo_call_component);
+	add_rayo_command_handler("urn:xmpp:rayo:input:1:input", on_rayo_call_component);
+	add_rayo_command_handler("urn:xmpp:rayo:prompt:1:prompt", on_rayo_call_component);
+	add_rayo_command_handler("urn:xmpp:rayo:record:1:record", on_rayo_call_component);
+	
+	switch_event_bind("mod_rayo_components", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
+	
+	SWITCH_ADD_APP(app_interface, "rayo_call_component", "Execute Rayo call component (internal module use only)", "", rayo_call_component_app, RAYO_COMPONENT_USAGE, 0);
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Handle shutdown
+ */
+switch_status_t shutdown_components(void)
+{
+	switch_event_unbind_callback(on_record_stop_event);
+	return SWITCH_STATUS_SUCCESS;
 }
 
 /* For Emacs:
