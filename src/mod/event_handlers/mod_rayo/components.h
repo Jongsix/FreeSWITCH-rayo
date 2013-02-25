@@ -35,9 +35,9 @@
 struct rayo_call;
 
 extern void app_send_iq_error(switch_core_session_t *session, iks *iq, const char *error_name, const char *error_type);
-extern void start_input_component(switch_core_session_t *session, struct rayo_call *call, iks *input);
-extern void start_output_component(switch_core_session_t *session, struct rayo_call *call, iks *input);
-extern void start_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *input);
-
+extern void start_call_input_component(switch_core_session_t *session, struct rayo_call *call, iks *iq);
+extern void start_call_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq);
+extern void start_call_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *iq);
+extern void start_call_record_component(switch_core_session_t *session, struct rayo_call *call, iks *iq);
 
 #endif
