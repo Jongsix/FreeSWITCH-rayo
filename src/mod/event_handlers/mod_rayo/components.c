@@ -749,9 +749,35 @@ struct record_attribs {
  */
 static void on_record_stop_event(switch_event_t *event)
 {
-	const char *dcp_jid = switch_event_get_header(event, "variable_rayo_dcp_jid");
-	if (!zstr(dcp_jid)) {
+	/* locate call and lock it since event is handled outside of channel thread */
+	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
+	if (call) {
+		switch_core_session_t *session = call->session;
+		switch_channel_t *channel = switch_core_session_get_channel(session);
+		iks *x = NULL, *presence = NULL;
+		const char *file = switch_event_get_header(event, "Record-File-Path");
+		char *uri = switch_core_session_sprintf(session, "file://%s", file);
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording %s done.\n", file);
+
+		/* send complete event to client */
+		presence = iks_new("presence");
+		iks_insert_attrib(presence, "from", switch_channel_get_variable(channel, file)); // file is mapped to JID here
+		iks_insert_attrib(presence, "to", call->dcp_jid);
+		iks_insert_attrib(presence, "type", "unavailable");
+		x = iks_insert(presence, "complete");
+		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+		x = iks_insert(x, "success");
+		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:complete:1");
+		x = iks_insert(x, "recording");
+		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:record:complete:1");
+		iks_insert_attrib(x, "uri", uri);
+		iks_insert_attrib(x, "duration", "30"); // TODO
+		iks_insert_attrib(x, "size", "30"); // TODO
+		call_iks_send(call, presence);
+		iks_delete(presence);
 		
+		rayo_call_unlock(call);
 	}
 }
 
@@ -778,9 +804,10 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 	ref = create_component_ref(call, "record");
 	jid = create_call_component_jid(call, ref);
 
-	/* create record filename from component JID */
-	/* for example: 12345@192.168.1.10/record-30 = 12345@192.168.1.10/record-30.wav */
-	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, jid, r_attribs.format.v.s);
+	/* create record filename from session UUID and ref */
+	/* for example: 1234-1234-1234-1234/record-30.wav */
+	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, 
+									   switch_core_session_get_uuid(session), r_attribs.format.v.s);
 
 	switch_channel_set_variable(channel, "RECORD_HANGUP_ON_ERROR", "false");
 	switch_channel_set_variable(channel, "RECORD_TOGGLE_ON_REPEAT", "");
@@ -792,7 +819,10 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 	switch_channel_set_variable(channel, "RECORD_APPEND", "");
 	switch_channel_set_variable(channel, "RECORD_ANSWER_REQ", "");
 
-	// allow dialplan override for these variables
+	/* map recording file to JID so we can find it on RECORD_STOP event */
+	switch_channel_set_variable(channel, file, jid);
+
+	/* allow dialplan override for these variables */
 	//switch_channel_set_variable(channel, "RECORD_PRE_BUFFER_FRAMES", "");
 	//switch_channel_set_variable(channel, "record_sample_rate", "");
 	//switch_channel_set_variable(channel, "enable_file_write_buffering", "");
@@ -819,6 +849,8 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 			break;
 	};
 
+	/* TODO need hangup hook for cleanup */
+	
 	if (r_attribs.start_beep.v.i) {
 		if (!switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL) != SWITCH_STATUS_SUCCESS) {
 			call_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
