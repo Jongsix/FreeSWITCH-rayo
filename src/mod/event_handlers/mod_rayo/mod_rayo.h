@@ -56,6 +56,8 @@ struct rayo_call {
 };
 
 extern struct rayo_call *get_rayo_call(switch_core_session_t *session);
+extern struct rayo_call *rayo_call_locate(const char *uuid);
+extern void rayo_call_unlock(struct rayo_call *call);
 
 typedef iks *(*command_handler)(const char *server_jid, struct rayo_call *, iks *);
 extern void add_rayo_command_handler(const char *name, command_handler fn);

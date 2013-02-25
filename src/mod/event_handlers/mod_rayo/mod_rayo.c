@@ -255,16 +255,18 @@ struct rayo_call *get_rayo_call(switch_core_session_t *session)
  * @param call_uuid the FreeSWITCH call UUID
  * @return the call or NULL.  Call rayo_call_unlock() when done with call pointer.
  */
-static struct rayo_call *rayo_call_locate(const char *call_uuid)
+struct rayo_call *rayo_call_locate(const char *call_uuid)
 {
 	struct rayo_call *call = NULL;
-	switch_core_session_t *session = switch_core_session_locate(call_uuid);
-	if (session) {
-		call = get_rayo_call(session);
-		if (call) {
-			switch_mutex_lock(call->mutex);
-		} else {
-			switch_core_session_rwunlock(session);
+	if (call_uuid) {
+		switch_core_session_t *session = switch_core_session_locate(call_uuid);
+		if (session) {
+			call = get_rayo_call(session);
+			if (call) {
+				switch_mutex_lock(call->mutex);
+			} else {
+				switch_core_session_rwunlock(session);
+			}
 		}
 	}
 	return call;
@@ -294,7 +296,7 @@ static struct rayo_call *rayo_call_locate_from_jid(const char *call_jid)
 /**
  * Unlock Rayo call.
  */
-static void rayo_call_unlock(struct rayo_call *call)
+void rayo_call_unlock(struct rayo_call *call)
 {
 	if (call) {
 		switch_core_session_rwunlock(call->session);
