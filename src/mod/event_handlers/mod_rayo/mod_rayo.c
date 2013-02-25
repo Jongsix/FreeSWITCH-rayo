@@ -1653,14 +1653,15 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 	}
 
 	/* execute the component */
-	//switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Got command: %s\n", data);
 	command = iks_name(iks_child(iq));
 	if (!strcmp("prompt", command)) {
-		start_prompt_component(session, call, iq);
+		start_call_prompt_component(session, call, iq);
 	} else if (!strcmp("input", command)) {
-		start_input_component(session, call, iq);
+		start_call_input_component(session, call, iq);
 	} else if (!strcmp("output", command)) {
-		start_output_component(session, call, iq);
+		start_call_output_component(session, call, iq);
+	} else if (!strcmp("record", command)) {
+		start_call_record_component(session, call, iq);
 	} else {
 		app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		goto done;
@@ -1776,6 +1777,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:output:1:output", on_rayo_call_component, globals.pool);
 	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:input:1:input", on_rayo_call_component, globals.pool);
 	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:prompt:1:prompt", on_rayo_call_component, globals.pool);
+	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:record:1:record", on_rayo_call_component, globals.pool);
 
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);
