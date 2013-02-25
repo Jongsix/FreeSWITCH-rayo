@@ -338,7 +338,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 /**
  * Start execution of input component
  */
-void start_input_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+void start_call_input_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
 {
 	struct input_attribs i_attribs;
 	char *ref = NULL;
@@ -571,7 +571,7 @@ switch_status_t output_documents(switch_core_session_t *session, iks *document, 
 /**
  * Start execution of output component
  */
-void start_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+void start_call_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
 {
 	struct output_attribs o_attribs;
 	char *ref = NULL;
@@ -684,7 +684,7 @@ struct prompt_attribs {
 /**
  * Start execution of prompt component
  */
-void start_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+void start_call_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
 {
 	struct prompt_attribs p_attribs;
 	iks *prompt = iks_child(iq);
@@ -712,6 +712,69 @@ void start_prompt_component(switch_core_session_t *session, struct rayo_call *ca
 	app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 }
 
+static ATTRIB_RULE(record_direction)
+{
+	attrib->type = IAT_STRING;
+	attrib->test = "(duplex || send || recv)";
+	attrib->v.s = (char *)value;
+	return !strcmp("duplex", value) || !strcmp("send", value) || !strcmp("recv", value);
+}
+
+/**
+ * <record> component validation
+ */
+static const struct iks_attrib_definition record_attribs_def[] = {
+	ATTRIB(format, mp3, any),
+	ATTRIB(start-beep, false, bool),
+	ATTRIB(stop-beep, false, bool),
+	ATTRIB(start-paused, false, bool),
+	ATTRIB(max-duration, -1, positive_or_neg_one),
+	ATTRIB(initial-timeout, -1, positive_or_neg_one),
+	ATTRIB(final-timeout, -1, positive_or_neg_one),
+	ATTRIB(direction, "duplex", record_direction),
+	ATTRIB(mix, false, bool),
+	LAST_ATTRIB
+};
+
+/**
+ * <record> component attributes
+ */
+struct record_attribs {
+	int size;
+	struct iks_attrib format;
+	struct iks_attrib start_beep;
+	struct iks_attrib stop_beep;
+	struct iks_attrib start_paused;
+	struct iks_attrib max_duration;
+	struct iks_attrib initial_timeout;
+	struct iks_attrib final_timeout;
+	struct iks_attrib direction;
+	struct iks_attrib mix;
+};
+
+/**
+ * Start execution of prompt component
+ */
+void start_call_record_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+{
+	struct record_attribs r_attribs;
+	iks *record = iks_child(iq);
+
+	switch_mutex_lock(call->mutex);
+
+	/* validate record attributes */
+	memset(&r_attribs, 0, sizeof(r_attribs));
+	if (!iks_attrib_parse(session, record, record_attribs_def, (struct iks_attribs *)&r_attribs)) {
+		app_send_iq_error(session, iq, STANZA_ERROR_BAD_REQUEST);
+		switch_mutex_unlock(call->mutex);
+		return;
+	}
+	switch_mutex_unlock(call->mutex);
+
+	/* TODO implement */
+
+	app_send_iq_error(session, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+}
 
 /* For Emacs:
  * Local Variables:
