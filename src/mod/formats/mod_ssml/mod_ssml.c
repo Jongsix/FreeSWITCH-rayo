@@ -212,7 +212,7 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_
 	voice = (struct voice *)switch_core_hash_find(globals.voice_cache, lang_name_gender);
 	if (voice) {
 		/* that was easy! */
-		return voice;
+		goto done;
 	}
 
 	/* find best language, name, gender match */
@@ -234,7 +234,8 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_
 	if (voice) {
 		switch_core_hash_insert(globals.voice_cache, lang_name_gender, voice);
 	}
-
+	
+done:
 	switch_safe_free(lang_name_gender);
 
 	return voice;
@@ -619,31 +620,30 @@ static int cdata_hook(void *user_data, char *data, size_t len)
  */
 static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *path)
 {
-	struct ssml_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
-	char *ssml_dup = switch_core_strdup(handle->memory_pool, path);
-	switch_xml_t ssml = switch_xml_parse_str(ssml_dup, strlen(ssml_dup));
 	switch_status_t status = SWITCH_STATUS_FALSE;
+	struct ssml_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
+	struct ssml_parser *parsed_data = switch_core_alloc(handle->memory_pool, sizeof(*parsed_data));
+	iksparser *parser = iks_sax_new(parsed_data, tag_hook, cdata_hook);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Open: %s\n", path);
 
-	if (ssml) {
-		struct ssml_parser *parsed_data = switch_core_alloc(handle->memory_pool, sizeof(*parsed_data));
-		iksparser *parser = iks_sax_new(parsed_data, tag_hook, cdata_hook);
-		parsed_data->attribs = NULL;
-		parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(struct ssml_file) * MAX_VOICE_FILES);
-		parsed_data->max_files = MAX_VOICE_FILES;
-		parsed_data->num_files = 0;
-		parsed_data->pool = handle->memory_pool;
-		parsed_data->sample_rate = handle->samplerate;
-		if (iks_parse(parser, path, 0, 1) == IKS_OK && parsed_data->num_files) {
-			context->files = parsed_data->files;
-			context->num_files = parsed_data->num_files;
-			context->index = -1;
-			handle->private_info = context;
-			status = next_file(handle);
-		}
-		iks_parser_delete(parser);
+	parsed_data->attribs = NULL;
+	parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(struct ssml_file) * MAX_VOICE_FILES);
+	parsed_data->max_files = MAX_VOICE_FILES;
+	parsed_data->num_files = 0;
+	parsed_data->pool = handle->memory_pool;
+	parsed_data->sample_rate = handle->samplerate;
+
+	if (iks_parse(parser, path, 0, 1) == IKS_OK && parsed_data->num_files) {
+		context->files = parsed_data->files;
+		context->num_files = parsed_data->num_files;
+		context->index = -1;
+		handle->private_info = context;
+		status = next_file(handle);
 	}
+
+	iks_parser_delete(parser);
+
 	return status;
 }
 
