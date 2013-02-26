@@ -154,6 +154,8 @@ static struct {
 	switch_mutex_t *client_routes_mutex;
 	/** domain for calls/mixers/server/etc */
 	char *domain;
+	/** Maximum idle time before call is considered abandoned */
+	int max_idle_ms;
 } globals;
 
 /**
@@ -363,14 +365,14 @@ static int rayo_send_header_bind(struct rayo_session *rsession)
 }
 
 /**
- * Check if session has control of offered call. Take control if nobody does.
+ * Check if client has control of offered call. Take control if nobody else does.
  * @param rsession the Rayo session
  * @param call the Rayo call
  * @param call_jid the call JID
  * @param call_uuid the internal call UUID
  * @return 1 if session has call control
  */
-static int rayo_session_has_call_control(struct rayo_session *rsession, struct rayo_call *call)
+static int rayo_client_has_call_control(struct rayo_session *rsession, struct rayo_call *call)
 {
 	int control = 0;
 
@@ -401,13 +403,51 @@ static int rayo_session_has_call_control(struct rayo_session *rsession, struct r
 }
 
 /**
- * Check Rayo command for errors.
+ * Check Rayo server command for errors.
+ * @param rsession the Rayo session
+ * @param node the <iq> node
+ * @return 1 if OK
+ */
+static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
+{
+	iks *response = NULL;
+	char *from = iks_find_attrib(node, "from");
+	char *to = iks_find_attrib(node, "to");
+	int bad = zstr(iks_find_attrib(node, "id"));
+
+	/* set if missing in request */
+	from = zstr(from) ? rsession->client_jid_full : from;
+	to = zstr(to) ? rsession->server_jid : to;
+
+	if (zstr(to)) {
+		return 0;
+	}
+
+	/* check if AUTHENTICATED and to= server JID */
+	if (bad) {
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
+	} else if (rsession->state == SS_NEW) {
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_NOT_AUTHORIZED);
+	} else if (strcmp(rsession->server_jid, to)) {
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
+	}
+
+	if (response) {
+		iks_send(rsession->parser, response);
+		iks_delete(response);
+		return 0;
+	}
+	return 1;
+}
+
+/**
+ * Check Rayo call command for errors.
  * @param rsession the Rayo session
  * @param call the Rayo call
  * @param node the <iq> node
- * @return error response or NULL if OK
+ * @return 1 if OK
  */
-static int rayo_session_command_ok(struct rayo_session *rsession, struct rayo_call *call, iks *node)
+static int rayo_call_command_ok(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
 	iks *response = NULL;
 	char *from = iks_find_attrib(node, "from");
@@ -426,7 +466,7 @@ static int rayo_session_command_ok(struct rayo_session *rsession, struct rayo_ca
 		response = iks_new_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (rsession->state != SS_ONLINE) {
 		response = iks_new_iq_error(node, to, from, STANZA_ERROR_UNEXPECTED_REQUEST);
-	} else if (!rayo_session_has_call_control(rsession, call)) {
+	} else if (!rayo_client_has_call_control(rsession, call)) {
 		response = iks_new_iq_error(node, to, from, STANZA_ERROR_CONFLICT);
 	}
 
@@ -548,6 +588,17 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
 
 	iks_send(rsession->parser, response);
 	iks_delete(response);
+}
+
+/**
+ * Dial a new call
+ * @param rsession requesting the call
+ * @param call unused
+ * @param node the request
+ */
+static void on_rayo_dial(struct rayo_session *rsession, struct rayo_call *call, iks *node)
+{
+	
 }
 
 /**
@@ -935,12 +986,13 @@ static int on_iq(void *user_data, ikspak *pak)
 
 	if (command) {
 
-		/* is this a Rayo command? */
+		/* is this a call command? */
 		handler = get_command_handler(globals.rayo_command_handlers, type, iks_name(command), iks_find_attrib(command, "xmlns"));
 		if (handler) {
 			struct rayo_call *call = rayo_call_locate_from_jid(iks_find_attrib(iq, "to"));
 
-			if (rayo_session_command_ok(rsession, call, iq)) {
+			if (rayo_call_command_ok(rsession, call, iq)) {
+				call->idle_ms = 0;
 				if (handler->is_internal) {
 					handler->fn.in(rsession, call, iq);
 				} else {
@@ -952,16 +1004,18 @@ static int on_iq(void *user_data, ikspak *pak)
 				}
 			}
 			rayo_call_unlock(call);
-		} else { /* is this an XMPP command? */
+		} else { /* is this a non-call command? */
 			handler = get_command_handler(globals.command_handlers, type, iks_name(command), iks_find_attrib(command, "xmlns"));
 			if (handler) {
-				if (handler->is_internal) {
-					handler->fn.in(rsession, NULL, iq);
-				} else {
-					iks *response = handler->fn.ext(rsession->server_jid, NULL, iq);
-					if (response) {
-						iks_send(rsession->parser, response);
-						iks_delete(response);
+				if (rayo_server_command_ok(rsession, iq)) {
+					if (handler->is_internal) {
+						handler->fn.in(rsession, NULL, iq);
+					} else {
+						iks *response = handler->fn.ext(rsession->server_jid, NULL, iq);
+						if (response) {
+							iks_send(rsession->parser, response);
+							iks_delete(response);
+						}
 					}
 				}
 			}
@@ -1562,6 +1616,130 @@ static switch_status_t add_rayo_server(const char *addr, const char *port)
 }
 
 /**
+ * Offer a call to a Rayo session
+ * @param rsession the session
+ * @param call the call
+ * @return SWITCH_STATUS_SUCCESS if the session has been offered
+ */
+static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, struct rayo_call *call)
+{
+	switch_event_t* offer_event = NULL;
+
+	/* TODO check if session can be destroyed while this is happening */
+	/* send offer event to session */
+	switch_event_create_subclass(&offer_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER);
+	switch_channel_event_set_data(switch_core_session_get_channel(call->session), offer_event);
+	switch_core_hash_insert(call->pcps, rsession->client_jid_full, "1");
+	if (switch_queue_trypush(rsession->event_queue, offer_event) == SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Offered call to %s\n", rsession->client_jid_full);
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	switch_core_hash_delete(call->pcps, rsession->client_jid_full);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to queue call offer event to %s!\n", rsession->client_jid_full);
+	switch_event_destroy(&offer_event);
+	return SWITCH_STATUS_FALSE;
+}
+
+/**
+ * Create Rayo call
+ * @param session
+ * @return the call
+ */
+static struct rayo_call *rayo_call_create(switch_core_session_t *session)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct rayo_call *call = switch_core_session_alloc(session, sizeof(*call));
+	call->session = session;
+	call->jid = switch_core_session_sprintf(session, "%s@%s", switch_core_session_get_uuid(session), globals.domain);
+	call->dcp_jid = "";
+	call->next_ref = 1;
+	call->idle_ms = 0;
+	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
+	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
+	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
+	switch_channel_set_variable(channel, "rayo_call_jid", call->jid); /* tags events with JID */
+	return call;
+}
+
+#define RAYO_USAGE "[dcp jid]"
+/**
+ * Offer call and park channel
+ */
+SWITCH_STANDARD_APP(rayo_app)
+{
+	int ok = 0;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct rayo_call *call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
+	if (call) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call is already under Rayo 3PCC!\n");
+		goto done;
+	}
+
+	if (!zstr(data)) {
+		/* DCP is assigned as param */
+		const char *dcp_jid = data;
+		call = rayo_call_create(session);
+		call->dcp_jid = switch_core_session_strdup(session, dcp_jid);
+		switch_channel_set_variable(channel, "rayo_dcp_jid", dcp_jid);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "%s has control of call\n", call->dcp_jid);
+		ok = 1;
+	} else {
+		/* offer control of call */
+		switch_hash_index_t *hi = NULL;
+		call = rayo_call_create(session);
+
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo 3PCC\n");
+
+		/* Offer call to all ONLINE clients */
+		/* TODO load balance this so first session doesn't always get request first? */
+		switch_mutex_lock(globals.client_routes_mutex);
+		for (hi = switch_hash_first(NULL, globals.client_routes); hi; hi = switch_hash_next(hi)) {
+			struct rayo_session *rsession;
+			const void *key;
+			void *val;
+			switch_hash_this(hi, &key, NULL, &val);
+			rsession = (struct rayo_session *)val;
+			switch_assert(rsession);
+
+			/* is session available to take call? */
+			if (rsession->state == SS_ONLINE) {
+				ok |= (rayo_session_offer_call(rsession, call) == SWITCH_STATUS_SUCCESS);
+			}
+		}
+		switch_mutex_unlock(globals.client_routes_mutex);
+	}
+
+done:
+
+	if (ok) {
+		while (switch_channel_ready(channel)) {
+			int sleep = 0;
+			if (!switch_channel_media_ready(channel)) {
+				switch_channel_clear_flag(channel, CF_BLOCK_BROADCAST_UNTIL_MEDIA);
+				switch_ivr_parse_all_events(session);
+				switch_yield(20000)
+				sleep = 20;
+			} else {
+				switch_ivr_play_file(session, NULL, "silence_stream://5000", NULL);
+				sleep = 5000;
+			}
+
+			/* detect idle session (rayo-client has stopped controlling call) and terminate call */
+			switch_mutex_lock(call->mutex);
+			call->idle_ms += sleep;
+			if (call->idle_ms > globals.max_idle_ms) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Ending abandoned call.  idle_time = %i ms\n", call->idle_ms);
+				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			}
+			switch_mutex_unlock(call->mutex);
+		}
+	} else {
+		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);
+	}
+}
+
+/**
  * Process module XML configuration
  * @param pool memory pool to allocate from
  * @return SWITCH_STATUS_SUCCESS on successful configuration
@@ -1580,6 +1758,9 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 		return SWITCH_STATUS_TERM;
 	}
 
+	/* set defaults */
+	globals.max_idle_ms = 30000;
+
 	/* get params */
 	{
 		switch_xml_t settings = switch_xml_child(cfg, "settings");
@@ -1589,8 +1770,13 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 				const char *var = switch_xml_attr_soft(param, "name");
 				const char *val = switch_xml_attr_soft(param, "value");
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "param: %s = %s\n", var, val);
-				if (!strcasecmp(var, "foo")) {
-					/* TODO remove */
+				if (!strcasecmp(var, "max-idle-sec")) {
+					if (switch_is_number(val)) {
+						int max_idle_sec = atoi(val);
+						if (max_idle_sec > 0) {
+							globals.max_idle_ms = max_idle_sec * 1000;
+						}
+					}
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Unsupported param: %s\n", var);
 				}
@@ -1638,99 +1824,6 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 }
 
 /**
- * Offer a call to a Rayo session
- * @param rsession the session
- * @param call the call
- * @return SWITCH_STATUS_SUCCESS if the session has been offered
- */
-static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, struct rayo_call *call)
-{
-	switch_event_t* offer_event = NULL;
-
-	/* TODO check if session can be destroyed while this is happening */
-	/* send offer event to session */
-	switch_event_create_subclass(&offer_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER);
-	switch_channel_event_set_data(switch_core_session_get_channel(call->session), offer_event);
-	switch_core_hash_insert(call->pcps, rsession->client_jid_full, "1");
-	if (switch_queue_trypush(rsession->event_queue, offer_event) == SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Offered call to %s\n", rsession->client_jid_full);
-		return SWITCH_STATUS_SUCCESS;
-	}
-
-	switch_core_hash_delete(call->pcps, rsession->client_jid_full);
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to queue call offer event to %s!\n", rsession->client_jid_full);
-	switch_event_destroy(&offer_event);
-	return SWITCH_STATUS_FALSE;
-}
-
-/**
- * Create Rayo call
- * @param session
- * @return the call
- */
-static struct rayo_call *rayo_call_create(switch_core_session_t *session)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct rayo_call *call = switch_core_session_alloc(session, sizeof(*call));
-	call->session = session;
-	call->jid = switch_core_session_sprintf(session, "%s@%s", switch_core_session_get_uuid(session), globals.domain);
-	call->dcp_jid = "";
-	call->next_ref = 1;
-	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
-	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
-	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
-	switch_channel_set_variable(channel, "rayo_call_jid", call->jid); /* tags events with JID */
-	return call;
-}
-
-#define RAYO_USAGE ""
-/**
- * Offer call and park channel
- */
-SWITCH_STANDARD_APP(rayo_app)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	switch_hash_index_t *hi = NULL;
-	int offered = 0;
-	struct rayo_call *call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
-	if (call) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call has already been offered!\n");
-		goto done;
-	}
-
-	call = rayo_call_create(session);
-
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo 3PCC\n");
-
-	/* Offer call to all ONLINE clients */
-	/* TODO load balance this so first session doesn't always get request first? */
-	switch_mutex_lock(globals.client_routes_mutex);
-	for (hi = switch_hash_first(NULL, globals.client_routes); hi; hi = switch_hash_next(hi)) {
-		struct rayo_session *rsession;
-		const void *key;
-		void *val;
-		switch_hash_this(hi, &key, NULL, &val);
-		rsession = (struct rayo_session *)val;
-		switch_assert(rsession);
-
-		/* is session available to take call? */
-		if (rsession->state == SS_ONLINE) {
-			offered |= (rayo_session_offer_call(rsession, call) == SWITCH_STATUS_SUCCESS);
-		}
-	}
-	switch_mutex_unlock(globals.client_routes_mutex);
-
-done:
-
-	if (offered) {
-		/* TODO detect idle session (rayo-client has stopped controlling call) and terminate call */
-		switch_ivr_park(session, NULL);
-	} else {
-		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);
-	}
-}
-
-/**
  * Load module
  */
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
@@ -1750,11 +1843,12 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.client_routes, pool);
 	switch_mutex_init(&globals.client_routes_mutex, SWITCH_MUTEX_UNNESTED, pool);
 
-	/* XMPP commands */
+	/* non-call commands */
 	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind, globals.pool);
 	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session, globals.pool);
 	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_PING":ping", on_iq_set_xmpp_ping, globals.pool);
 	add_command_handler(globals.command_handlers, "get:"IKS_NS_XMPP_DISCO":query", on_iq_get_xmpp_disco, globals.pool);
+	add_command_handler(globals.command_handlers, "set:"RAYO_NS":dial", on_rayo_dial, globals.pool); /* call not created yet */
 
 	/* Rayo call commands */
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":accept", on_rayo_accept, globals.pool);
@@ -1762,6 +1856,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":redirect", on_rayo_redirect, globals.pool);
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":reject", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":hangup", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
+	
 
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);
