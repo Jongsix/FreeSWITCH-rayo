@@ -35,6 +35,19 @@
 
 #define MAX_DTMF 1024
 
+/**
+ * Get channel variable from channel event
+ * @param event the channel event
+ * @param var the variable to get
+ * @return the variable value or NULL
+ */
+static const char *event_get_variable(switch_event_t *event, const char *var)
+{
+	char *var_name = switch_mprintf("variable_%s", var);
+	const char *val = switch_event_get_header(event, var_name);
+	switch_safe_free(var_name);
+	return val;
+}
 
 /**
  * Create a component ref
@@ -750,32 +763,39 @@ struct record_attribs {
 static void on_record_stop_event(switch_event_t *event)
 {
 	/* locate call and lock it since event is handled outside of channel thread */
-	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
-	if (call) {
-		switch_core_session_t *session = call->session;
-		switch_channel_t *channel = switch_core_session_get_channel(session);
-		iks *x = NULL, *presence = NULL;
-		const char *file = switch_event_get_header(event, "Record-File-Path");
-		char *uri = switch_core_session_sprintf(session, "file://%s", file);
+	const char *uuid = switch_event_get_header(event, "Unique-ID");
+	const char *file = switch_event_get_header(event, "Record-File-Path");
+	const char *recording_jid = event_get_variable(event, file);
+	const char *dcp_jid = event_get_variable(event, "rayo_dcp_jid");
 
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording %s done.\n", file);
+	if (!zstr(uuid) && !zstr(dcp_jid) && !zstr(recording_jid)) {
+		
+		const char *duration = switch_event_get_header(event, "Record-File-Duration");
+		const char *size = switch_event_get_header(event, "Record-File-Size");
+		char *uri = switch_mprintf("file://%s", file);
+		iks *x = NULL, *presence = NULL;
+
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", file);
 
 		/* send complete event to client */
 		presence = iks_new("presence");
-		iks_insert_attrib(presence, "from", switch_channel_get_variable(channel, file)); // file is mapped to JID here
-		iks_insert_attrib(presence, "to", call->dcp_jid);
+		iks_insert_attrib(presence, "from", recording_jid);
+		iks_insert_attrib(presence, "to", dcp_jid);
 		iks_insert_attrib(presence, "type", "unavailable");
 		x = iks_insert(presence, "complete");
 		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
 		x = iks_insert(x, "recording");
 		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:record:complete:1");
 		iks_insert_attrib(x, "uri", uri);
-		iks_insert_attrib(x, "duration", "30"); // TODO
-		iks_insert_attrib(x, "size", "30"); // TODO
-		call_iks_send(call, presence);
+		if (!zstr(duration)) {
+			iks_insert_attrib(x, "duration", duration);
+		}
+		if (!zstr(size)) {
+			iks_insert_attrib(x, "size", size);
+		}
+		event_iks_send(event, presence);
 		iks_delete(presence);
-		
-		rayo_call_unlock(call);
+		switch_safe_free(uri);
 	}
 }
 
