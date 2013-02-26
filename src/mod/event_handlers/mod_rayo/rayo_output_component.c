@@ -177,10 +177,10 @@ switch_status_t output_documents(switch_core_session_t *session, iks *document, 
 /**
  * Start execution of output component
  */
-void start_call_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static void start_call_output_component(struct rayo_call *call, iks *iq)
 {
+	switch_core_session_t *session = call->session;
 	struct output_attribs o_attribs;
-	char *ref = NULL;
 	iks *output = iks_find(iq, "output");
 	iks *document = NULL;
 	switch_time_t timeout = 0;
@@ -188,21 +188,12 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 	int i;
 	int repeat_times;
 	int repeat_interval;
-
-	switch_mutex_lock(call->mutex);
-
-	/* already have output component? */
-	if (!zstr(call->output_jid)) {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
-		switch_mutex_unlock(call->mutex);
-		return;
-	}
+	const char *jid = NULL;
 
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
 		return;
 	}
 	repeat_times = o_attribs.repeat_times.v.i;
@@ -222,16 +213,11 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 	/* nothing to speak? */
 	if (!document) {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
 		return;
 	}
 
 	/* acknowledge command */
-	ref = rayo_call_component_ref_create(call, "output");
-	call->output_jid = rayo_call_component_jid_create(call, ref);
-	rayo_call_component_send_ref(call, iq, ref);
-
-	switch_mutex_unlock(call->mutex);
+	jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "output");
 
 	/* is a timeout requested? */
 	if (o_attribs.max_time.v.i > 0) {
@@ -261,22 +247,31 @@ void start_call_output_component(switch_core_session_t *session, struct rayo_cal
 	}
 
 	/* done */
-	switch_mutex_lock(call->mutex);
 	if (timeout && switch_micro_time_now() >= timeout) {
-		rayo_call_component_send_complete(call, call->output_jid, OUTPUT_MAX_TIME);
+		rayo_call_component_send_complete(call, jid, OUTPUT_MAX_TIME);
 	} else {
-		rayo_call_component_send_complete(call, call->output_jid, OUTPUT_FINISH_AHN);
+		rayo_call_component_send_complete(call, jid, OUTPUT_FINISH_AHN);
 	}
-	call->output_jid = "";
-	switch_mutex_unlock(call->mutex);
 }
 
 /**
  * Stop execution of output component
  */
-void stop_call_output_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static iks *stop_call_output_component(struct rayo_call *call, iks *iq)
 {
-	/* TODO */
+	iks *response = NULL;
+	const char *component_jid = iks_find_attrib(iq, "to");
+	
+	/* stop play */
+	if (switch_core_session_execute_application_async(call->session, "break", "") == SWITCH_STATUS_SUCCESS) {
+		const char *request_id = iks_find_attrib(iq, "id");
+		response = iks_new_iq_result(component_jid, call->dcp_jid, request_id);
+	} else {
+		response = iks_new_iq_error(iq, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
+			component_jid);
+	}
+	return response;
 }
 
 /**
@@ -285,7 +280,7 @@ void stop_call_output_component(switch_core_session_t *session, struct rayo_call
  */
 switch_status_t rayo_output_component_load(void)
 {
-	rayo_call_component_add("urn:xmpp:rayo:output:1:output", start_call_output_component, stop_call_output_component);
+	rayo_call_component_interface_add("urn:xmpp:rayo:output:1:output", start_call_output_component, stop_call_output_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 

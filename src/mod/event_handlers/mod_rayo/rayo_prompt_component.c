@@ -49,28 +49,18 @@ struct prompt_attribs {
 /**
  * Start execution of prompt component
  */
-void start_call_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static void start_call_prompt_component(struct rayo_call *call, iks *iq)
 {
+	switch_core_session_t *session = call->session;
 	struct prompt_attribs p_attribs;
 	iks *prompt = iks_child(iq);
-
-	switch_mutex_lock(call->mutex);
-
-	if (!zstr(call->output_jid) || !zstr(call->input_jid)) {
-		/* already have output component */
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
-		switch_mutex_unlock(call->mutex);
-		return;
-	}
 
 	/* validate prompt attributes */
 	memset(&p_attribs, 0, sizeof(p_attribs));
 	if (!iks_attrib_parse(session, prompt, prompt_attribs_def, (struct iks_attribs *)&p_attribs)) {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		switch_mutex_unlock(call->mutex);
 		return;
 	}
-	switch_mutex_unlock(call->mutex);
 
 	/* TODO implement */
 
@@ -80,9 +70,9 @@ void start_call_prompt_component(switch_core_session_t *session, struct rayo_cal
 /**
  * Stop execution of prompt component
  */
-static void stop_call_prompt_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static iks *stop_call_prompt_component(struct rayo_call *call, iks *iq)
 {
-	/* TODO */
+	return NULL;
 }
 
 /**
@@ -91,7 +81,7 @@ static void stop_call_prompt_component(switch_core_session_t *session, struct ra
  */
 switch_status_t rayo_prompt_component_load(void)
 {
-	rayo_call_component_add("urn:xmpp:rayo:prompt:1:prompt", start_call_prompt_component, stop_call_prompt_component);
+	rayo_call_component_interface_add("urn:xmpp:rayo:prompt:1:prompt", start_call_prompt_component, stop_call_prompt_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 

@@ -124,6 +124,8 @@ struct input_handler {
 	struct srgs_parser *parser;
 	/** The call */
 	struct rayo_call *call;
+	/** component jid */
+	const char *jid;
 };
 
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
@@ -143,27 +145,21 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 				break;
 			}
 			case SMT_TIMEOUT: {
-				switch_mutex_lock(handler->call->mutex);
 				if (handler->num_digits == 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
-					rayo_call_component_send_complete(handler->call, handler->call->input_jid, INPUT_NOINPUT);
+					rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOINPUT);
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
-					rayo_call_component_send_complete(handler->call, handler->call->input_jid, INPUT_NOMATCH);
+					rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOMATCH);
 				}
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-				handler->call->input_jid = "";
-				switch_mutex_unlock(handler->call->mutex);
 				break;
 			}
 			case SMT_MATCH: {
-				switch_mutex_lock(handler->call->mutex);
-				send_input_component_dtmf_match(handler->call, handler->call->input_jid, handler->digits);
+				send_input_component_dtmf_match(handler->call, handler->jid, handler->digits);
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-				handler->call->input_jid = "";
-				switch_mutex_unlock(handler->call->mutex);
 				break;
 			}
 		}
@@ -195,25 +191,19 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 			case SMT_TIMEOUT: {
 				/* notify of no-match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
-				switch_mutex_lock(handler->call->mutex);
-				rayo_call_component_send_complete(handler->call, handler->call->input_jid, INPUT_NOMATCH);
+				rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOMATCH);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-				handler->call->input_jid = "";
-				switch_mutex_unlock(handler->call->mutex);
 				break;
 			}
 			case SMT_MATCH: {
 				/* notify of match and remove input handler */
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
-				switch_mutex_lock(handler->call->mutex);
-				send_input_component_dtmf_match(handler->call, handler->call->input_jid, handler->digits);
+				send_input_component_dtmf_match(handler->call, handler->jid, handler->digits);
 
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-				handler->call->input_jid = "";
-				switch_mutex_unlock(handler->call->mutex);
 				break;
 			}
 		}
@@ -224,30 +214,22 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 /**
  * Start execution of input component
  */
-void start_call_input_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static void start_call_input_component(struct rayo_call *call, iks *iq)
 {
+	switch_core_session_t *session = call->session;
 	struct input_attribs i_attribs;
-	char *ref = NULL;
 	iks *input = iks_child(iq);
 	iks *grammar = NULL;
 	char *content_type = NULL;
 	char *srgs = NULL;
 	struct input_handler *handler = NULL;
 
-	switch_mutex_lock(call->mutex);
-
-	/* already have input component? */
-	if (!zstr(call->input_jid)) {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_CONFLICT);
-		goto done;
-	}
-
 	/* validate input attributes */
 	memset(&i_attribs, 0, sizeof(i_attribs));
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		goto done;
+		return;
 	}
 
 	/* missing grammar */
@@ -255,7 +237,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		goto done;
+		return;
 	}
 
 	/* only support srgs */
@@ -263,7 +245,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		goto done;
+		return;
 	}
 
 	/* missing grammar body */
@@ -271,7 +253,7 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		goto done;
+		return;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
 
@@ -291,31 +273,23 @@ void start_call_input_component(switch_core_session_t *session, struct rayo_call
 	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
-		goto done;
+		return;
 	}
 
-	/* create JID */
-	ref = rayo_call_component_ref_create(call, "input");
-	call->input_jid = rayo_call_component_jid_create(call, ref);
+	/* all good, acknowledge command */
+	handler->jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "input");
 
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
 	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
-
-	/* all good, acknowledge command */
-	rayo_call_component_send_ref(call, iq, ref);
-
-done:
-
-	switch_mutex_unlock(call->mutex);
 }
 
 /**
  * Stop execution of input component
  */
-void stop_call_input_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
 {
-	/* TODO */
+	return NULL;
 }
 
 /**
@@ -324,7 +298,7 @@ void stop_call_input_component(switch_core_session_t *session, struct rayo_call 
  */
 switch_status_t rayo_input_component_load(void)
 {
-	rayo_call_component_add("urn:xmpp:rayo:input:1:input", start_call_input_component, stop_call_input_component);
+	rayo_call_component_interface_add("urn:xmpp:rayo:input:1:input", start_call_input_component, stop_call_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 

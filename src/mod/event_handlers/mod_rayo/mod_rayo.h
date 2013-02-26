@@ -47,10 +47,6 @@ struct rayo_call {
 	switch_hash_t *pcps;
 	/** synchronizes access to this call */
 	switch_mutex_t *mutex;
-	/** input component JID */
-	char *input_jid;
-	/** output component JID */
-	char *output_jid;
 	/** next component ref */
 	int next_ref;
 };

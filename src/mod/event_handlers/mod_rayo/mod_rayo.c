@@ -1653,8 +1653,6 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 	call->session = session;
 	call->jid = switch_core_session_sprintf(session, "%s@%s", switch_core_session_get_uuid(session), globals.domain);
 	call->dcp_jid = "";
-	call->input_jid = "";
-	call->output_jid = "";
 	call->next_ref = 1;
 	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
 	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
