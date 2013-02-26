@@ -63,6 +63,7 @@ typedef iks *(*command_handler)(const char *server_jid, struct rayo_call *, iks 
 extern void add_rayo_command_handler(const char *name, command_handler fn);
 
 extern void call_iks_send(struct rayo_call *call, iks *msg);
+extern void event_iks_send(switch_event_t *event, iks *msg);
 
 #endif
 
