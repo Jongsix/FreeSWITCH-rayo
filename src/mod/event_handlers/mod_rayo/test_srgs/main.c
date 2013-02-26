@@ -67,22 +67,22 @@ static void test_match_adhearsion_ask_grammar(void)
 	parser = srgs_parser_new(pool, "1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar, -1, -1));
 
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -120,22 +120,22 @@ static void test_match_multi_digit_grammar(void)
 	parser = srgs_parser_new(pool, "1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, -1));
 
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -174,22 +174,22 @@ static void test_match_multi_rule_grammar(void)
 	parser = srgs_parser_new(pool, "1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar, -1, -1));
 
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -237,25 +237,25 @@ static void test_match_rayo_example_grammar(void)
 	switch_core_new_memory_pool(&pool);
 	parser = srgs_parser_new(pool, "1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, rayo_example_grammar, -1, -1));
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "*9")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "1234#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "2321#")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "2")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "3")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "4")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "5")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "6")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "7")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "8")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "9")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "*")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "*9")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1234#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "2321#")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "27")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "223")); srgs_reset(parser);
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#")); srgs_reset(parser);
 
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -349,7 +349,7 @@ static void test_initial_timeout(void)
 
 	for (i = 0; i < 100; i++) {
 		switch_sleep(20 * 1000);
-		if (srgs_match(parser, NULL) == MT_TIMEOUT) {
+		if (srgs_match(parser, NULL) == SMT_TIMEOUT) {
 			break;
 		}
 	}
@@ -375,7 +375,7 @@ static void test_digit_timeout(void)
 	srgs_match(parser, "0");
 	for (i = 0; i < 100; i++) {
 		switch_sleep(20 * 1000);
-		if (srgs_match(parser, NULL) == MT_TIMEOUT) {
+		if (srgs_match(parser, NULL) == SMT_TIMEOUT) {
 			break;
 		}
 	}
@@ -395,19 +395,19 @@ static void test_feed_digits(void)
 
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar, -1, 200));
 
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8"));
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "8"));
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "0"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "8"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "8"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "0"));
 
 	srgs_reset(parser);
 
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2"));
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "2"));
-	ASSERT_EQUALS(MT_MATCH, srgs_match(parser, "3"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "2"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "2"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "3"));
 
 	ASSERT_EQUALS(1, srgs_parse(parser, ivr_menu_grammar, -1, -1));
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "7"));
-	ASSERT_EQUALS(MT_NO_MATCH, srgs_match(parser, "#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "7"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "#"));
 
 	switch_core_destroy_memory_pool(&pool);
 }
