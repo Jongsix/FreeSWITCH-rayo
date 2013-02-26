@@ -37,16 +37,18 @@
 /**
  * A call component
  */
-struct call_component {
-	rayo_call_component_fn start;
-	rayo_call_component_fn stop;
+struct call_component_interface {
+	rayo_call_component_start_fn start;
+	rayo_call_component_stop_fn stop;
 };
 
 static struct {
 	/** call components mapped by command */
-	switch_hash_t *call_components;
+	switch_hash_t *call_component_interfaces;
 	/** active components mapped by JID */
 	switch_hash_t *active_components;
+	/** synchronizes access to active components */
+	switch_mutex_t *mutex;
 	/** Memory pool to use */
 	switch_memory_pool_t *pool;
 } globals;
@@ -57,7 +59,7 @@ static struct {
  * @param type the component type "(nput/output/record/prompt/etc)
  * @return the component ref
  */
-char *rayo_call_component_ref_create(struct rayo_call *call, const char *type)
+static char *call_component_ref_create(struct rayo_call *call, const char *type)
 {
 	return switch_core_session_sprintf(call->session, "%s-%d", type, call->next_ref++);
 }
@@ -68,7 +70,7 @@ char *rayo_call_component_ref_create(struct rayo_call *call, const char *type)
  * @param component_ref the component ref
  * @return the Jabber ID
  */
-char *rayo_call_component_jid_create(struct rayo_call *call, char *component_ref)
+static char *call_component_jid_create(struct rayo_call *call, const char *component_ref)
 {
 	return switch_core_session_sprintf(call->session, "%s/%s", call->jid, component_ref);
 }
@@ -91,28 +93,36 @@ void rayo_call_component_send_iq_error(struct rayo_call *call, iks *iq, const ch
 }
 
 /**
- * Send component ref to controlling client from call
+ * Notify of new call component
  * @param call the call
- * @param iq the request that requested the component
- * @param ref the component ref
+ * @param request_id that requested the component
+ * @param type the type of component
+ * @return the component JID
  */
-void rayo_call_component_send_ref(struct rayo_call *call, iks *iq, const char *ref)
+const char *rayo_call_component_send_start(struct rayo_call *call, const char *request_id, const char *type)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *x, *response = NULL;
+	const char *ref = call_component_ref_create(call, type);
+	const char *jid = call_component_jid_create(call, ref);
+
+	/* add to set of active components */
+	switch_mutex_lock(globals.mutex);
+	/* For now, we only have call components so a struct isn't required in the hash value */
+	switch_core_hash_insert(globals.active_components, jid, type);
+	switch_mutex_unlock(globals.mutex);
 
 	response = iks_new_iq_result(
 		switch_channel_get_variable(channel, "rayo_call_jid"),
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		iks_find_attrib(iq, "id"));
+		request_id);
 	x = iks_insert(response, "ref");
 	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:1");
 	iks_insert_attrib(x, "id", ref);
-
 	rayo_call_iks_send(call, response);
 	iks_delete(response);
-
-	/* TODO remember active call component */
+	
+	return jid;
 }
 
 /**
@@ -137,6 +147,11 @@ void rayo_call_component_send_complete(struct rayo_call *call, const char *jid, 
 	iks_insert_attrib(x, "xmlns", reason_namespace);
 	rayo_call_iks_send(call, response);
 	iks_delete(response);
+
+	/* remove from set of active components */
+	switch_mutex_lock(globals.mutex);
+	switch_core_hash_delete(globals.active_components, jid);
+	switch_mutex_unlock(globals.mutex);
 }
 
 #define RAYO_COMPONENT_USAGE ""
@@ -149,7 +164,7 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 	iks *iq;
 	char *command;
 	struct rayo_call *call = rayo_call_get(session);
-	struct call_component *component = NULL;
+	struct call_component_interface *component_interface = NULL;
 
 	switch_mutex_lock(call->mutex);
 	if (!call && zstr(call->dcp_jid)) {
@@ -187,9 +202,9 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 
 	/* execute component start function */
 	command = iks_name(iks_child(iq));
-	component = switch_core_hash_find(globals.call_components, command);
-	if (component && component->start) {
-		component->start(session, call, iq);
+	component_interface = switch_core_hash_find(globals.call_component_interfaces, command);
+	if (component_interface && component_interface->start) {
+		component_interface->start(call, iq);
 	} else {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	}
@@ -236,18 +251,21 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
 {
 	char *component_jid = iks_find_attrib(node, "to");
 	iks *response = NULL;
-	if (!strcmp(call->jid, component_jid) || !strcmp(server_jid, component_jid)) {
-		/* call/server instead of component */
-		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-	} else if (zstr(call->output_jid) || strcmp(call->output_jid, component_jid)) {
-		/* component doesn't exist */
+	const char *component = NULL;
+	
+	switch_mutex_lock(globals.mutex);
+	component = switch_core_hash_find(globals.active_components, component_jid);
+	switch_mutex_unlock(globals.mutex);
+	
+	if (zstr(component)) {
 		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
-	} else if (switch_core_session_execute_application_async(call->session, "break", "") != SWITCH_STATUS_SUCCESS) {
-		/* failed to send break */
-		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	} else {
-		/* success */
-		response = iks_new_iq_result(component_jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		struct call_component_interface *component_interface = switch_core_hash_find(globals.call_component_interfaces, component);
+		if (component_interface && component_interface->start) {
+			response = component_interface->stop(call, node);
+		} else {
+			response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+		}
 	}
 	return response;
 }
@@ -258,16 +276,16 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
  * @param start the start function
  * @param stop the stop function
  */
-void rayo_call_component_add(const char *command, rayo_call_component_fn start, rayo_call_component_fn stop)
+void rayo_call_component_interface_add(const char *command, rayo_call_component_start_fn start, rayo_call_component_stop_fn stop)
 {
-	struct call_component *component = switch_core_alloc(globals.pool, sizeof(*component));
+	struct call_component_interface *component = switch_core_alloc(globals.pool, sizeof(*component));
 	char *short_command = strrchr(command, ':');
 	short_command++;
 	component->start = start;
 	component->stop = stop;
 
 	/* maps command without namespace to component callbacks */
-	switch_core_hash_insert(globals.call_components, short_command, component); 
+	switch_core_hash_insert(globals.call_component_interfaces, short_command, component); 
 
 	/* maps full command to call component routing function */
 	rayo_command_handler_add(command, on_rayo_call_component);
@@ -284,8 +302,9 @@ switch_status_t rayo_components_load(switch_loadable_module_interface_t **module
 
 	SWITCH_ADD_APP(app_interface, "rayo_call_component", "Execute Rayo call component (internal module use only)", "", rayo_call_component_app, RAYO_COMPONENT_USAGE, 0);
 
-	switch_core_hash_init(&globals.call_components, pool);
+	switch_core_hash_init(&globals.call_component_interfaces, pool);
 	switch_core_hash_init(&globals.active_components, pool);
+	switch_mutex_init(&globals.mutex, SWITCH_MUTEX_UNNESTED, pool);
 	globals.pool = pool;
 
 	rayo_input_component_load();

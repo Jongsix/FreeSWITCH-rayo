@@ -149,13 +149,13 @@ static void on_record_stop_event(switch_event_t *event)
 /**
  * Start execution of record component
  */
-void start_call_record_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static void start_call_record_component(struct rayo_call *call, iks *iq)
 {
+	switch_core_session_t *session = call->session;
 	struct record_attribs r_attribs;
 	iks *record = iks_child(iq);
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	char *ref = NULL;
-	char *jid = NULL;
+	const char *jid = NULL;
 	char *file = NULL;
 	int max_duration_sec = 0;
 
@@ -165,9 +165,6 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
-
-	ref = rayo_call_component_ref_create(call, "record");
-	jid = rayo_call_component_jid_create(call, ref);
 
 	/* create record filename from session UUID and ref */
 	/* for example: 1234-1234-1234-1234/record-30.wav */
@@ -183,9 +180,6 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 	switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "");
 	switch_channel_set_variable(channel, "RECORD_APPEND", "");
 	switch_channel_set_variable(channel, "RECORD_ANSWER_REQ", "");
-
-	/* map recording file to JID so we can find it on RECORD_STOP event */
-	switch_channel_set_variable(channel, file, jid);
 
 	/* allow dialplan override for these variables */
 	//switch_channel_set_variable(channel, "RECORD_PRE_BUFFER_FRAMES", "");
@@ -220,7 +214,11 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 
 	if (switch_ivr_record_session(session, file, max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started: file = %s\n", file);
-		rayo_call_component_send_ref(call, iq, ref);
+		jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "record");
+
+		/* map recording file to JID so we can find it on RECORD_STOP event */
+		/* TODO might be race here- setting variable after starting recording and notifying client */
+		switch_channel_set_variable(channel, file, jid);
 	} else {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
@@ -229,9 +227,9 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 /**
  * Stop execution of record component
  */
-void stop_call_record_component(switch_core_session_t *session, struct rayo_call *call, iks *iq)
+static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 {
-	/* TODO */
+	return NULL;
 }
 
 /**
@@ -241,7 +239,7 @@ void stop_call_record_component(switch_core_session_t *session, struct rayo_call
 switch_status_t rayo_record_component_load(void)
 {
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
-	rayo_call_component_add("urn:xmpp:rayo:record:1:record", start_call_record_component, stop_call_record_component);
+	rayo_call_component_interface_add("urn:xmpp:rayo:record:1:record", start_call_record_component, stop_call_record_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
