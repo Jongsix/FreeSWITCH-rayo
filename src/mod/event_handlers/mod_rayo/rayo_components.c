@@ -264,7 +264,7 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
 		if (component_interface && component_interface->start) {
 			response = component_interface->stop(call, node);
 		} else {
-			response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+			response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		}
 	}
 	return response;
