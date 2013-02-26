@@ -767,8 +767,6 @@ static void on_record_stop_event(switch_event_t *event)
 		iks_insert_attrib(presence, "type", "unavailable");
 		x = iks_insert(presence, "complete");
 		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
-		x = iks_insert(x, "success");
-		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:complete:1");
 		x = iks_insert(x, "recording");
 		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:record:complete:1");
 		iks_insert_attrib(x, "uri", uri);
