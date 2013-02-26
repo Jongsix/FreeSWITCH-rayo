@@ -202,6 +202,7 @@ static void add_command_handler(switch_hash_t *hash, const char *name, internal_
 	struct command_handler_wrapper *wrapper = switch_core_alloc(pool, sizeof (*wrapper));
 	wrapper->is_internal = 1;
 	wrapper->fn.in = fn;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding XMPP command: %s\n", name);
 	switch_core_hash_insert(hash, name, wrapper);
 }
 
@@ -215,30 +216,29 @@ void rayo_command_handler_add(const char *name, rayo_command_handler fn)
 	struct command_handler_wrapper *wrapper = switch_core_alloc(globals.pool, sizeof (*wrapper));
 	wrapper->is_internal = 0;
 	wrapper->fn.ext = fn;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding Rayo command: %s\n", name);
 	switch_core_hash_insert(globals.rayo_command_handlers, name, wrapper);
 }
 
 /**
  * Get command handler function from hash
  * @param hash the hash to search
+ * @param type the type of command (get/set)
  * @param name the command name
  * @param namespace the command namespace
  * @return the command handler function or NULL
  */
-static struct command_handler_wrapper *get_command_handler(switch_hash_t *hash, const char *name, const char *namespace)
+static struct command_handler_wrapper *get_command_handler(switch_hash_t *hash, const char *type, const char *name, const char *namespace)
 {
 	struct command_handler_wrapper *wrapper = NULL;
-	if (zstr(name)) {
+	char full_name[1024];
+	full_name[1023] = '\0';
+	if (zstr(name) || zstr(type) || zstr(namespace)) {
 		return NULL;
 	}
-	if (zstr(namespace)) {
-		wrapper = (struct command_handler_wrapper *)switch_core_hash_find(hash, name);
-	} else {
-		char full_name[1024];
-		full_name[1023] = '\0';
-		snprintf(full_name, sizeof(full_name) - 1, "%s:%s", namespace, name);
-		wrapper = (struct command_handler_wrapper *)switch_core_hash_find(hash, full_name);
-	}
+	snprintf(full_name, sizeof(full_name) - 1, "%s:%s:%s", type, namespace, name);
+	
+	wrapper = (struct command_handler_wrapper *)switch_core_hash_find(hash, full_name);
 	return wrapper;
 }
 
@@ -350,9 +350,9 @@ void rayo_event_iks_send(switch_event_t *event, iks *msg)
 static int rayo_send_header_bind(struct rayo_session *rsession)
 {
 	char *header = switch_mprintf(
-		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='jabber:server:dialback'"
+		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
 		" from='%s' id='%s' xml:lang='en' version='1.0'"
-		" xmlns:stream='http://etherx.jabber.org/streams'><stream:features>"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
 		"<bind xmlns='"IKS_NS_XMPP_BIND"'/>"
 		"<session xmlns='"IKS_NS_XMPP_SESSION"'/>"
 		"</stream:features>", rsession->server_jid, rsession->id);
@@ -645,6 +645,44 @@ static void on_iq_set_xmpp_ping(struct rayo_session *rsession, struct rayo_call 
 }
 
 /**
+ * Handle service discovery request
+ * @param rsession the Rayo session
+ * @param call unused
+ * @param node the <iq> node
+ */
+static void on_iq_get_xmpp_disco(struct rayo_session *rsession, struct rayo_call *call, iks *node)
+{
+	iks *response = iks_new("iq");
+	char *from = iks_find_attrib(node, "from");
+	char *to = iks_find_attrib(node, "to");
+	if (zstr(from)) {
+		from = rsession->client_jid_full;
+	}
+	if (zstr(to)) {
+		to = rsession->server_jid;
+	}
+
+	/* make sure this message is sent to the server */
+	if (!strcmp(rsession->server_jid, to)) {
+		iks *x;
+		response = iks_new_iq_result(from, to, iks_find_attrib(node, "id"));
+		x = iks_insert(response, "query");
+		iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_DISCO);
+		x = iks_insert(x, "feature");
+		iks_insert_attrib(x, "var", RAYO_NS);
+		
+		/* TODO The response MUST also include features for the application formats and transport methods supported by
+		 * the responding entity, as described in the relevant specifications.
+		 */
+	} else {
+		response = iks_new_iq_error(node, to, rsession->client_jid_full, STANZA_ERROR_BAD_REQUEST);
+	}
+
+	iks_send(rsession->parser, response);
+	iks_delete(response);
+}
+
+/**
  * Handle <iq><session> request
  * @param rsession the Rayo session
  * @param call unused
@@ -764,23 +802,6 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, struct rayo_call 
 }
 
 /**
- * Handle <iq> get requests
- * @param user_data the Rayo session
- * @param node the <iq> node
- * @return IKS_FILTER_EAT
- */
-static int on_iq_get(void *user_data, ikspak *pak)
-{
-	struct rayo_session *rsession = (struct rayo_session *)user_data;
-	iks *node = pak->x;
-	iks *response = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-	iks_send(rsession->parser, response);
-	iks_delete(response);
-
-	return IKS_FILTER_EAT;
-}
-
-/**
  * Send <success> reply to Rayo client <auth>
  * @param rsession the Rayo session to use.
  */
@@ -828,9 +849,9 @@ static int verify_plain_auth(const char *authzid, const char *authcid, const cha
 static int rayo_send_header_auth(struct rayo_session *rsession)
 {
 	char *header = switch_mprintf(
-		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='jabber:server:dialback'"
+		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
 		" from='%s' id='%s' xml:lang='en' version='1.0'"
-		" xmlns:stream='http://etherx.jabber.org/streams'><stream:features>"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
 		"<mechanisms xmlns='"IKS_NS_XMPP_SASL"'><mechanism>"
 		"PLAIN</mechanism></mechanisms></stream:features>", rsession->server_jid, rsession->id);
 	int result = iks_send_raw(rsession->parser, header);
@@ -897,24 +918,25 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 }
 
 /**
- * Handle <iq> set message callback
+ * Handle <iq> message callback
  * @param user_data the Rayo session
  * @param pak the <iq> packet
  * @return IKS_FILTER_EAT
  */
-static int on_iq_set(void *user_data, ikspak *pak)
+static int on_iq(void *user_data, ikspak *pak)
 {
 	struct command_handler_wrapper *handler = NULL;
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *iq = pak->x;
 	iks *command = iks_child(iq);
+	const char *type = iks_find_attrib_soft(iq, "type");
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, iq, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 
 	if (command) {
 
 		/* is this a Rayo command? */
-		handler = get_command_handler(globals.rayo_command_handlers, iks_name(command), iks_find_attrib(command, "xmlns"));
+		handler = get_command_handler(globals.rayo_command_handlers, type, iks_name(command), iks_find_attrib(command, "xmlns"));
 		if (handler) {
 			struct rayo_call *call = rayo_call_locate_from_jid(iks_find_attrib(iq, "to"));
 
@@ -931,7 +953,7 @@ static int on_iq_set(void *user_data, ikspak *pak)
 			}
 			rayo_call_unlock(call);
 		} else { /* is this an XMPP command? */
-			handler = get_command_handler(globals.command_handlers, iks_name(command), iks_find_attrib(command, "xmlns"));
+			handler = get_command_handler(globals.command_handlers, type, iks_name(command), iks_find_attrib(command, "xmlns"));
 			if (handler) {
 				if (handler->is_internal) {
 					handler->fn.in(rsession, NULL, iq);
@@ -1263,11 +1285,11 @@ static void *SWITCH_THREAD_FUNC rayo_session_thread(switch_thread_t *thread, voi
 	iks_filter_add_rule(rsession->filter, on_presence, rsession,
 		IKS_RULE_TYPE, IKS_PAK_PRESENCE,
 		IKS_RULE_DONE);
-	iks_filter_add_rule(rsession->filter, on_iq_set, rsession,
+	iks_filter_add_rule(rsession->filter, on_iq, rsession,
 		IKS_RULE_TYPE, IKS_PAK_IQ,
 		IKS_RULE_SUBTYPE, IKS_TYPE_SET,
 		IKS_RULE_DONE);
-	iks_filter_add_rule(rsession->filter, on_iq_get, rsession,
+	iks_filter_add_rule(rsession->filter, on_iq, rsession,
 		IKS_RULE_TYPE, IKS_PAK_IQ,
 		IKS_RULE_SUBTYPE, IKS_TYPE_GET,
 		IKS_RULE_DONE);
@@ -1729,16 +1751,17 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_mutex_init(&globals.client_routes_mutex, SWITCH_MUTEX_UNNESTED, pool);
 
 	/* XMPP commands */
-	add_command_handler(globals.command_handlers, IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind, globals.pool);
-	add_command_handler(globals.command_handlers, IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session, globals.pool);
-	add_command_handler(globals.command_handlers, "urn:xmpp:ping:ping", on_iq_set_xmpp_ping, globals.pool);
+	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind, globals.pool);
+	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session, globals.pool);
+	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_PING":ping", on_iq_set_xmpp_ping, globals.pool);
+	add_command_handler(globals.command_handlers, "get:"IKS_NS_XMPP_DISCO":query", on_iq_get_xmpp_disco, globals.pool);
 
 	/* Rayo call commands */
-	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:1:accept", on_rayo_accept, globals.pool);
-	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:1:answer", on_rayo_answer, globals.pool);
-	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:1:redirect", on_rayo_redirect, globals.pool);
-	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:1:reject", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
-	add_command_handler(globals.rayo_command_handlers, "urn:xmpp:rayo:1:hangup", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":accept", on_rayo_accept, globals.pool);
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":answer", on_rayo_answer, globals.pool);
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":redirect", on_rayo_redirect, globals.pool);
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":reject", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":hangup", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
 
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);

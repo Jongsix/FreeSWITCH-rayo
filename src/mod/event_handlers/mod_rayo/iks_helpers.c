@@ -55,7 +55,7 @@ iks *iks_new_iq_error(iks *iq, const char *from, const char *to, const char *err
 
 	/* e.g. <feature-not-implemented> */
 	x = iks_insert(x, error_name);
-	iks_insert_attrib(x, "xmlns", "urn:ietf:params:xml:ns:xmpp-stanzas");
+	iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_STANZAS);
 
 	return response;
 }

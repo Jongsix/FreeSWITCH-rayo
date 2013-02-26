@@ -35,9 +35,24 @@
 
 #include "mod_rayo.h"
 
-#define COMPONENT_COMPLETE_STOP "stop", "urn:xmpp:rayo:ext:complete:1"
-#define COMPONENT_COMPLETE_ERROR "error", "urn:xmpp:rayo:ext:complete:1"
-#define COMPONENT_COMPLETE_HANGUP "hangup", "urn:xmpp:rayo:ext:complete:1"
+#define RAYO_EXT_NS RAYO_BASE "ext:" RAYO_VERSION
+#define RAYO_EXT_COMPLETE_NS RAYO_BASE "ext:complete:" RAYO_VERSION
+
+#define RAYO_OUTPUT_NS RAYO_BASE "output:" RAYO_VERSION
+#define RAYO_OUTPUT_COMPLETE_NS RAYO_BASE "output:complete:" RAYO_VERSION
+
+#define RAYO_INPUT_NS RAYO_BASE "input:" RAYO_VERSION
+#define RAYO_INPUT_COMPLETE_NS RAYO_BASE "input:complete:" RAYO_VERSION
+
+#define RAYO_RECORD_NS RAYO_BASE "record:" RAYO_VERSION
+#define RAYO_RECORD_COMPLETE_NS RAYO_BASE "record:complete:" RAYO_VERSION
+
+#define RAYO_PROMPT_NS RAYO_BASE "prompt:" RAYO_VERSION
+#define RAYO_PROMPT_COMPLETE_NS RAYO_BASE "prompt:complete:" RAYO_VERSION
+
+#define COMPONENT_COMPLETE_STOP "stop", RAYO_EXT_COMPLETE_NS
+#define COMPONENT_COMPLETE_ERROR "error", RAYO_EXT_COMPLETE_NS
+#define COMPONENT_COMPLETE_HANGUP "hangup", RAYO_EXT_COMPLETE_NS
 
 extern switch_status_t rayo_components_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool);
 extern switch_status_t rayo_input_component_load(void);

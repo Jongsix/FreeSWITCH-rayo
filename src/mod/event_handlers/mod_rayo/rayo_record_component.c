@@ -130,9 +130,9 @@ static void on_record_stop_event(switch_event_t *event)
 		iks_insert_attrib(presence, "to", dcp_jid);
 		iks_insert_attrib(presence, "type", "unavailable");
 		x = iks_insert(presence, "complete");
-		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+		iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
 		x = iks_insert(x, "recording");
-		iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:record:complete:1");
+		iks_insert_attrib(x, "xmlns", RAYO_RECORD_COMPLETE_NS);
 		iks_insert_attrib(x, "uri", uri);
 		if (!zstr(duration)) {
 			iks_insert_attrib(x, "duration", duration);
@@ -249,7 +249,7 @@ static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 switch_status_t rayo_record_component_load(void)
 {
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
-	rayo_call_component_interface_add("urn:xmpp:rayo:record:1:record", start_call_record_component, stop_call_record_component);
+	rayo_call_component_interface_add("set:"RAYO_RECORD_NS":record", start_call_record_component, stop_call_record_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
