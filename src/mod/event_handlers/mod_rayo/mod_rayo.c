@@ -324,6 +324,25 @@ void call_iks_send(struct rayo_call *call, iks *msg)
 }
 
 /**
+ * Send XMPP message from call event to client
+ * @param event the call event sending the message
+ * @param msg the message to send
+ */
+void event_iks_send(switch_event_t *event, iks *msg)
+{
+	switch_event_t *new_event;
+
+	/* send XMPP message to Rayo session via event */
+	if (switch_event_create_subclass(&new_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
+		char *msg_str = iks_string(NULL, msg);
+		switch_event_merge(new_event, event);
+		switch_event_add_body(new_event, "%s", msg_str);
+		switch_event_fire(&new_event);
+		iks_free(msg_str);
+	}
+}
+
+/**
  * Send bind + session reply to Rayo client <stream>
  * @param rsession the Rayo session to use
  * @return the error code
