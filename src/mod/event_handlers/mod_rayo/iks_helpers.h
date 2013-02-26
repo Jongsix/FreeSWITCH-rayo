@@ -33,6 +33,12 @@
 #include <iksemel.h>
 #include <switch.h>
 
+#define IKS_NS_XMPP_DISCO "http://jabber.org/protocol/disco#info"
+#define IKS_NS_XMPP_PING "urn:xmpp:ping"
+#define IKS_NS_XMPP_STANZAS "urn:ietf:params:xml:ns:xmpp-stanzas"
+#define IKS_NS_XMPP_STREAMS "http://etherx.jabber.org/streams"
+#define IKS_NS_XMPP_DIALBACK "jabber:server:dialback"
+
 /* See RFC-3920 XMPP core for error definitions */
 #define STANZA_ERROR_BAD_REQUEST "bad-request", "modify"
 #define STANZA_ERROR_CONFLICT "conflict", "cancel"

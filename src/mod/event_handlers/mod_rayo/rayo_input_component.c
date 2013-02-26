@@ -49,9 +49,9 @@ static void send_input_component_dtmf_match(struct rayo_call *call, const char *
 	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
 	iks_insert_attrib(response, "type", "unavailable");
 	x = iks_insert(response, "complete");
-	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
 	x = iks_insert(x, "success"); /* TODO rayo spec says this should be "match" */
-	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:input:complete:1");
+	iks_insert_attrib(x, "xmlns", RAYO_INPUT_COMPLETE_NS);
 	iks_insert_attrib(x, "mode", "dtmf");
 	iks_insert_attrib(x, "confidence", "1.0");
 	x = iks_insert(x, "utterance");
@@ -101,14 +101,14 @@ struct input_attribs {
 };
 
 /* not yet supported by adhearsion */
-//#define INPUT_INITIAL_TIMEOUT "initial-timeout", "urn:xmpp:rayo:input:complete:1"
-//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", "urn:xmpp:rayo:input:complete:1"
-//#define INPUT_MAX_SILENCE "max-silence", "urn:xmpp:rayo:input:complete:1"
-//#define INPUT_MIN_CONFIDENCE "min-confidence", "urn:xmpp:rayo:input:complete:1"
-#define INPUT_NOMATCH "nomatch", "urn:xmpp:rayo:input:complete:1"
+//#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
+#define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
 
 /* this is not part of rayo spec */
-#define INPUT_NOINPUT "noinput", "urn:xmpp:rayo:input:complete:1"
+#define INPUT_NOINPUT "noinput", RAYO_INPUT_COMPLETE_NS
 
 #define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
 
@@ -313,7 +313,7 @@ static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
  */
 switch_status_t rayo_input_component_load(void)
 {
-	rayo_call_component_interface_add("urn:xmpp:rayo:input:1:input", start_call_input_component, stop_call_input_component);
+	rayo_call_component_interface_add("set:"RAYO_INPUT_NS":input", start_call_input_component, stop_call_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
