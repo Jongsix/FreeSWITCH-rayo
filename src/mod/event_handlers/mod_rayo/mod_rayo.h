@@ -33,6 +33,12 @@
 #include <switch.h>
 #include <iksemel.h>
 
+#define RAYO_VERSION "1"
+#define RAYO_BASE "urn:xmpp:rayo:"
+
+#define RAYO_NS RAYO_BASE RAYO_VERSION
+#define RAYO_CLIENT_NS RAYO_BASE "client:" RAYO_VERSION
+
 /**
  * A call controlled by Rayo
  */

@@ -57,9 +57,9 @@ struct output_attribs {
 };
 
 /* adhearsion uses incorrect reason for finish... this is a temporary fix */
-#define OUTPUT_FINISH_AHN "success", "urn:xmpp:rayo:output:complete:1"
-#define OUTPUT_FINISH "finish", "urn:xmpp:rayo:output:complete:1"
-#define OUTPUT_MAX_TIME "max-time", "urn:xmpp:rayo:output:complete:1"
+#define OUTPUT_FINISH_AHN "success", RAYO_OUTPUT_COMPLETE_NS
+#define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
+#define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
 /**
  * <output> a <speak> document
@@ -280,7 +280,7 @@ static iks *stop_call_output_component(struct rayo_call *call, iks *iq)
  */
 switch_status_t rayo_output_component_load(void)
 {
-	rayo_call_component_interface_add("urn:xmpp:rayo:output:1:output", start_call_output_component, stop_call_output_component);
+	rayo_call_component_interface_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component, stop_call_output_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 

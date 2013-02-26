@@ -117,7 +117,7 @@ const char *rayo_call_component_send_start(struct rayo_call *call, const char *r
 		switch_channel_get_variable(channel, "rayo_dcp_jid"),
 		request_id);
 	x = iks_insert(response, "ref");
-	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:1");
+	iks_insert_attrib(x, "xmlns", RAYO_NS);
 	iks_insert_attrib(x, "id", ref);
 	rayo_call_iks_send(call, response);
 	iks_delete(response);
@@ -142,7 +142,7 @@ void rayo_call_component_send_complete(struct rayo_call *call, const char *jid, 
 	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
 	iks_insert_attrib(response, "type", "unavailable");
 	x = iks_insert(response, "complete");
-	iks_insert_attrib(x, "xmlns", "urn:xmpp:rayo:ext:1");
+	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
 	x = iks_insert(x, reason);
 	iks_insert_attrib(x, "xmlns", reason_namespace);
 	rayo_call_iks_send(call, response);
@@ -298,7 +298,7 @@ switch_status_t rayo_components_load(switch_loadable_module_interface_t **module
 {
 	switch_application_interface_t *app_interface;
 
-	rayo_command_handler_add("urn:xmpp:rayo:1:stop", on_rayo_stop);
+	rayo_command_handler_add("set:"RAYO_NS":stop", on_rayo_stop);
 
 	SWITCH_ADD_APP(app_interface, "rayo_call_component", "Execute Rayo call component (internal module use only)", "", rayo_call_component_app, RAYO_COMPONENT_USAGE, 0);
 

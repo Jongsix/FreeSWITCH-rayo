@@ -81,7 +81,7 @@ static iks *stop_call_prompt_component(struct rayo_call *call, iks *iq)
  */
 switch_status_t rayo_prompt_component_load(void)
 {
-	rayo_call_component_interface_add("urn:xmpp:rayo:prompt:1:prompt", start_call_prompt_component, stop_call_prompt_component);
+	rayo_call_component_interface_add("set:"RAYO_PROMPT_NS":prompt", start_call_prompt_component, stop_call_prompt_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
