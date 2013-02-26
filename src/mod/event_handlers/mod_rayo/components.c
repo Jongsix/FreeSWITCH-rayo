@@ -769,7 +769,6 @@ static void on_record_stop_event(switch_event_t *event)
 	const char *dcp_jid = event_get_variable(event, "rayo_dcp_jid");
 
 	if (!zstr(uuid) && !zstr(dcp_jid) && !zstr(recording_jid)) {
-		
 		const char *duration = switch_event_get_header(event, "Record-File-Duration");
 		const char *size = switch_event_get_header(event, "Record-File-Size");
 		char *uri = switch_mprintf("file://%s", file);
@@ -868,11 +867,9 @@ void start_call_record_component(switch_core_session_t *session, struct rayo_cal
 	};
 
 	/* TODO need hangup hook for cleanup */
-	
+
 	if (r_attribs.start_beep.v.i) {
-		if (!switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL) != SWITCH_STATUS_SUCCESS) {
-			call_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		}
+		switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL);
 	}
 
 	if (switch_ivr_record_session(session, file, max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
