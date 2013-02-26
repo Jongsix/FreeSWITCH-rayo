@@ -820,7 +820,7 @@ void srgs_reset(struct srgs_parser *parser)
  * @param input the input to compare
  * @return the match result
  */
-enum match_type srgs_match(struct srgs_parser *parser, const char *input)
+enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	switch_ivr_dmachine_match_t *match = NULL;
@@ -838,16 +838,16 @@ enum match_type srgs_match(struct srgs_parser *parser, const char *input)
 		}
 		if (status == SWITCH_STATUS_TIMEOUT) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "TIMEOUT\n");
-			return MT_TIMEOUT;
+			return SMT_TIMEOUT;
 		}
 		if (zstr(input) && match) {
 			if (match->type == DM_MATCH_POSITIVE) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "MATCH\n");
-				return MT_MATCH;
+				return SMT_MATCH;
 			}
 		}
 	}
-	return MT_NO_MATCH;
+	return SMT_NO_MATCH;
 }
 
 /* For Emacs:

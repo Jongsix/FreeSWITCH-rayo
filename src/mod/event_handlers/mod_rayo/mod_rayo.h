@@ -55,15 +55,15 @@ struct rayo_call {
 	int next_ref;
 };
 
-extern struct rayo_call *get_rayo_call(switch_core_session_t *session);
+extern struct rayo_call *rayo_call_get(switch_core_session_t *session);
 extern struct rayo_call *rayo_call_locate(const char *uuid);
 extern void rayo_call_unlock(struct rayo_call *call);
 
-typedef iks *(*command_handler)(const char *server_jid, struct rayo_call *, iks *);
-extern void add_rayo_command_handler(const char *name, command_handler fn);
+typedef iks *(*rayo_command_handler)(const char *server_jid, struct rayo_call *, iks *);
+extern void rayo_command_handler_add(const char *name, rayo_command_handler fn);
 
-extern void call_iks_send(struct rayo_call *call, iks *msg);
-extern void event_iks_send(switch_event_t *event, iks *msg);
+extern void rayo_call_iks_send(struct rayo_call *call, iks *msg);
+extern void rayo_event_iks_send(switch_event_t *event, iks *msg);
 
 #endif
 

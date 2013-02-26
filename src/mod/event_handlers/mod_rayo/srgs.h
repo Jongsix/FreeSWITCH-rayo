@@ -34,16 +34,16 @@
 
 struct srgs_parser;
 
-enum match_type {
-	MT_NO_MATCH,
-	MT_MATCH,
-	MT_TIMEOUT
+enum srgs_match_type {
+	SMT_NO_MATCH,
+	SMT_MATCH,
+	SMT_TIMEOUT
 };
 
 extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
 extern void srgs_reset(struct srgs_parser *parser);
 extern int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms);
-extern enum match_type srgs_match(struct srgs_parser *parser, const char *input);
+extern enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input);
 
 #endif
 
