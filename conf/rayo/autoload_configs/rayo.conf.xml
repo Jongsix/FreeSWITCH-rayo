@@ -2,7 +2,7 @@
 
 	<!-- global params -->
 	<settings>
-		<param name="foo" value="bar"/>
+		<param name="max-idle-sec" value="30"/>
 	</settings>
 
 	<!-- Listeners for new Rayo client connections -->
