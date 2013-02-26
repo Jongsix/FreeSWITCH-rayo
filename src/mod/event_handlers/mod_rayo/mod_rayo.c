@@ -31,7 +31,7 @@
 #include <iksemel.h>
 
 #include "mod_rayo.h"
-#include "components.h"
+#include "rayo_components.h"
 #include "iks_helpers.h"
 #include "sasl.h"
 
@@ -62,7 +62,7 @@ typedef void (*internal_command_handler)(struct rayo_session *, struct rayo_call
 struct command_handler_wrapper {
 	int is_internal;
 	union {
-		command_handler ext;
+		rayo_command_handler ext;
 		internal_command_handler in;
 	} fn;
 };
@@ -210,7 +210,7 @@ static void add_command_handler(switch_hash_t *hash, const char *name, internal_
  * @param name the command name
  * @param fn the command callback function
  */
-void add_rayo_command_handler(const char *name, command_handler fn)
+void rayo_command_handler_add(const char *name, rayo_command_handler fn)
 {
 	struct command_handler_wrapper *wrapper = switch_core_alloc(globals.pool, sizeof (*wrapper));
 	wrapper->is_internal = 0;
@@ -245,7 +245,7 @@ static struct command_handler_wrapper *get_command_handler(switch_hash_t *hash, 
 /**
  * Get access to Rayo call data from session
  */
-struct rayo_call *get_rayo_call(switch_core_session_t *session)
+struct rayo_call *rayo_call_get(switch_core_session_t *session)
 {
 	return (struct rayo_call *)switch_channel_get_private(switch_core_session_get_channel(session), RAYO_PRIVATE_VAR);
 }
@@ -261,7 +261,7 @@ struct rayo_call *rayo_call_locate(const char *call_uuid)
 	if (call_uuid) {
 		switch_core_session_t *session = switch_core_session_locate(call_uuid);
 		if (session) {
-			call = get_rayo_call(session);
+			call = rayo_call_get(session);
 			if (call) {
 				switch_mutex_lock(call->mutex);
 			} else {
@@ -309,7 +309,7 @@ void rayo_call_unlock(struct rayo_call *call)
  * @param call the call sending the message
  * @param msg the message to send
  */
-void call_iks_send(struct rayo_call *call, iks *msg)
+void rayo_call_iks_send(struct rayo_call *call, iks *msg)
 {
 	switch_event_t *event;
 
@@ -328,7 +328,7 @@ void call_iks_send(struct rayo_call *call, iks *msg)
  * @param event the call event sending the message
  * @param msg the message to send
  */
-void event_iks_send(switch_event_t *event, iks *msg)
+void rayo_event_iks_send(switch_event_t *event, iks *msg)
 {
 	switch_event_t *new_event;
 
@@ -1752,7 +1752,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
 	
 	/* set up rayo components */
-	load_components(module_interface);
+	rayo_components_load(module_interface, pool);
 
 	/* configure / open sockets */
 	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
@@ -1775,7 +1775,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for server and session threads to stop\n");
 	switch_thread_rwlock_wrlock(globals.shutdown_rwlock);
 
-	shutdown_components();
+	rayo_components_shutdown();
 	
 	/* cleanup module */
 	switch_event_unbind_callback(route_call_event);
