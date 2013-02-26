@@ -219,6 +219,7 @@ static void start_call_record_component(struct rayo_call *call, iks *iq)
 		/* map recording file to JID so we can find it on RECORD_STOP event */
 		/* TODO might be race here- setting variable after starting recording and notifying client */
 		switch_channel_set_variable(channel, file, jid);
+		switch_channel_set_variable(channel, jid, file);
 	} else {
 		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
@@ -229,7 +230,16 @@ static void start_call_record_component(struct rayo_call *call, iks *iq)
  */
 static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 {
-	return NULL;
+	const char *component_jid = iks_find_attrib(iq, "to");
+	const char *request_id = iks_find_attrib(iq, "id");
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	const char *file = switch_channel_get_variable(channel, component_jid);
+
+	if (!zstr(file)) {
+		switch_ivr_stop_record_session(call->session, file);
+	}
+
+	return iks_new_iq_result(component_jid, call->dcp_jid, request_id);
 }
 
 /**
