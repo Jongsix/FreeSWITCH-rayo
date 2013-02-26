@@ -35,6 +35,10 @@
 
 #include "mod_rayo.h"
 
+#define COMPONENT_COMPLETE_STOP "stop", "urn:xmpp:rayo:ext:complete:1"
+#define COMPONENT_COMPLETE_ERROR "error", "urn:xmpp:rayo:ext:complete:1"
+#define COMPONENT_COMPLETE_HANGUP "hangup", "urn:xmpp:rayo:ext:complete:1"
+
 extern switch_status_t rayo_components_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool);
 extern switch_status_t rayo_input_component_load(void);
 extern switch_status_t rayo_output_component_load(void);

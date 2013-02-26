@@ -252,7 +252,7 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
 	char *component_jid = iks_find_attrib(node, "to");
 	iks *response = NULL;
 	const char *component = NULL;
-	
+
 	switch_mutex_lock(globals.mutex);
 	component = switch_core_hash_find(globals.active_components, component_jid);
 	switch_mutex_unlock(globals.mutex);
@@ -261,7 +261,7 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
 		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else {
 		struct call_component_interface *component_interface = switch_core_hash_find(globals.call_component_interfaces, component);
-		if (component_interface && component_interface->start) {
+		if (component_interface && component_interface->stop) {
 			response = component_interface->stop(call, node);
 		} else {
 			response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
@@ -298,7 +298,7 @@ switch_status_t rayo_components_load(switch_loadable_module_interface_t **module
 {
 	switch_application_interface_t *app_interface;
 
-	rayo_command_handler_add("urn:xmpp:rayo:ext:1:stop", on_rayo_stop);
+	rayo_command_handler_add("urn:xmpp:rayo:1:stop", on_rayo_stop);
 
 	SWITCH_ADD_APP(app_interface, "rayo_call_component", "Execute Rayo call component (internal module use only)", "", rayo_call_component_app, RAYO_COMPONENT_USAGE, 0);
 

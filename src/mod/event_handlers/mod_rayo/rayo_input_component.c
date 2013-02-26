@@ -126,6 +126,8 @@ struct input_handler {
 	struct rayo_call *call;
 	/** component jid */
 	const char *jid;
+	/** stop flag */
+	int stop;
 };
 
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
@@ -141,7 +143,12 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 		enum srgs_match_type match = srgs_match(handler->parser, NULL);
 		switch (match) {
 			case SMT_NO_MATCH: {
-				/* need more digits */
+				if (handler->stop) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Stopped\n");
+					rayo_call_component_send_complete(handler->call, handler->jid, COMPONENT_COMPLETE_STOP);
+					switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+					switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+				}
 				break;
 			}
 			case SMT_TIMEOUT: {
@@ -268,6 +275,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
 	handler->call = call;
+	handler->stop = 0;
 
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i)) {
@@ -289,7 +297,14 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
  */
 static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
 {
-	return NULL;
+	const char *component_jid = iks_find_attrib(iq, "to");
+	const char *request_id = iks_find_attrib(iq, "id");
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (handler) {
+		handler->stop = 1;
+	}
+	return iks_new_iq_result(component_jid, call->dcp_jid, request_id);
 }
 
 /**
