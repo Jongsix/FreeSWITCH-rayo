@@ -114,6 +114,11 @@ struct iks_attribs {
 #define LAST_ATTRIB { NULL, NULL, NULL }
 #define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (struct iks_attrib *attrib, const char *value)
 
+#define GET_INT(attribs, param) attribs.param.v.i
+#define GET_BOOL(attribs, param) attribs.param.v.i
+#define GET_STRING(attribs, param) attribs.param.v.s
+#define GET_DOUBLE(attribs, param) attribs.param.v.d
+
 extern ATTRIB_RULE(bool);
 extern ATTRIB_RULE(not_negative);
 extern ATTRIB_RULE(positive);
