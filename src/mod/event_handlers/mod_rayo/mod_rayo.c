@@ -738,7 +738,7 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 		switch_stream_handle_t api_stream = { 0 };
 		SWITCH_STANDARD_STREAM(api_stream);
 
-		stream.write_function(&stream, "%s%s &rayo(controlled)", gateway->dial_prefix, dial_to_stripped);
+		stream.write_function(&stream, "%s%s &rayo(true)", gateway->dial_prefix, dial_to_stripped);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using dialstring: %s\n", (char *)stream.data);
 
 		/* <iq><ref> response will be sent when originate event is received- otherwise error is returned */
@@ -748,13 +748,16 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 			/* check for failure */
 			if (strncmp("+OK", api_stream.data, strlen("+OK"))) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to originate call\n");
-				
+
 				/* map failure reason to iq error */
 				if (!strncmp("-ERR INVALID_GATEWAY", api_stream.data, strlen("-ERR INVALID_GATEWAY"))) {
 					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 				} else if (!strncmp("-ERR SUBSCRIBER_ABSENT", api_stream.data, strlen("-ERR SUBSCRIBER_ABSENT"))) {
 					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-				} else { /* TODO check for too many sessions */
+				} else if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
+					/* this -ERR is received when out of sessions */
+					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_RESOURCE_CONSTRAINT);
+				} else { 
 					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 				}
 			}
@@ -1900,7 +1903,7 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
 	return SWITCH_STATUS_FALSE;
 }
 
-#define RAYO_USAGE "[under_control]"
+#define RAYO_USAGE "[true]"
 /**
  * Offer call and park channel
  */
@@ -1908,14 +1911,27 @@ SWITCH_STANDARD_APP(rayo_app)
 {
 	int ok = 0;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct rayo_call *call = NULL;
+	struct rayo_call *call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
 
 	if (!zstr(data)) {
+		int i;
+		if (!call) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Don't have rayo call yet\n");
+			for (i = 0; i < 50 && !call; i++) {
+				call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
+				switch_yield(20000);
+			}
+			switch_channel_audio_sync(channel);
+		}
+		if (!call) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Missing rayo call!!\n");
+			goto done;
+		}
 		ok = 1;
 	} else {
 		/* offer control of call */
 		switch_hash_index_t *hi = NULL;
-		if (switch_channel_get_private(channel, RAYO_PRIVATE_VAR)) {
+		if (call) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call is already under Rayo 3PCC!\n");
 			goto done;
 		}
