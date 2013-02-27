@@ -687,6 +687,48 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
 	iks_delete(response);
 }
 
+static ATTRIB_RULE(join_direction)
+{
+	attrib->type = IAT_STRING;
+	attrib->test = "(send || recv || duplex)";
+	attrib->v.s = (char *)value;
+	/* for now, only allow duplex
+	return !strcmp("send", value) || !strcmp("recv", value) || !strcmp("duplex", value); */
+	return !strcmp("duplex", value);
+}
+
+static ATTRIB_RULE(join_media)
+{
+	attrib->type = IAT_STRING;
+	attrib->test = "(bridge || direct)";
+	attrib->v.s = (char *)value;
+	/* for now, only allow bridge
+	return !strcmp("bridge", value) || !strcmp("direct", value); */
+	return !strcmp("bridge", value);
+}
+
+/**
+ * <join> command validation
+ */
+static const struct iks_attrib_definition join_attribs_def[] = {
+	ATTRIB(direction, duplex, join_direction),
+	ATTRIB(media, bridge, join_media),
+	ATTRIB(call-id,, any),
+	ATTRIB(mixer-name,, any),
+	LAST_ATTRIB
+};
+
+/**
+ * <join> command attributes
+ */
+struct join_attribs {
+	int size;
+	struct iks_attrib direction;
+	struct iks_attrib media;
+	struct iks_attrib call_id;
+	struct iks_attrib mixer_name;
+};
+
 /**
  * Handle <iq><join> request
  * @param rsession the Rayo session
@@ -695,7 +737,39 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
  */
 static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
-	
+	iks *response = NULL;
+	iks *join = iks_find(node, "join");
+	struct join_attribs j_attribs;
+
+	/* validate input attributes */
+	memset(&j_attribs, 0, sizeof(j_attribs));
+	if (!iks_attrib_parse(call->session, join, join_attribs_def, (struct iks_attribs *)&j_attribs)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_DEBUG, "Bad join attrib\n");
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		goto done;
+	}
+
+	/* can't join both mixer and call */
+	if (!zstr(GET_STRING(j_attribs, mixer_name)) && !zstr(GET_STRING(j_attribs, call_id))) {
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		goto done;
+	}
+
+	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
+		/* join conference */
+		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	} else {
+		/* bridge this call to call-id */
+		if (switch_ivr_uuid_bridge(switch_core_session_get_uuid(call->session), GET_STRING(j_attribs, call_id)) == SWITCH_STATUS_SUCCESS) {
+			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		} else {
+			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		}
+	}
+
+done:
+	iks_send(rsession->parser, response);
+	iks_delete(response);
 }
 
 /**
@@ -707,6 +781,9 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 static void on_rayo_unjoin(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
 	/* TODO implement <unjoin> */
+	iks *response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	iks_send(rsession->parser, response);
+	iks_delete(response);
 }
 
 /**
@@ -2022,6 +2099,7 @@ done:
 
 	if (ok) {
 		switch_channel_set_variable(channel, "send_silence_when_idle", "-1");
+		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
 		while (switch_channel_ready(channel)) {
 			int sleep = 0;
 			if (!switch_channel_media_ready(channel)) {
