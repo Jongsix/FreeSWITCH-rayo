@@ -522,7 +522,7 @@ static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
 
 	/* check if AUTHENTICATED and to= server JID */
 	if (bad) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_NOT_ACCEPTABLE);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
 		response = iks_new_iq_error(node, to, from, STANZA_ERROR_REGISTRATION_REQUIRED);
 	} else if (strcmp(rsession->server_jid, to)) {
@@ -556,7 +556,7 @@ static int rayo_call_command_ok(struct rayo_session *rsession, struct rayo_call 
 	to = zstr(to) ? rsession->server_jid : to;
 
 	if (bad) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_NOT_ACCEPTABLE);
+		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
 		response = iks_new_iq_error(node, to, from, STANZA_ERROR_REGISTRATION_REQUIRED);
 	} else if (!call) {
@@ -685,6 +685,28 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
 
 	iks_send(rsession->parser, response);
 	iks_delete(response);
+}
+
+/**
+ * Handle <iq><join> request
+ * @param rsession the Rayo session
+ * @param call the Rayo call
+ * @param node the <iq> node
+ */
+static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, iks *node)
+{
+	
+}
+
+/**
+ * Handle <iq><unjoin> request
+ * @param rsession the Rayo session
+ * @param call the Rayo call
+ * @param node the <iq> node
+ */
+static void on_rayo_unjoin(struct rayo_session *rsession, struct rayo_call *call, iks *node)
+{
+	/* TODO implement <unjoin> */
 }
 
 /**
@@ -1487,6 +1509,38 @@ static void on_call_ringing_event(struct rayo_session *rsession, switch_event_t 
 }
 
 /**
+ * Handle call bridge event
+ * @param rsession the Rayo session
+ * @param event the bridge event
+ */
+static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	iks *revent = create_rayo_event("joined", RAYO_NS,
+		switch_event_get_header(event, "variable_rayo_call_jid"),
+		switch_event_get_header(event, "variable_rayo_dcp_jid"));
+	iks *joined = iks_find(revent, "joined");
+	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
+	iks_send(rsession->parser, revent);
+	iks_delete(revent);
+}
+
+/**
+ * Handle call unbridge event
+ * @param rsession the Rayo session
+ * @param event the unbridge event
+ */
+static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	iks *revent = create_rayo_event("unjoined", RAYO_NS,
+		switch_event_get_header(event, "variable_rayo_call_jid"),
+		switch_event_get_header(event, "variable_rayo_dcp_jid"));
+	iks *joined = iks_find(revent, "unjoined");
+	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
+	iks_send(rsession->parser, revent);
+	iks_delete(revent);
+}
+
+/**
  * Handle events delivered to this session
  * @param rsession the Rayo session to handle the event
  * @param event the event.  This event must be destroyed by this function.
@@ -1507,6 +1561,12 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 			break;
 		case SWITCH_EVENT_CHANNEL_ANSWER:
 			on_call_answer_event(rsession, event);
+			break;
+		case SWITCH_EVENT_CHANNEL_BRIDGE:
+			on_call_bridge_event(rsession, event);
+			break;
+		case SWITCH_EVENT_CHANNEL_UNBRIDGE:
+			on_call_unbridge_event(rsession, event);
 			break;
 		case SWITCH_EVENT_CUSTOM: {
 			char *event_subclass = switch_event_get_header(event, "Event-Subclass");
@@ -1961,6 +2021,7 @@ SWITCH_STANDARD_APP(rayo_app)
 done:
 
 	if (ok) {
+		switch_channel_set_variable(channel, "send_silence_when_idle", "-1");
 		while (switch_channel_ready(channel)) {
 			int sleep = 0;
 			if (!switch_channel_media_ready(channel)) {
@@ -2138,17 +2199,21 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":redirect", on_rayo_redirect, globals.pool);
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":reject", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
 	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":hangup", on_rayo_hangup, globals.pool); /* handles both reject and hangup */
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":join", on_rayo_join, globals.pool);
+	add_command_handler(globals.rayo_command_handlers, "set:"RAYO_NS":unjoin", on_rayo_unjoin, globals.pool);
 
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ORIGINATE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ANSWER, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_HANGUP_COMPLETE, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_BRIDGE, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_UNBRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND, route_call_event, NULL);
 
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
-	
+
 	/* set up rayo components */
 	rayo_components_load(module_interface, pool);
 
