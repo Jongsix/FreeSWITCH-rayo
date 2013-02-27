@@ -68,6 +68,7 @@ extern void rayo_command_handler_add(const char *name, rayo_command_handler fn);
 
 extern void rayo_call_iks_send(struct rayo_call *call, iks *msg);
 extern void rayo_event_iks_send(switch_event_t *event, iks *msg);
+extern void rayo_iks_send(iks *msg);
 
 #endif
 
