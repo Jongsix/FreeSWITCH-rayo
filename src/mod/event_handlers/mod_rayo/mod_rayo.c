@@ -1531,11 +1531,11 @@ static void on_call_originate_event(struct rayo_session *rsession, switch_event_
 }
 
 /**
- * Handle call hangup event
+ * Handle call end event
  * @param rsession the Rayo session
  * @param event the hangup event
  */
-static void on_call_hangup_event(struct rayo_session *rsession, switch_event_t *event)
+static void on_call_end_event(struct rayo_session *rsession, switch_event_t *event)
 {
 	iks *revent = create_rayo_event("end", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
@@ -1618,8 +1618,8 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 		case SWITCH_EVENT_CHANNEL_ORIGINATE:
 			on_call_originate_event(rsession, event);
 			break;
-		case SWITCH_EVENT_CHANNEL_HANGUP_COMPLETE:
-			on_call_hangup_event(rsession, event);
+		case SWITCH_EVENT_CHANNEL_DESTROY:
+			on_call_end_event(rsession, event);
 			break;
 		//case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
 		case SWITCH_EVENT_CHANNEL_PROGRESS:
@@ -2273,7 +2273,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ANSWER, NULL, route_call_event, NULL);
-	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_HANGUP_COMPLETE, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_DESTROY, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_BRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_UNBRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER, route_call_event, NULL);
