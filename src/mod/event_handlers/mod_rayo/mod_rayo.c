@@ -156,6 +156,8 @@ static struct {
 	char *domain;
 	/** Maximum idle time before call is considered abandoned */
 	int max_idle_ms;
+	/** Conference profile to use for mixers */
+	char *mixer_conf_profile;
 	/** to URI prefixes mapped to gateways */
 	switch_hash_t *dial_gateways;
 } globals;
@@ -736,6 +738,62 @@ struct join_attribs {
 };
 
 /**
+ * Join calls together
+ * @param rsession the session requesting the join_attribs
+ * @param call the call that joins
+ * @param node the join request
+ * @param call_id to join
+ * @param media mode (direct/bridge)
+ * @return the response
+ */
+static iks *join_call(struct rayo_session *rsession, struct rayo_call *call, iks *node, const char *call_id, const char *media)
+{
+	iks *response = NULL;
+	/* take call out of media path if media = "direct" */
+	const char *bypass = !strcmp("direct", media) ? "true" : "false";
+
+	/* check if rayo call */
+	struct rayo_call *b_call = rayo_call_locate(call_id);
+	if (!b_call) {
+		/* not a rayo call */
+		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+	} else {
+		rayo_call_unlock(b_call);
+
+		/* bridge this call to call-id */
+		switch_channel_set_variable(switch_core_session_get_channel(call->session), "bypass_media", bypass);
+		if (switch_ivr_uuid_bridge(switch_core_session_get_uuid(call->session), call_id) == SWITCH_STATUS_SUCCESS) {
+			response = iks_new_iq_result(node);
+		} else {
+			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		}
+	}
+	return response;
+}
+
+/**
+ * Join call to a mixer
+ * @param rsession the session requesting the join_attribs
+ * @param call the call that joins
+ * @param node the join request
+ * @return the response
+ */
+static iks *join_mixer(struct rayo_session *rsession, struct rayo_call *call, iks *node, const char *mixer_name)
+{
+	iks *response = NULL;
+	char *conf_args = switch_mprintf("%s@%s", mixer_name, globals.mixer_conf_profile);
+	if (switch_core_session_execute_application_async(call->session, "conference", conf_args) == SWITCH_STATUS_SUCCESS) {
+		response = iks_new_iq_result(node);
+	} else {
+		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	}
+	iks_send(rsession->parser, response);
+	iks_delete(response);
+	switch_safe_free(conf_args);
+	return response;
+}
+
+/**
  * Handle <iq><join> request
  * @param rsession the Rayo session
  * @param call the Rayo call
@@ -769,18 +827,10 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 
 	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
 		/* join conference */
-		response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		response = join_mixer(rsession, call, node, GET_STRING(j_attribs, mixer_name));
 	} else {
-		/* take call out of media path if media = "direct" */
-		const char *bypass =  !strcmp(GET_STRING(j_attribs, media), "direct") ? "true" : "false";
-		switch_channel_set_variable(switch_core_session_get_channel(call->session), "bypass_media", bypass);
-
-		/* bridge this call to call-id */
-		if (switch_ivr_uuid_bridge(switch_core_session_get_uuid(call->session), GET_STRING(j_attribs, call_id)) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(node);
-		} else {
-			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		}
+		/* bridge calls */
+		response = join_call(rsession, call, node, GET_STRING(j_attribs, call_id), GET_STRING(j_attribs, media));
 	}
 
 done:
@@ -2175,6 +2225,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 
 	/* set defaults */
 	globals.max_idle_ms = 30000;
+	globals.mixer_conf_profile = "sla";
 
 	/* get params */
 	{
@@ -2191,6 +2242,10 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 						if (max_idle_sec > 0) {
 							globals.max_idle_ms = max_idle_sec * 1000;
 						}
+					}
+				} else if (!strcasecmp(var, "mixer-conf-profile")) {
+					if (!zstr(val)) {
+						globals.mixer_conf_profile = switch_core_strdup(pool, val);
 					}
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Unsupported param: %s\n", var);
