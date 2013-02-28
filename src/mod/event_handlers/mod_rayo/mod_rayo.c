@@ -710,9 +710,7 @@ static ATTRIB_RULE(join_media)
 	attrib->type = IAT_STRING;
 	attrib->test = "(bridge || direct)";
 	attrib->v.s = (char *)value;
-	/* for now, only allow bridge
-	return !strcmp("bridge", value) || !strcmp("direct", value); */
-	return !strcmp("bridge", value);
+	return !strcmp("bridge", value) || !strcmp("direct", value);
 }
 
 /**
@@ -763,10 +761,20 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 		goto done;
 	}
 
+	/* need to join *something* */
+	if (zstr(GET_STRING(j_attribs, mixer_name)) && zstr(GET_STRING(j_attribs, call_id))) {
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		goto done;
+	}
+
 	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
 		/* join conference */
 		response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	} else {
+		/* take call out of media path if media = "direct" */
+		const char *bypass =  !strcmp(GET_STRING(j_attribs, media), "direct") ? "true" : "false";
+		switch_channel_set_variable(switch_core_session_get_channel(call->session), "bypass_media", bypass);
+
 		/* bridge this call to call-id */
 		if (switch_ivr_uuid_bridge(switch_core_session_get_uuid(call->session), GET_STRING(j_attribs, call_id)) == SWITCH_STATUS_SUCCESS) {
 			response = iks_new_iq_result(node);
