@@ -377,7 +377,7 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 	call->jid = switch_core_session_sprintf(session, "%s@%s", switch_core_session_get_uuid(session), globals.domain);
 	call->dcp_jid = "";
 	call->next_ref = 1;
-	call->idle_ms = 0;
+	call->idle_start_time = switch_micro_time_now();
 	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
 	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
 	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
@@ -1303,7 +1303,7 @@ static int on_iq(void *user_data, ikspak *pak)
 			struct rayo_call *call = rayo_call_locate_from_jid(iks_find_attrib(iq, "to"));
 
 			if (rayo_call_command_ok(rsession, call, iq)) {
-				call->idle_ms = 0;
+				call->idle_start_time = switch_micro_time_now();
 				if (handler->is_internal) {
 					handler->fn.in(rsession, call, iq);
 				} else {
@@ -2029,6 +2029,26 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
 	return SWITCH_STATUS_FALSE;
 }
 
+/**
+ * Monitor rayo call activity - detect idle
+ */
+static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, switch_frame_t **frame, switch_io_flag_t flags, int i)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
+	if (call) {
+		switch_time_t now = switch_micro_time_now();
+		switch_time_t idle_start = call->idle_start_time;
+		int idle_duration_ms = (now - idle_start) / 1000;
+		/* detect idle session (rayo-client has stopped controlling call) and terminate call */
+		if (idle_duration_ms > globals.max_idle_ms) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Ending abandoned call.  idle_duration_ms = %i ms\n", idle_duration_ms);
+			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+		}
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
 #define RAYO_USAGE "[true]"
 /**
  * Offer call and park channel
@@ -2087,29 +2107,9 @@ SWITCH_STANDARD_APP(rayo_app)
 done:
 
 	if (ok) {
-		switch_channel_set_variable(channel, "send_silence_when_idle", "-1");
-		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
-		while (switch_channel_ready(channel)) {
-			int sleep = 0;
-			if (!switch_channel_media_ready(channel)) {
-				switch_channel_clear_flag(channel, CF_BLOCK_BROADCAST_UNTIL_MEDIA);
-				switch_ivr_parse_all_events(session);
-				switch_yield(20000)
-				sleep = 20;
-			} else {
-				switch_ivr_play_file(session, NULL, "silence_stream://5000", NULL);
-				sleep = 5000;
-			}
-
-			/* detect idle session (rayo-client has stopped controlling call) and terminate call */
-			switch_mutex_lock(call->mutex);
-			call->idle_ms += sleep;
-			if (call->idle_ms > globals.max_idle_ms) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Ending abandoned call.  idle_time = %i ms\n", call->idle_ms);
-				switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
-			}
-			switch_mutex_unlock(call->mutex);
-		}
+		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
+		switch_ivr_park(session, NULL);
+		switch_core_event_hook_remove_read_frame(session, rayo_call_on_read_frame);
 	} else {
 		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);
 	}

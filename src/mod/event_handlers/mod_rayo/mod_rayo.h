@@ -55,8 +55,8 @@ struct rayo_call {
 	switch_mutex_t *mutex;
 	/** next component ref */
 	int next_ref;
-	/** current idle duration */
-	int idle_ms;
+	/** current idle start time */
+	switch_time_t idle_start_time;
 };
 
 extern struct rayo_call *rayo_call_get(switch_core_session_t *session);
