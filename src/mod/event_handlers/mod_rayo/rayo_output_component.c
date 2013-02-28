@@ -217,7 +217,7 @@ static void start_call_output_component(struct rayo_call *call, iks *iq)
 	}
 
 	/* acknowledge command */
-	jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "output");
+	jid = rayo_call_component_send_start(call, iq, "output");
 
 	/* is a timeout requested? */
 	if (o_attribs.max_time.v.i > 0) {
@@ -264,10 +264,9 @@ static iks *stop_call_output_component(struct rayo_call *call, iks *iq)
 	
 	/* stop play */
 	if (switch_core_session_execute_application_async(call->session, "break", "") == SWITCH_STATUS_SUCCESS) {
-		const char *request_id = iks_find_attrib(iq, "id");
-		response = iks_new_iq_result(component_jid, call->dcp_jid, request_id);
+		response = iks_new_iq_result(iq);
 	} else {
-		response = iks_new_iq_error(iq, component_jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
 			component_jid);
 	}

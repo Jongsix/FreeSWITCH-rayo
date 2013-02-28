@@ -61,8 +61,8 @@
 #define STANZA_ERROR_UNDEFINED_CONDITION "undefined-condition", "wait"
 #define STANZA_ERROR_UNEXPECTED_REQUEST "unexpected-request", "wait"
 
-extern iks *iks_new_iq_error(iks *iq, const char *from, const char *to, const char *error_name, const char *error_type);
-extern iks *iks_new_iq_result(const char *from, const char *to, const char *id);
+extern iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type);
+extern iks *iks_new_iq_result(iks *iq);
 extern char *iks_find_attrib_soft(iks *xml, const char *attrib);
 extern const char *iks_node_type_to_string(int type);
 extern const char *iks_net_error_to_string(int err);

@@ -285,7 +285,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	}
 
 	/* all good, acknowledge command */
-	handler->jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "input");
+	handler->jid = rayo_call_component_send_start(call, iq, "input");
 
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
@@ -297,14 +297,12 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
  */
 static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
 {
-	const char *component_jid = iks_find_attrib(iq, "to");
-	const char *request_id = iks_find_attrib(iq, "id");
 	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
 		handler->stop = 1;
 	}
-	return iks_new_iq_result(component_jid, call->dcp_jid, request_id);
+	return iks_new_iq_result(iq);
 }
 
 /**

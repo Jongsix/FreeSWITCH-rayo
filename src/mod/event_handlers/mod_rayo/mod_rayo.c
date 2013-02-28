@@ -512,21 +512,23 @@ static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
 	char *to = iks_find_attrib(node, "to");
 	int bad = zstr(iks_find_attrib(node, "id"));
 
-	/* set if missing in request */
-	from = zstr(from) ? rsession->client_jid_full : from;
-	to = zstr(to) ? rsession->server_jid : to;
-
 	if (zstr(to)) {
-		return 0;
+		to = rsession->server_jid;
+		iks_insert_attrib(node, "to", to);
+	}
+	
+	if (zstr(from)) {
+		from = rsession->client_jid_full;
+		iks_insert_attrib(node, "from", from);
 	}
 
 	/* check if AUTHENTICATED and to= server JID */
 	if (bad) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_REGISTRATION_REQUIRED);
+		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
 	} else if (strcmp(rsession->server_jid, to)) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
+		response = iks_new_iq_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
 	}
 
 	if (response) {
@@ -552,19 +554,25 @@ static int rayo_call_command_ok(struct rayo_session *rsession, struct rayo_call 
 	int bad = zstr(to) || zstr(iks_find_attrib(node, "id"));
 
 	/* set if missing in request */
-	from = zstr(from) ? rsession->client_jid_full : from;
-	to = zstr(to) ? rsession->server_jid : to;
+	if (zstr(to)) {
+		to = rsession->server_jid;
+		iks_insert_attrib(node, "to", to);
+	}
+	if (zstr(from)) {
+		from = rsession->client_jid_full;
+		iks_insert_attrib(node, "from", from);
+	}
 
 	if (bad) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_REGISTRATION_REQUIRED);
+		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
 	} else if (!call) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_ITEM_NOT_FOUND);
+		response = iks_new_iq_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (rsession->state != SS_ONLINE) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_UNEXPECTED_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 	} else if (!rayo_client_has_call_control(rsession, call)) {
-		response = iks_new_iq_error(node, to, from, STANZA_ERROR_CONFLICT);
+		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
 	}
 
 	if (response) {
@@ -587,9 +595,9 @@ static void on_rayo_accept(struct rayo_session *rsession, struct rayo_call *call
 	/* if we get this far, session has control of the call */
 	/* send ringing */
 	if (switch_core_session_execute_application_async(call->session, "ring_ready", "") == SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		response = iks_new_iq_result(node);
 	} else {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -607,9 +615,9 @@ static void on_rayo_answer(struct rayo_session *rsession, struct rayo_call *call
 	/* TODO set answer signaling headers */
 	/* send answer to call */
 	if (switch_core_session_execute_application_async(call->session, "answer", "") == SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+		response = iks_new_iq_result(node);
 	} else {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 	iks_send(rsession->parser, response);
 	iks_delete(response);
@@ -628,14 +636,14 @@ static void on_rayo_redirect(struct rayo_session *rsession, struct rayo_call *ca
 	char *redirect_to = iks_find_attrib(redirect, "to");
 
 	if (zstr(redirect_to)) {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else {
 		/* TODO set redirect signaling headers */
 		/* send redirect to call */
 		if (switch_core_session_execute_application_async(call->session, "redirect", redirect_to) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+			response = iks_new_iq_result(node);
 		} else {
-			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 	}
 	iks_send(rsession->parser, response);
@@ -675,12 +683,12 @@ static void on_rayo_hangup(struct rayo_session *rsession, struct rayo_call *call
 	if (!zstr(hangup_cause)) {
 		/* TODO set hangup signaling headers */
 		if (switch_core_session_execute_application_async(call->session, "hangup", hangup_cause) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+			response = iks_new_iq_result(node);
 		} else {
-			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 	} else {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	iks_send(rsession->parser, response);
@@ -745,25 +753,25 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 	memset(&j_attribs, 0, sizeof(j_attribs));
 	if (!iks_attrib_parse(call->session, join, join_attribs_def, (struct iks_attribs *)&j_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_DEBUG, "Bad join attrib\n");
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
 	/* can't join both mixer and call */
 	if (!zstr(GET_STRING(j_attribs, mixer_name)) && !zstr(GET_STRING(j_attribs, call_id))) {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
 	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
 		/* join conference */
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	} else {
 		/* bridge this call to call-id */
 		if (switch_ivr_uuid_bridge(switch_core_session_get_uuid(call->session), GET_STRING(j_attribs, call_id)) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(call->jid, call->dcp_jid, iks_find_attrib(node, "id"));
+			response = iks_new_iq_result(node);
 		} else {
-			response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 	}
 
@@ -781,7 +789,7 @@ done:
 static void on_rayo_unjoin(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
 	/* TODO implement <unjoin> */
-	iks *response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	iks *response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	iks_send(rsession->parser, response);
 	iks_delete(response);
 }
@@ -799,8 +807,6 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	const char *dial_to = iks_find_attrib(dial, "to");
 	const char *dial_from = iks_find_attrib(dial, "from");
 	const char *dial_timeout_ms = iks_find_attrib(dial, "timeout");
-	const char *dcp_jid = iks_find_attrib(iq, "from");
-	const char *server_jid = iks_find_attrib(iq, "to");
 	struct dial_gateway *gateway = NULL;
 	switch_stream_handle_t stream = { 0 };
 	iks *response = NULL;
@@ -809,7 +815,7 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
 	/* set rayo channel variables so channel originate event can be identified as coming from Rayo */
-	stream.write_function(&stream, "{rayo_dcp_jid=%s,rayo_dial_id=%s", dcp_jid, iks_find_attrib(iq, "id"));
+	stream.write_function(&stream, "{rayo_dcp_jid=%s,rayo_dial_id=%s", iks_find_attrib(iq, "from"), iks_find_attrib(iq, "id"));
 
 	/* set originate channel variables */
 	if (!zstr(dial_from)) {
@@ -850,26 +856,26 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 
 				/* map failure reason to iq error */
 				if (!strncmp("-ERR INVALID_GATEWAY", api_stream.data, strlen("-ERR INVALID_GATEWAY"))) {
-					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 				} else if (!strncmp("-ERR SUBSCRIBER_ABSENT", api_stream.data, strlen("-ERR SUBSCRIBER_ABSENT"))) {
-					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 				} else if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
 					/* this -ERR is received when out of sessions */
-					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_RESOURCE_CONSTRAINT);
+					response = iks_new_iq_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
 				} else { 
-					response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 				}
 			}
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to exec originate API\n");
-			response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
 
 		switch_safe_free(api_stream.data);
 	} else {
 		/* will only happen if misconfigured */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "No dial gateway found for %s!\n", dial_to);
-		response = iks_new_iq_error(iq, server_jid, dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		goto done;
 	}
 
@@ -899,18 +905,9 @@ static void on_rayo_dial(struct rayo_session *rsession, struct rayo_call *call, 
 	switch_thread_t *thread;
 	switch_threadattr_t *thd_attr = NULL;
 	iks *dial = iks_find(node, "dial");
-	const char *to = iks_find_attrib(node, "to");
-	const char *from = iks_find_attrib(node, "from");
-
-	if (zstr(to)) {
-		to = rsession->server_jid;
-	}
-	if (zstr(from)) {
-		from = rsession->client_jid_full;
-	}
 
 	if (rsession->state != SS_ONLINE) {
-		iks *response = iks_new_iq_error(node, to, from, STANZA_ERROR_UNEXPECTED_REQUEST);
+		iks *response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 		iks_send(rsession->parser, response);
 		iks_delete(response);
 	} else if (!zstr(iks_find_attrib(dial, "to"))) {
@@ -923,7 +920,7 @@ static void on_rayo_dial(struct rayo_session *rsession, struct rayo_call *call, 
 		switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 		switch_thread_create(&thread, thd_attr, rayo_dial_thread, node_dup, rsession->pool);
 	} else {
-		iks *response = iks_new_iq_error(node, to, from, STANZA_ERROR_BAD_REQUEST);
+		iks *response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		iks_send(rsession->parser, response);
 		iks_delete(response);
 	}
@@ -1032,19 +1029,11 @@ static void on_iq_set_xmpp_ping(struct rayo_session *rsession, struct rayo_call 
 static void on_iq_get_xmpp_disco(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
 	iks *response = iks_new("iq");
-	char *from = iks_find_attrib(node, "from");
-	char *to = iks_find_attrib(node, "to");
-	if (zstr(from)) {
-		from = rsession->client_jid_full;
-	}
-	if (zstr(to)) {
-		to = rsession->server_jid;
-	}
 
 	/* make sure this message is sent to the server */
-	if (!strcmp(rsession->server_jid, to)) {
+	if (!strcmp(rsession->server_jid, iks_find_attrib_soft(node, "to"))) {
 		iks *x;
-		response = iks_new_iq_result(from, to, iks_find_attrib(node, "id"));
+		response = iks_new_iq_result(node);
 		x = iks_insert(response, "query");
 		iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_DISCO);
 		x = iks_insert(x, "feature");
@@ -1054,7 +1043,7 @@ static void on_iq_get_xmpp_disco(struct rayo_session *rsession, struct rayo_call
 		 * the responding entity, as described in the relevant specifications.
 		 */
 	} else {
-		response = iks_new_iq_error(node, to, rsession->client_jid_full, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	iks_send(rsession->parser, response);
@@ -1074,32 +1063,28 @@ static void on_iq_set_xmpp_session(struct rayo_session *rsession, struct rayo_ca
 	switch(rsession->state) {
 	case SS_NEW:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
+		reply = iks_new_iq_error(node, STANZA_ERROR_NOT_AUTHORIZED);
 		break;
 
 	case SS_AUTHENTICATED:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
+		reply = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 		break;
 
 	case SS_RESOURCE_BOUND:
-		reply = iks_new("iq");
-		iks_insert_attrib(reply, "type", "result");
-		iks_insert_attrib(reply, "from", rsession->server_jid);
-		iks_insert_attrib(reply, "to", rsession->client_jid_full);
-		iks_insert_attrib(reply, "id", iks_find_attrib(node, "id"));
+		reply = iks_new_iq_result(node);
 		rsession->state = SS_SESSION_ESTABLISHED;
 		break;
 
 	case SS_SESSION_ESTABLISHED:
 	case SS_ONLINE:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_UNEXPECTED_REQUEST);
+		reply = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 		break;
 
 	default:
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		reply = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 		break;
 	}
 
@@ -1140,10 +1125,7 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, struct rayo_call 
 		rsession->client_jid_full = switch_core_sprintf(rsession->pool, "%s/%s", rsession->client_jid, resource_id);
 
 		/* create reply */
-		reply = iks_new("iq");
-		iks_insert_attrib(reply, "type", "result");
-		iks_insert_attrib(reply, "id", iks_find_attrib(node, "id"));
-
+		reply = iks_new_iq_result(node);
 		x = iks_insert(reply, "bind");
 		iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_BIND);
 		iks_insert_cdata(iks_insert(x, "jid"), rsession->client_jid_full, strlen(rsession->client_jid_full));
@@ -1160,19 +1142,19 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, struct rayo_call 
 	case SS_ONLINE:
 		/* already bound a single resource */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_ALLOWED);
+		reply = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
 		break;
 
 	case SS_NEW:
 		/* new */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_NOT_AUTHORIZED);
+		reply = iks_new_iq_error(node, STANZA_ERROR_NOT_AUTHORIZED);
 		break;
 
 	default:
 		/* shutdown/error/destroy */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		reply = iks_new_iq_error(node, rsession->server_jid, rsession->client_jid_full, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		reply = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 		break;
 	}
 
@@ -1200,6 +1182,7 @@ static int rayo_send_auth_failure(struct rayo_session *rsession, const char *rea
 	char *reply = switch_mprintf("<failure xmlns='"IKS_NS_XMPP_SASL"'>"
 		"<%s/></failure>", reason);
 	result = iks_send_raw(rsession->parser, reply);
+	switch_safe_free(reply);
 	return result;
 }
 
@@ -1351,12 +1334,14 @@ static int on_iq(void *user_data, ikspak *pak)
 	}
 
 	if (!handler) {
-		char *from = iks_find_attrib(iq, "to");
-		char *to = iks_find_attrib(iq, "from");
 		iks *reply;
-		from = zstr(from) ? rsession->server_jid : from;
-		to = zstr(to) ? rsession->client_jid_full : to;
-		reply = iks_new_iq_error(iq, from, to, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		if (zstr(iks_find_attrib(iq, "to"))) {
+			iks_insert_attrib(iq, "to", rsession->server_jid);
+		}
+		if (zstr(iks_find_attrib(iq, "from"))) {
+			iks_insert_attrib(iq, "from", rsession->client_jid_full);
+		}
+		reply = iks_new_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		iks_send(rsession->parser, reply);
 		iks_delete(reply);
 	}
@@ -1532,7 +1517,11 @@ static void on_call_originate_event(struct rayo_session *rsession, switch_event_
 		switch_core_session_rwunlock(session);
 
 		/* send response to DCP */
-		response = iks_new_iq_result(rsession->server_jid, dcp_jid, dial_id);
+		response = iks_new("iq");
+		iks_insert_attrib(response, "from", rsession->server_jid);
+		iks_insert_attrib(response, "to", dcp_jid);
+		iks_insert_attrib(response, "id", dial_id);
+		iks_insert_attrib(response, "type", "result");
 		ref = iks_insert(response, "ref");
 		iks_insert_attrib(ref, "xmlns", RAYO_NS);
 		iks_insert_attrib(ref, "id", uuid);
