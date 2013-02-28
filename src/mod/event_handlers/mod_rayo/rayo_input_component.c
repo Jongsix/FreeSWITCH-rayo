@@ -128,7 +128,39 @@ struct input_handler {
 	const char *jid;
 	/** stop flag */
 	int stop;
+	/** done flag */
+	int done;
 };
+
+static switch_status_t input_component_on_hangup(switch_core_session_t *session);
+
+/**
+ * channel state callbacks
+ */
+static const switch_state_handler_table_t input_component_state_handlers = {
+	/*.on_init */ NULL,
+	/*.on_routing */ NULL,
+	/*.on_execute */ NULL,
+	/*.on_hangup */ input_component_on_hangup,
+	/*.on_exchange_media */ NULL,
+	/*.on_soft_execute */ NULL,
+	/*.on_consume_media */ NULL,
+	/*.on_hibernate */ NULL
+};
+
+/**
+ * Monitor for hangup and send complete
+ */
+static switch_status_t input_component_on_hangup(switch_core_session_t *session)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
+	if (handler && !handler->done) {
+		handler->done = 1;
+		rayo_call_component_send_complete(handler->call, handler->jid, COMPONENT_COMPLETE_HANGUP);
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
 
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
 
@@ -144,6 +176,7 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 		switch (match) {
 			case SMT_NO_MATCH: {
 				if (handler->stop) {
+					handler->done = 1;
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Stopped\n");
 					rayo_call_component_send_complete(handler->call, handler->jid, COMPONENT_COMPLETE_STOP);
 					switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
@@ -152,6 +185,7 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 				break;
 			}
 			case SMT_TIMEOUT: {
+				handler->done = 1;
 				if (handler->num_digits == 0) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
 					rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOINPUT);
@@ -164,6 +198,7 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 				break;
 			}
 			case SMT_MATCH: {
+				handler->done = 1;
 				send_input_component_dtmf_match(handler->call, handler->jid, handler->digits);
 				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
 				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
@@ -197,6 +232,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 			}
 			case SMT_TIMEOUT: {
 				/* notify of no-match and remove input handler */
+				handler->done = 1;
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
 				rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOMATCH);
 
@@ -206,6 +242,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 			}
 			case SMT_MATCH: {
 				/* notify of match and remove input handler */
+				handler->done = 1;
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
 				send_input_component_dtmf_match(handler->call, handler->jid, handler->digits);
 
@@ -276,6 +313,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	handler->digits[0] = '\0';
 	handler->call = call;
 	handler->stop = 0;
+	handler->done = 0;
 
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs, i_attribs.initial_timeout.v.i, i_attribs.inter_digit_timeout.v.i)) {
@@ -290,6 +328,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
 	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
+	switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
 }
 
 /**
@@ -311,6 +350,7 @@ static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
  */
 switch_status_t rayo_input_component_load(void)
 {
+	
 	rayo_call_component_interface_add("set:"RAYO_INPUT_NS":input", start_call_input_component, stop_call_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
