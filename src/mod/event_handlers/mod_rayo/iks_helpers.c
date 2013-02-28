@@ -39,14 +39,14 @@
  * @param error_type
  * @return the <iq> error response
  */
-iks *iks_new_iq_error(iks *iq, const char *from, const char *to, const char *error_name, const char *error_type)
+iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type)
 {
 	iks *response = iks_copy(iq);
 	iks *x;
 
 	/* <iq> */
-	iks_insert_attrib(response, "from", from);
-	iks_insert_attrib(response, "to", to);
+	iks_insert_attrib(response, "from", iks_find_attrib(iq, "to"));
+	iks_insert_attrib(response, "to", iks_find_attrib(iq, "from"));
 	iks_insert_attrib(response, "type", "error");
 
 	/* <error> */
@@ -61,22 +61,19 @@ iks *iks_new_iq_error(iks *iq, const char *from, const char *to, const char *err
 }
 
 /**
- * Create <iq> result response
- * @param from
- * @param to
- * @param id
+ * Create <iq> result response from request
+ * @param iq the request
  * @return the result response
  */
-iks *iks_new_iq_result(const char *from, const char *to, const char *id)
+iks *iks_new_iq_result(iks *iq)
 {
 	iks *response = iks_new("iq");
-	iks_insert_attrib(response, "from", from);
-	iks_insert_attrib(response, "to", to);
+	iks_insert_attrib(response, "from", iks_find_attrib(iq, "to"));
+	iks_insert_attrib(response, "to", iks_find_attrib(iq, "from"));
 	iks_insert_attrib(response, "type", "result");
-	iks_insert_attrib(response, "id", id);
+	iks_insert_attrib(response, "id", iks_find_attrib(iq, "id"));
 	return response;
 }
-
 
 /**
  * Get attribute value of node, returning empty string if non-existent or not set.

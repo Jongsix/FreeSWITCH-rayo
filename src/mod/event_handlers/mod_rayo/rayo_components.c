@@ -83,11 +83,7 @@ static char *call_component_jid_create(struct rayo_call *call, const char *compo
  */
 void rayo_call_component_send_iq_error(struct rayo_call *call, iks *iq, const char *error_name, const char *error_type)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(call->session);
-	iks *response = iks_new_iq_error(iq,
-		switch_channel_get_variable(channel, "rayo_call_jid"),
-		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		error_name, error_type);
+	iks *response = iks_new_iq_error(iq, error_name, error_type);
 	rayo_call_iks_send(call, response);
 	iks_delete(response);
 }
@@ -95,13 +91,12 @@ void rayo_call_component_send_iq_error(struct rayo_call *call, iks *iq, const ch
 /**
  * Notify of new call component
  * @param call the call
- * @param request_id that requested the component
+ * @param iq that requested the component
  * @param type the type of component
  * @return the component JID
  */
-const char *rayo_call_component_send_start(struct rayo_call *call, const char *request_id, const char *type)
+const char *rayo_call_component_send_start(struct rayo_call *call, iks *iq, const char *type)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *x, *response = NULL;
 	const char *ref = call_component_ref_create(call, type);
 	const char *jid = call_component_jid_create(call, ref);
@@ -112,10 +107,7 @@ const char *rayo_call_component_send_start(struct rayo_call *call, const char *r
 	switch_core_hash_insert(globals.active_components, jid, type);
 	switch_mutex_unlock(globals.mutex);
 
-	response = iks_new_iq_result(
-		switch_channel_get_variable(channel, "rayo_call_jid"),
-		switch_channel_get_variable(channel, "rayo_dcp_jid"),
-		request_id);
+	response = iks_new_iq_result(iq);
 	x = iks_insert(response, "ref");
 	iks_insert_attrib(x, "xmlns", RAYO_NS);
 	iks_insert_attrib(x, "id", ref);
@@ -231,7 +223,7 @@ static iks *on_rayo_call_component(const char *server_jid, struct rayo_call *cal
 	char *play = iks_string(NULL, node);
 	/* forward document to call thread by executing custom application */
 	if (!play || switch_core_session_execute_application_async(call->session, "rayo_call_component", play) != SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_error(node, call->jid, call->dcp_jid, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to execute rayo_call_component!\n");
 	}
 	if (play) {
@@ -258,13 +250,13 @@ static iks *on_rayo_stop(const char *server_jid, struct rayo_call *call, iks *no
 	switch_mutex_unlock(globals.mutex);
 	
 	if (zstr(component)) {
-		response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_ITEM_NOT_FOUND);
+		response = iks_new_iq_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else {
 		struct call_component_interface *component_interface = switch_core_hash_find(globals.call_component_interfaces, component);
 		if (component_interface && component_interface->stop) {
 			response = component_interface->stop(call, node);
 		} else {
-			response = iks_new_iq_error(node, component_jid, call->dcp_jid, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+			response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		}
 	}
 	return response;
