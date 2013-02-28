@@ -247,9 +247,14 @@ static void start_call_output_component(struct rayo_call *call, iks *iq)
 	}
 
 	/* done */
-	if (timeout && switch_micro_time_now() >= timeout) {
+	if (switch_channel_get_callstate(switch_core_session_get_channel(session)) == CCS_HANGUP) {
+		/* hangup caused finish */
+		rayo_call_component_send_complete(call, jid, COMPONENT_COMPLETE_HANGUP);
+	} else if (timeout && switch_micro_time_now() >= timeout) {
+		/* timed out */
 		rayo_call_component_send_complete(call, jid, OUTPUT_MAX_TIME);
 	} else {
+		/* normal completion */
 		rayo_call_component_send_complete(call, jid, OUTPUT_FINISH_AHN);
 	}
 }

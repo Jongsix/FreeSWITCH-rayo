@@ -788,10 +788,39 @@ done:
  */
 static void on_rayo_unjoin(struct rayo_session *rsession, struct rayo_call *call, iks *node)
 {
-	/* TODO implement <unjoin> */
-	iks *response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
-	iks_send(rsession->parser, response);
-	iks_delete(response);
+	iks *response = NULL;
+	iks *unjoin = iks_find(node, "unjoin");
+	const char *call_id = iks_find_attrib(unjoin, "call-id");
+	const char *mixer_name = iks_find_attrib(unjoin, "mixer-name");
+
+	if (!zstr(call_id) && !zstr(mixer_name)) {
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+	} else if (!zstr(call_id)) {
+		const char *bleg = switch_channel_get_variable(switch_core_session_get_channel(call->session), SWITCH_BRIDGE_UUID_VARIABLE);
+		if (!zstr(bleg) && !strcmp(bleg, call_id)) {
+			/* unbridge call */
+			response = iks_new_iq_result(node);
+			iks_send(rsession->parser, response); // send before park so events arrive in order to client
+			iks_delete(response);
+			response = NULL;
+			switch_ivr_park_session(call->session);
+		} else {
+			/* not bridged or wrong b-leg UUID */
+			response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		}
+	} else if (!zstr(mixer_name)) {
+		/* leave conference */
+		response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	} else {
+		/* missing mixer or call */
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+	}
+
+	/* send error */
+	if (response) {
+		iks_send(rsession->parser, response);
+		iks_delete(response);
+	}
 }
 
 /**
@@ -2107,11 +2136,13 @@ SWITCH_STANDARD_APP(rayo_app)
 done:
 
 	if (ok) {
+		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
+		switch_channel_set_variable(channel, "transfer_after_bridge", "false");
+		switch_channel_set_variable(channel, "park_after_bridge", "true");
 		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
 		switch_ivr_park(session, NULL);
-		switch_core_event_hook_remove_read_frame(session, rayo_call_on_read_frame);
 	} else {
-		switch_channel_hangup(switch_core_session_get_channel(session), SWITCH_CAUSE_CALL_REJECTED);
+		switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
 	}
 }
 
@@ -2280,7 +2311,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND, route_call_event, NULL);
 
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
-
+	
 	/* set up rayo components */
 	rayo_components_load(module_interface, pool);
 
@@ -2310,7 +2341,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 	/* cleanup module */
 	switch_event_unbind_callback(route_call_event);
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");	
 
 	return SWITCH_STATUS_SUCCESS;
 }
