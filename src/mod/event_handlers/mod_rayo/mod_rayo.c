@@ -1606,11 +1606,14 @@ static void route_mixer_event(switch_event_t *event)
 	const char *action = switch_event_get_header(event, "Action");
 	const char *profile = switch_event_get_header(event, "Conference-Profile-Name");
 	const char *mixer_name = switch_event_get_header(event, "Conference-Name");
-	struct rayo_mixer *mixer = (struct rayo_mixer *)switch_core_hash_find(globals.mixers, mixer_name);
+	struct rayo_mixer *mixer = NULL;
+
+	switch_mutex_lock(globals.mixers_mutex);
+	mixer = (struct rayo_mixer *)switch_core_hash_find(globals.mixers, mixer_name);
 
 	if (strcmp(profile, globals.mixer_conf_profile)) {
 		/* don't care about other conferences */
-		return;
+		goto done;
 	}
 
 	if (!strcmp("add-member", action)) {
@@ -1627,6 +1630,9 @@ static void route_mixer_event(switch_event_t *event)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "got rayo mixer event\n %s\n", event_str);
 		switch_safe_free(event_str);
 	}
+
+done:
+	switch_mutex_unlock(globals.mixers_mutex);
 }
 
 /**
