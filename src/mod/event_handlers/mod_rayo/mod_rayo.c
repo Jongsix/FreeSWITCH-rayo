@@ -148,10 +148,14 @@ static struct {
 	switch_hash_t *command_handlers;
 	/** XMPP <iq> set commands mapped to functions */
 	switch_hash_t *rayo_command_handlers;
+	/** mixers mapped by JID */
+	switch_hash_t *mixers;
+	/** synchronizes access to mixers */
+	switch_mutex_t *mixers_mutex;
 	/** map of DCP JID to session */
-	switch_hash_t *client_routes;
-	/** synchronizes access to routes */
-	switch_mutex_t *client_routes_mutex;
+	switch_hash_t *clients;
+	/** synchronizes access to clients */
+	switch_mutex_t *clients_mutex;
 	/** domain for calls/mixers/server/etc */
 	char *domain;
 	/** Maximum idle time before call is considered abandoned */
@@ -172,6 +176,20 @@ struct dial_gateway {
 	const char *dial_prefix;
 	/** number of digits to strip from dialstring */
 	int strip;
+};
+
+/**
+ * Mixer subscription data
+ */
+struct rayo_mixer {
+	/** The mixer JID */
+	const char *jid;
+	/** The mixer name */
+	const char *name;
+	/** subscriber JIDs */
+	switch_hash_t *subscribers;
+	/** mixer memory pool */
+	switch_memory_pool_t *pool;
 };
 
 /**
@@ -385,6 +403,39 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
 	switch_channel_set_variable(channel, "rayo_call_jid", call->jid); /* tags events with JID */
 	return call;
+}
+
+/**
+ * Create Rayo mixer
+ * @param name of this mixer
+ * @return the mixer
+ */
+static struct rayo_mixer *rayo_mixer_create(const char *name)
+{
+	struct rayo_mixer *mixer = NULL;
+	switch_memory_pool_t *pool = NULL;
+	if (switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool for mixer!\n");
+		return NULL;
+	}
+	mixer = switch_core_alloc(pool, sizeof(*mixer));
+	mixer->pool = pool;
+	mixer->name = switch_core_strdup(pool, name);
+	mixer->jid = switch_core_sprintf(pool, "%s@%s", name, globals.domain);
+	switch_core_hash_init(&mixer->subscribers, pool);
+	return mixer;
+}
+
+/**
+ * Destroy mixer
+ * @param mixer to destroy
+ */
+static void rayo_mixer_destroy(struct rayo_mixer *mixer)
+{
+	if (mixer) {
+		switch_memory_pool_t *pool = mixer->pool;
+		switch_core_destroy_memory_pool(&pool);
+	}
 }
 
 /**
@@ -1220,9 +1271,9 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, struct rayo_call 
 		rsession->state = SS_RESOURCE_BOUND;
 
 		/* remember route to client */
-		switch_mutex_lock(globals.client_routes_mutex);
-		switch_core_hash_insert(globals.client_routes, rsession->client_jid_full, rsession);
-		switch_mutex_unlock(globals.client_routes_mutex);
+		switch_mutex_lock(globals.clients_mutex);
+		switch_core_hash_insert(globals.clients, rsession->client_jid_full, rsession);
+		switch_mutex_unlock(globals.clients_mutex);
 		break;
 	}
 	case SS_RESOURCE_BOUND:
@@ -1503,6 +1554,82 @@ static int rayo_session_ready(struct rayo_session *rsession)
 }
 
 /**
+ * Handle mixer delete member event
+ */
+static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_t *event)
+{
+	const char *uuid = switch_event_get_header(event, "Unique-ID");
+	if (mixer) {
+		switch_core_hash_delete(mixer->subscribers, uuid);
+	}
+}
+
+/**
+ * Handle mixer destroy event
+ */
+static void on_mixer_destroy_event(struct rayo_mixer *mixer, switch_event_t *event)
+{
+	/* remove from hash and destroy */
+	switch_core_hash_delete(globals.mixers, mixer->name);
+	rayo_mixer_destroy(mixer);
+}
+
+/**
+ * Handle mixer add member event
+ */
+static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *event)
+{
+	const char *uuid = switch_event_get_header(event, "Unique-ID");
+	struct rayo_call *call = rayo_call_locate(uuid);
+	if (!call) {
+		if (mixer) {
+			/* TODO non-rayo call joining a rayo mixer... kick them? */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Non-rayo call joined a rayo mixer!\n");
+		}
+		return;
+	}
+	if (!mixer) {
+		mixer = rayo_mixer_create(switch_event_get_header(event, "Conference-Name"));
+	}
+	/* add call to list of subscribers */
+	switch_core_hash_insert(mixer->subscribers, uuid, switch_core_strdup(mixer->pool, call->dcp_jid));
+	rayo_call_unlock(call);
+}
+
+/**
+ * Receives mixer events from FreeSWITCH core and routes them to the proper Rayo session(s).
+ * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
+ */
+static void route_mixer_event(switch_event_t *event)
+{
+	char *event_str = NULL;
+	const char *action = switch_event_get_header(event, "Action");
+	const char *profile = switch_event_get_header(event, "Conference-Profile-Name");
+	const char *mixer_name = switch_event_get_header(event, "Conference-Name");
+	struct rayo_mixer *mixer = (struct rayo_mixer *)switch_core_hash_find(globals.mixers, mixer_name);
+
+	if (strcmp(profile, globals.mixer_conf_profile)) {
+		/* don't care about other conferences */
+		return;
+	}
+
+	if (!strcmp("add-member", action)) {
+		on_mixer_add_member_event(mixer, event);
+	} else if (!strcmp("conference-destroy", action)) {
+		on_mixer_destroy_event(mixer, event);
+	} else if (!strcmp("del-member", action)) {
+		on_mixer_delete_member_event(mixer, event);
+	}
+	/* TODO speaking events */
+
+	if (mixer) {
+		switch_event_serialize(event, &event_str, SWITCH_FALSE);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "got rayo mixer event\n %s\n", event_str);
+		switch_safe_free(event_str);
+	}
+}
+
+/**
  * Receives events from FreeSWITCH core and routes them to the proper Rayo session.
  * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
  */
@@ -1520,8 +1647,8 @@ static void route_call_event(switch_event_t *event)
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "%s call event %s\n", dcp_jid, switch_event_name(event->event_id));
 
 		/* find session that is connected to client */
-		switch_mutex_lock(globals.client_routes_mutex);
-		rsession = (struct rayo_session *)switch_core_hash_find(globals.client_routes, dcp_jid);
+		switch_mutex_lock(globals.clients_mutex);
+		rsession = (struct rayo_session *)switch_core_hash_find(globals.clients, dcp_jid);
 		if (rsession) {
 			/* send event to session */
 			switch_event_t *dup_event = NULL;
@@ -1534,7 +1661,7 @@ static void route_call_event(switch_event_t *event)
 			/* TODO orphaned call... maybe allow events to queue so they can be delivered on reconnect? */
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Orphaned call event %s to %s\n", switch_event_name(event->event_id), dcp_jid);
 		}
-		switch_mutex_unlock(globals.client_routes_mutex);
+		switch_mutex_unlock(globals.clients_mutex);
 	}
 }
 
@@ -1748,13 +1875,14 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 static void rayo_session_destroy(struct rayo_session *rsession)
 {
 	void *queue_item = NULL;
+	switch_memory_pool_t *pool;
 
 	rsession->state = SS_DESTROY;
 
 	/* remove session from map */
-	switch_mutex_lock(globals.client_routes_mutex);
-	switch_core_hash_delete(globals.client_routes, rsession->client_jid_full);
-	switch_mutex_unlock(globals.client_routes_mutex);
+	switch_mutex_lock(globals.clients_mutex);
+	switch_core_hash_delete(globals.clients, rsession->client_jid_full);
+	switch_mutex_unlock(globals.clients_mutex);
 
 	/* flush pending events */
 	while (switch_queue_trypop(rsession->event_queue, &queue_item) == SWITCH_STATUS_SUCCESS) {
@@ -1782,7 +1910,8 @@ static void rayo_session_destroy(struct rayo_session *rsession)
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s Session destroyed\n", rsession->id);
 
-	switch_core_destroy_memory_pool(&rsession->pool);
+	pool = rsession->pool;
+	switch_core_destroy_memory_pool(&pool);
 }
 
 /**
@@ -2041,7 +2170,8 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	switch_socket_close(server->socket);
 
 	if (server->pool) {
-		switch_core_destroy_memory_pool(&server->pool);
+		switch_memory_pool_t *pool = server->pool;
+		switch_core_destroy_memory_pool(&pool);
 	}
 
 	if (pool) {
@@ -2174,8 +2304,8 @@ SWITCH_STANDARD_APP(rayo_app)
 
 		/* Offer call to all ONLINE clients */
 		/* TODO load balance offers so first session doesn't always get offer first? */
-		switch_mutex_lock(globals.client_routes_mutex);
-		for (hi = switch_hash_first(NULL, globals.client_routes); hi; hi = switch_hash_next(hi)) {
+		switch_mutex_lock(globals.clients_mutex);
+		for (hi = switch_hash_first(NULL, globals.clients); hi; hi = switch_hash_next(hi)) {
 			struct rayo_session *rsession;
 			const void *key;
 			void *val;
@@ -2188,7 +2318,7 @@ SWITCH_STANDARD_APP(rayo_app)
 				ok |= (rayo_session_offer_call(rsession, call) == SWITCH_STATUS_SUCCESS);
 			}
 		}
-		switch_mutex_unlock(globals.client_routes_mutex);
+		switch_mutex_unlock(globals.clients_mutex);
 	}
 
 done:
@@ -2343,9 +2473,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.users, pool);
 	switch_core_hash_init(&globals.command_handlers, pool);
 	switch_core_hash_init(&globals.rayo_command_handlers, pool);
-	switch_core_hash_init(&globals.client_routes, pool);
+	switch_core_hash_init(&globals.clients, pool);
+	switch_mutex_init(&globals.clients_mutex, SWITCH_MUTEX_UNNESTED, pool);
+	switch_core_hash_init(&globals.mixers, pool);
+	switch_mutex_init(&globals.mixers_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	switch_core_hash_init(&globals.dial_gateways, pool);
-	switch_mutex_init(&globals.client_routes_mutex, SWITCH_MUTEX_UNNESTED, pool);
 
 	/* non-call commands */
 	add_command_handler(globals.command_handlers, "set:"IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind, globals.pool);
@@ -2372,6 +2504,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_UNBRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND, route_call_event, NULL);
+
+	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, "conference::maintenance", route_mixer_event, NULL);
 
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
 	
@@ -2400,9 +2534,10 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 	switch_thread_rwlock_wrlock(globals.shutdown_rwlock);
 
 	rayo_components_shutdown();
-	
+
 	/* cleanup module */
 	switch_event_unbind_callback(route_call_event);
+	switch_event_unbind_callback(route_mixer_event);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");	
 
