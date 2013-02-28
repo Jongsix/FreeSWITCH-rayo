@@ -70,8 +70,8 @@ typedef void (* rayo_call_component_start_fn)(struct rayo_call *call, iks *iq);
 typedef iks *(* rayo_call_component_stop_fn)(struct rayo_call *call, iks *iq);
 extern void rayo_call_component_interface_add(const char *command, rayo_call_component_start_fn start, rayo_call_component_stop_fn stop);
 
-extern const char *rayo_call_component_send_start(struct rayo_call *call, const char *request_id, const char *type);
-extern void rayo_call_component_send_complete(struct rayo_call *call, const char *jid, const char *reason, const char *reason_namespace);
+extern const char *rayo_call_component_send_start(struct rayo_call *call, iks *iq, const char *type);
 extern void rayo_call_component_send_iq_error(struct rayo_call *call, iks *iq, const char *error_name, const char *error_type);
+extern void rayo_call_component_send_complete(struct rayo_call *call, const char *jid, const char *reason, const char *reason_namespace);
 
 #endif
