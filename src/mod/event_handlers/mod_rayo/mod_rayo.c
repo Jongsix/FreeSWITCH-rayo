@@ -1017,12 +1017,12 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 {
 	iks *iq = (iks *)node;
 	iks *dial = iks_find(iq, "dial");
+	iks *response = NULL;
 	const char *dial_to = iks_find_attrib(dial, "to");
 	const char *dial_from = iks_find_attrib(dial, "from");
 	const char *dial_timeout_ms = iks_find_attrib(dial, "timeout");
 	struct dial_gateway *gateway = NULL;
 	switch_stream_handle_t stream = { 0 };
-	iks *response = NULL;
 	SWITCH_STANDARD_STREAM(stream);
 
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
@@ -1052,11 +1052,45 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	/* build dialstring and dial call */
 	gateway = dial_gateway_find(dial_to);
 	if (gateway) {
+		iks *join = iks_find(dial, "join");
 		const char *dial_to_stripped = dial_to + gateway->strip;
 		switch_stream_handle_t api_stream = { 0 };
 		SWITCH_STANDARD_STREAM(api_stream);
 
-		stream.write_function(&stream, "%s%s &rayo(true)", gateway->dial_prefix, dial_to_stripped);
+		if (join) {
+			/* check join args */
+			const char *call_id = iks_find_attrib(join, "call-id");
+			const char *mixer_name = iks_find_attrib(join, "mixer-name");
+
+			if (!zstr(call_id) && !zstr(mixer_name)) {
+				/* can't join both */
+				response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+				goto done;
+			} else if (zstr(call_id) && zstr(mixer_name)) {
+				/* nobody to join to? */
+				response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+				goto done;
+			} else if (!zstr(call_id)) {
+				/* bridge */
+				struct rayo_call *b_call = rayo_call_locate(call_id);
+				/* is b-leg available? */
+				if (!b_call) {
+					response = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+					goto done;
+				} else if (b_call->joined) {
+					response = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+					rayo_call_unlock(b_call);
+					goto done;
+				}
+				stream.write_function(&stream, "%s%s &rayo(bridge %s)", gateway->dial_prefix, dial_to_stripped, call_id);
+			} else {
+				/* conference */
+				stream.write_function(&stream, "%s%s &rayo(conference %s@%s)", gateway->dial_prefix, dial_to_stripped, mixer_name, globals.mixer_conf_profile);
+			}
+		} else {
+			stream.write_function(&stream, "%s%s &rayo(dial)", gateway->dial_prefix, dial_to_stripped);
+		}
+
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using dialstring: %s\n", (char *)stream.data);
 
 		/* <iq><ref> response will be sent when originate event is received- otherwise error is returned */
@@ -2416,19 +2450,44 @@ static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, s
 	return SWITCH_STATUS_SUCCESS;
 }
 
-#define RAYO_USAGE "[true]"
+#define RAYO_USAGE "[dial|bridge <uuid>|conference <name>]"
 /**
  * Offer call and park channel
  */
 SWITCH_STANDARD_APP(rayo_app)
 {
+	int offer = 1;
 	int ok = 0;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct rayo_call *call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
+	const char *app = ""; /* optional app to execute */
+	const char *app_args = ""; /* app args */
 
+	/* check origination args */
 	if (!zstr(data)) {
-		int i;
+		char *argv[2] = { 0 };
+		char *args = switch_core_session_strdup(session, data);
+		int argc = switch_separate_string(args, ' ', argv, sizeof(argv) / sizeof(argv[0]));
+		if (argc) {
+			if (!strcmp("dial", argv[0])) {
+				offer = 0;
+			} else if (!strcmp("conference", argv[0])) {
+				offer = 0;
+				app = "conference";
+				app_args = argv[1];
+			} else if (!strcmp("bridge", argv[0])) {
+				offer = 0;
+				app = "intercept";
+				app_args = argv[1];
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Invalid rayo args: %s\n", data);
+				goto done;
+			}
+		}
+
 		if (!call) {
+			int i;
+			/* wait for call to be created from ORIGINATION event */
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Don't have rayo call yet\n");
 			for (i = 0; i < 50 && !call; i++) {
 				call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
@@ -2478,6 +2537,9 @@ done:
 		switch_channel_set_variable(channel, "transfer_after_bridge", "false");
 		switch_channel_set_variable(channel, "park_after_bridge", "true");
 		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
+		if (!zstr(app)) {
+			switch_core_session_execute_application(session, app, app_args);
+		}
 		switch_ivr_park(session, NULL);
 	} else {
 		switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
