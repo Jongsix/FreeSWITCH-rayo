@@ -57,6 +57,8 @@ struct rayo_call {
 	int next_ref;
 	/** current idle start time */
 	switch_time_t idle_start_time;
+	/** true if joined */
+	int joined;
 };
 
 extern struct rayo_call *rayo_call_get(switch_core_session_t *session);
