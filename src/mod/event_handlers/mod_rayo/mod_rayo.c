@@ -186,8 +186,8 @@ struct rayo_mixer {
 	const char *jid;
 	/** The mixer name */
 	const char *name;
-	/** subscriber JIDs */
-	switch_hash_t *subscribers;
+	/** member JIDs */
+	switch_hash_t *members;
 	/** mixer memory pool */
 	switch_memory_pool_t *pool;
 };
@@ -253,12 +253,12 @@ static struct dial_gateway *dial_gateway_find(const char *uri)
 	struct dial_gateway *gateway = (struct dial_gateway *)switch_core_hash_find(globals.dial_gateways, "default");
 
 	/* find longest prefix match */
-	for (hi = switch_hash_first(NULL, globals.dial_gateways); hi; hi = switch_hash_next(hi)) {
+	for (hi = switch_core_hash_first(globals.dial_gateways); hi; hi = switch_core_hash_next(hi)) {
 		struct dial_gateway *candidate = NULL;
 		const void *prefix;
 		int prefix_len = 0;
 		void *val;
-		switch_hash_this(hi, &prefix, NULL, &val);
+		switch_core_hash_this(hi, &prefix, NULL, &val);
 		candidate = (struct dial_gateway *)val;
 		switch_assert(candidate);
 		
@@ -422,7 +422,7 @@ static struct rayo_mixer *rayo_mixer_create(const char *name)
 	mixer->pool = pool;
 	mixer->name = switch_core_strdup(pool, name);
 	mixer->jid = switch_core_sprintf(pool, "%s@%s", name, globals.domain);
-	switch_core_hash_init(&mixer->subscribers, pool);
+	switch_core_hash_init(&mixer->members, pool);
 	return mixer;
 }
 
@@ -1554,14 +1554,81 @@ static int rayo_session_ready(struct rayo_session *rsession)
 }
 
 /**
+ * Create a Rayo <presence> event
+ * @param name the event name
+ * @param namespace the event namespace
+ * @param from
+ * @param to
+ * @return the event XML node
+ */
+static iks* create_rayo_event(const char *name, const char *namespace, const char *from, const char *to)
+{
+	iks *event = iks_new("presence");
+	iks *x;
+	/* iks makes copies of attrib name and value */
+	iks_insert_attrib(event, "from", from);
+	iks_insert_attrib(event, "to", to);
+	x = iks_insert(event, name);
+	if (!zstr(namespace)) {
+		iks_insert_attrib(x, "xmlns", namespace);
+	}
+	return event;
+}
+
+/**
+ * Send event to mixer members
+ * @param mixer the mixer
+ * @param rayo_event the event to send
+ */
+static void broadcast_mixer_event(struct rayo_mixer *mixer, iks *rayo_event)
+{
+	switch_hash_index_t *hi = NULL;
+	for (hi = switch_core_hash_first(mixer->members); hi; hi = switch_core_hash_next(hi)) {
+		const void *key;
+		void *val;
+		const char *client_jid;
+		switch_core_hash_this(hi, &key, NULL, &val);
+		client_jid = (const char *)val;
+		switch_assert(client_jid);
+		iks_insert_attrib(rayo_event, "to", client_jid);
+		rayo_iks_send(rayo_event);
+	}
+}
+
+/**
  * Handle mixer delete member event
  */
 static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_t *event)
 {
+	iks *add_member_event, *x;
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
-	if (mixer) {
-		switch_core_hash_delete(mixer->subscribers, uuid);
+	struct rayo_call *call;
+
+	/* not a rayo mixer */
+	if (!mixer) {
+		return;
 	}
+
+	call = rayo_call_locate(uuid);
+	if (call) {
+		/* send mixer unjoined event to DCP */
+		add_member_event = create_rayo_event("unjoined", RAYO_NS, call->jid, call->dcp_jid);
+		x = iks_find(add_member_event, "unjoined");
+		iks_insert_attrib(x, "mixer-name", mixer->name);
+		rayo_iks_send(add_member_event);
+		iks_delete(add_member_event);
+		rayo_call_unlock(call);
+	}
+
+	/* broadcast mixer unjoined event to members */
+	add_member_event = create_rayo_event("unjoined", RAYO_NS, mixer->jid, "");
+	x = iks_find(add_member_event, "unjoined");
+	iks_insert_attrib(x, "call-id", uuid);
+	broadcast_mixer_event(mixer, add_member_event);
+	iks_delete(add_member_event);
+
+	/* remove member from mixer */
+	switch_core_hash_delete(mixer->members, uuid);
 }
 
 /**
@@ -1579,21 +1646,35 @@ static void on_mixer_destroy_event(struct rayo_mixer *mixer, switch_event_t *eve
  */
 static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *event)
 {
+	iks *add_member_event = NULL, *x;
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
 	struct rayo_call *call = rayo_call_locate(uuid);
-	if (!call) {
-		if (mixer) {
-			/* TODO non-rayo call joining a rayo mixer... kick them? */
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Non-rayo call joined a rayo mixer!\n");
-		}
-		return;
-	}
+
 	if (!mixer) {
-		mixer = rayo_mixer_create(switch_event_get_header(event, "Conference-Name"));
+		/* new mixer */
+		const char *mixer_name = switch_event_get_header(event, "Conference-Name");
+		mixer = rayo_mixer_create(mixer_name);
 	}
-	/* add call to list of subscribers */
-	switch_core_hash_insert(mixer->subscribers, uuid, switch_core_strdup(mixer->pool, call->dcp_jid));
-	rayo_call_unlock(call);
+
+	if (call) {
+		/* add member to mixer */
+		switch_core_hash_insert(mixer->members, uuid, switch_core_strdup(mixer->pool, call->dcp_jid));
+
+		/* send call joined event to DCP */
+		add_member_event = create_rayo_event("joined", RAYO_NS, call->jid, call->dcp_jid);
+		x = iks_find(add_member_event, "joined");
+		iks_insert_attrib(x, "mixer-name", mixer->name);
+		rayo_iks_send(add_member_event);
+		iks_delete(add_member_event);
+		rayo_call_unlock(call);
+	}
+
+	/* broadcast mixer joined event to members */
+	add_member_event = create_rayo_event("joined", RAYO_NS, mixer->jid, "");
+	x = iks_find(add_member_event, "joined");
+	iks_insert_attrib(x, "call-id", uuid);
+	broadcast_mixer_event(mixer, add_member_event);
+	iks_delete(add_member_event);
 }
 
 /**
@@ -1602,7 +1683,6 @@ static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *
  */
 static void route_mixer_event(switch_event_t *event)
 {
-	char *event_str = NULL;
 	const char *action = switch_event_get_header(event, "Action");
 	const char *profile = switch_event_get_header(event, "Conference-Profile-Name");
 	const char *mixer_name = switch_event_get_header(event, "Conference-Name");
@@ -1624,12 +1704,6 @@ static void route_mixer_event(switch_event_t *event)
 		on_mixer_delete_member_event(mixer, event);
 	}
 	/* TODO speaking events */
-
-	if (mixer) {
-		switch_event_serialize(event, &event_str, SWITCH_FALSE);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "got rayo mixer event\n %s\n", event_str);
-		switch_safe_free(event_str);
-	}
 
 done:
 	switch_mutex_unlock(globals.mixers_mutex);
@@ -1669,28 +1743,6 @@ static void route_call_event(switch_event_t *event)
 		}
 		switch_mutex_unlock(globals.clients_mutex);
 	}
-}
-
-/**
- * Create a Rayo <presence> event
- * @param name the event name
- * @param namespace the event namespace
- * @param from
- * @param to
- * @return the event XML node
- */
-static iks* create_rayo_event(const char *name, const char *namespace, const char *from, const char *to)
-{
-	iks *event = iks_new("presence");
-	iks *x;
-	/* iks makes copies of attrib name and value */
-	iks_insert_attrib(event, "from", from);
-	iks_insert_attrib(event, "to", to);
-	x = iks_insert(event, name);
-	if (!zstr(namespace)) {
-		iks_insert_attrib(x, "xmlns", namespace);
-	}
-	return event;
 }
 
 /**
