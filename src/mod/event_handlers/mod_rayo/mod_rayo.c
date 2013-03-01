@@ -398,6 +398,7 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 	call->dcp_jid = "";
 	call->next_ref = 1;
 	call->idle_start_time = switch_micro_time_now();
+	call->joined = 0;
 	switch_core_hash_init(&call->pcps, switch_core_session_get_pool(session));
 	switch_mutex_init(&call->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(session));
 	switch_channel_set_private(channel, RAYO_PRIVATE_VAR, call);
@@ -803,11 +804,15 @@ static iks *join_call(struct rayo_session *rsession, struct rayo_call *call, iks
 	/* take call out of media path if media = "direct" */
 	const char *bypass = !strcmp("direct", media) ? "true" : "false";
 
-	/* check if rayo call */
+	/* check if joining to rayo call */
 	struct rayo_call *b_call = rayo_call_locate(call_id);
 	if (!b_call) {
 		/* not a rayo call */
 		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+	} else if (b_call->joined) {
+		/* don't support multiple joined calls */
+		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		rayo_call_unlock(b_call);
 	} else {
 		rayo_call_unlock(b_call);
 
@@ -876,6 +881,12 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 		goto done;
 	}
 
+	if (call->joined) {
+		/* already joined */
+		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		goto done;
+	}
+
 	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
 		/* join conference */
 		response = join_mixer(rsession, call, node, GET_STRING(j_attribs, mixer_name));
@@ -887,6 +898,79 @@ static void on_rayo_join(struct rayo_session *rsession, struct rayo_call *call, 
 done:
 	iks_send(rsession->parser, response);
 	iks_delete(response);
+}
+
+/**
+ * unjoin call to a bridge
+ * @param rsession the session requesting the unjoin
+ * @param call the call that unjoined
+ * @param node the unjoin request
+ * @param call_id the b-leg uuid
+ * @return the response
+ */
+static iks *unjoin_call(struct rayo_session *rsession, struct rayo_call *call, iks *node, const char *call_id)
+{
+	iks *response = NULL;
+	const char *bleg = switch_channel_get_variable(switch_core_session_get_channel(call->session), SWITCH_BRIDGE_UUID_VARIABLE);
+
+	/* bleg must match call_id */
+	if (!zstr(bleg) && !strcmp(bleg, call_id)) {
+		/* unbridge call */
+		response = iks_new_iq_result(node);
+		iks_send(rsession->parser, response); // send before park so events arrive in order to client
+		iks_delete(response);
+		response = NULL;
+		switch_ivr_park_session(call->session);
+	} else {
+		/* not bridged or wrong b-leg UUID */
+		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+	}
+
+	return response;
+}
+
+/**
+ * unjoin call to a mixer
+ * @param rsession the session requesting the unjoin
+ * @param call the call that unjoined
+ * @param node the unjoin request
+ * @param mixer_name the mixer name
+ * @return the response
+ */
+static iks *unjoin_mixer(struct rayo_session *rsession, struct rayo_call *call, iks *node, const char *mixer_name)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	const char *conf_member_id = switch_channel_get_variable(channel, "conference_member_id");
+	const char *conf_name = switch_channel_get_variable(channel, "conference_name");
+	char *kick_command;
+	iks *response = NULL;
+	switch_stream_handle_t stream = { 0 };
+	SWITCH_STANDARD_STREAM(stream);
+
+	/* not conferenced, or wrong conference */
+	if (zstr(conf_name) || strcmp(mixer_name, conf_name)) {
+		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		goto done;
+	} else if (zstr(conf_member_id)) {
+		/* shouldn't happen */
+		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		goto done;
+	}
+
+	/* ack command */
+	response = iks_new_iq_result(node);
+	iks_send(rsession->parser, response);
+	iks_delete(response);
+	response = NULL;
+
+	/* kick the member */
+	kick_command = switch_core_session_sprintf(call->session, "%s hup %s", mixer_name, conf_member_id);
+	switch_api_execute("conference", kick_command, NULL, &stream);
+
+done:
+	switch_safe_free(stream.data);
+
+	return response;
 }
 
 /**
@@ -904,22 +988,13 @@ static void on_rayo_unjoin(struct rayo_session *rsession, struct rayo_call *call
 
 	if (!zstr(call_id) && !zstr(mixer_name)) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+	} else if (!call->joined) {
+		/* not joined to anything */
+		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 	} else if (!zstr(call_id)) {
-		const char *bleg = switch_channel_get_variable(switch_core_session_get_channel(call->session), SWITCH_BRIDGE_UUID_VARIABLE);
-		if (!zstr(bleg) && !strcmp(bleg, call_id)) {
-			/* unbridge call */
-			response = iks_new_iq_result(node);
-			iks_send(rsession->parser, response); // send before park so events arrive in order to client
-			iks_delete(response);
-			response = NULL;
-			switch_ivr_park_session(call->session);
-		} else {
-			/* not bridged or wrong b-leg UUID */
-			response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
-		}
+		response = unjoin_call(rsession, call, node, call_id);
 	} else if (!zstr(mixer_name)) {
-		/* leave conference */
-		response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		response = unjoin_mixer(rsession, call, node, mixer_name);
 	} else {
 		/* missing mixer or call */
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
@@ -1600,7 +1675,7 @@ static void broadcast_mixer_event(struct rayo_mixer *mixer, iks *rayo_event)
  */
 static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_t *event)
 {
-	iks *add_member_event, *x;
+	iks *delete_member_event, *x;
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
 	struct rayo_call *call;
 
@@ -1612,20 +1687,22 @@ static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_
 	call = rayo_call_locate(uuid);
 	if (call) {
 		/* send mixer unjoined event to DCP */
-		add_member_event = create_rayo_event("unjoined", RAYO_NS, call->jid, call->dcp_jid);
-		x = iks_find(add_member_event, "unjoined");
+		delete_member_event = create_rayo_event("unjoined", RAYO_NS, call->jid, call->dcp_jid);
+		x = iks_find(delete_member_event, "unjoined");
 		iks_insert_attrib(x, "mixer-name", mixer->name);
-		rayo_iks_send(add_member_event);
-		iks_delete(add_member_event);
+		rayo_iks_send(delete_member_event);
+		iks_delete(delete_member_event);
+
+		call->joined = 0;
 		rayo_call_unlock(call);
 	}
 
 	/* broadcast mixer unjoined event to members */
-	add_member_event = create_rayo_event("unjoined", RAYO_NS, mixer->jid, "");
-	x = iks_find(add_member_event, "unjoined");
+	delete_member_event = create_rayo_event("unjoined", RAYO_NS, mixer->jid, "");
+	x = iks_find(delete_member_event, "unjoined");
 	iks_insert_attrib(x, "call-id", uuid);
-	broadcast_mixer_event(mixer, add_member_event);
-	iks_delete(add_member_event);
+	broadcast_mixer_event(mixer, delete_member_event);
+	iks_delete(delete_member_event);
 
 	/* remove member from mixer */
 	switch_core_hash_delete(mixer->members, uuid);
@@ -1659,6 +1736,8 @@ static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *
 	if (call) {
 		/* add member to mixer */
 		switch_core_hash_insert(mixer->members, uuid, switch_core_strdup(mixer->pool, call->dcp_jid));
+
+		call->joined = 1;
 
 		/* send call joined event to DCP */
 		add_member_event = create_rayo_event("joined", RAYO_NS, call->jid, call->dcp_jid);
@@ -1853,11 +1932,18 @@ static void on_call_ringing_event(struct rayo_session *rsession, switch_event_t 
  */
 static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *event)
 {
+	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
 	iks *revent = create_rayo_event("joined", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
 		switch_event_get_header(event, "variable_rayo_dcp_jid"));
 	iks *joined = iks_find(revent, "joined");
 	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
+
+	if (call) {
+		call->joined = 1;
+		rayo_call_unlock(call);
+	}
+
 	iks_send(rsession->parser, revent);
 	iks_delete(revent);
 }
@@ -1869,6 +1955,7 @@ static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *
  */
 static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t *event)
 {
+	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
 	iks *revent = create_rayo_event("unjoined", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
 		switch_event_get_header(event, "variable_rayo_dcp_jid"));
@@ -1876,6 +1963,11 @@ static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t
 	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
 	iks_send(rsession->parser, revent);
 	iks_delete(revent);
+
+	if (call) {
+		call->joined = 0;
+		rayo_call_unlock(call);
+	}
 }
 
 /**
