@@ -488,7 +488,7 @@ void rayo_iks_send(iks *msg) {
 	/* send XMPP message to Rayo session via event */
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND) == SWITCH_STATUS_SUCCESS) {
 		char *msg_str = iks_string(NULL, msg);
-		switch_event_add_header(event, SWITCH_STACK_BOTTOM, "variable_rayo_dcp_jid", dcp_jid);
+		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "variable_rayo_dcp_jid", dcp_jid);
 		switch_event_add_body(event, "%s", msg_str);
 		switch_event_fire(&event);
 		iks_free(msg_str);
@@ -2456,7 +2456,6 @@ static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, s
  */
 SWITCH_STANDARD_APP(rayo_app)
 {
-	int offer = 1;
 	int ok = 0;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct rayo_call *call = switch_channel_get_private(channel, RAYO_PRIVATE_VAR);
@@ -2469,17 +2468,13 @@ SWITCH_STANDARD_APP(rayo_app)
 		char *args = switch_core_session_strdup(session, data);
 		int argc = switch_separate_string(args, ' ', argv, sizeof(argv) / sizeof(argv[0]));
 		if (argc) {
-			if (!strcmp("dial", argv[0])) {
-				offer = 0;
-			} else if (!strcmp("conference", argv[0])) {
-				offer = 0;
+			if (!strcmp("conference", argv[0])) {
 				app = "conference";
 				app_args = argv[1];
 			} else if (!strcmp("bridge", argv[0])) {
-				offer = 0;
 				app = "intercept";
 				app_args = argv[1];
-			} else {
+			} else if (strcmp("dial", argv[0])) {
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Invalid rayo args: %s\n", data);
 				goto done;
 			}
