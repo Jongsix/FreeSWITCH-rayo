@@ -214,7 +214,7 @@ static void start_call_record_component(struct rayo_call *call, iks *iq)
 
 	if (switch_ivr_record_session(session, file, max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started: file = %s\n", file);
-		jid = rayo_call_component_send_start(call, iks_find_attrib(iq, "id"), "record");
+		jid = rayo_call_component_send_start(call, iq, "record");
 
 		/* map recording file to JID so we can find it on RECORD_STOP event */
 		/* TODO might be race here- setting variable after starting recording and notifying client */
@@ -231,7 +231,6 @@ static void start_call_record_component(struct rayo_call *call, iks *iq)
 static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 {
 	const char *component_jid = iks_find_attrib(iq, "to");
-	const char *request_id = iks_find_attrib(iq, "id");
 	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	const char *file = switch_channel_get_variable(channel, component_jid);
 
@@ -239,7 +238,7 @@ static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 		switch_ivr_stop_record_session(call->session, file);
 	}
 
-	return iks_new_iq_result(component_jid, call->dcp_jid, request_id);
+	return iks_new_iq_result(iq);
 }
 
 /**
