@@ -29,6 +29,7 @@
  */
 #include <switch.h>
 #include <iksemel.h>
+#include <pcre.h>
 
 #include "srgs.h"
 
@@ -130,8 +131,8 @@ struct srgs_parser {
 	switch_hash_t *rules;
 	/** optional uuid for logging */
 	const char *uuid;
-	/** digit binding machine */
-	switch_ivr_dmachine_t *dmachine;
+	/** compiled grammar regex */
+	pcre *compiled_regex;
 };
 
 /**
@@ -516,40 +517,20 @@ struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid
 }
 
 /**
- * Initialize dmachine for new match
- * @param parser the parser
- * @param input_timeout_ms timeout before first digit
- * @param digit_timeout_ms timeout after first digit
+ * Compile regex
  */
-static void setup_dmachine(struct srgs_parser *parser, int input_timeout_ms, int digit_timeout_ms)
+static int compile_regex(struct srgs_parser *parser)
 {
-	if (input_timeout_ms < 0) {
-		input_timeout_ms = 0;
-	}
-	if (digit_timeout_ms < 0) {
-		digit_timeout_ms = 0;
-	}
-	switch_ivr_dmachine_clear(parser->dmachine);
-	switch_ivr_dmachine_set_input_timeout_ms(parser->dmachine, input_timeout_ms);
-	switch_ivr_dmachine_set_digit_timeout_ms(parser->dmachine, digit_timeout_ms);
-}
+	int erroffset = 0;
+	const char *errptr = "";
+	int options = 0;
+	const char *regex = parser->root->value.root.regex;
 
-/**
- * Create digit machine
- */
-static int create_dmachine(struct srgs_parser *parser)
-{
-	char *regex = switch_core_sprintf(parser->pool, "~%s", parser->root->value.root.regex);
-	if (switch_ivr_dmachine_create(&parser->dmachine, "srgs", parser->pool, 0, 0, NULL, NULL, parser) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to create dmachine\n");
+	/* compile regex */
+	parser->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL);
+	if (!parser->compiled_regex) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
 		return 0;
-	}
-
-	if (switch_ivr_dmachine_bind(parser->dmachine, "srgs", regex, 0, NULL, parser) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to bind regex %s\n", regex);
-		return 0;
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Bind regex %s\n", regex);
 	}
 	return 1;
 }
@@ -750,13 +731,11 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
  * Parse the document into rules to match
  * @param parser the parser
  * @param document the document to parse
- * @param input_timeout_ms timeout before first digit
- * @param digit_timeout_ms timeout after first digit
  * @return true if successful
  */
-int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeout_ms, int digit_timeout_ms)
+int srgs_parse(struct srgs_parser *parser, const char *document)
 {
-	switch_ivr_dmachine_t *dmachine = NULL;
+	pcre *compiled_regex = NULL;
 	if (!parser) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "NULL parser!!\n");
 		return 0;
@@ -768,8 +747,8 @@ int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeo
 	}
 
 	/* check for cached grammar */
-	dmachine = (switch_ivr_dmachine_t *)switch_core_hash_find(parser->cache, document);
-	if (!dmachine) {
+	compiled_regex = (pcre *)switch_core_hash_find(parser->cache, document);
+	if (!compiled_regex) {
 		int result = 0;
 		iksparser *p = iks_sax_new(parser, tag_hook, cdata_hook);
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
@@ -781,8 +760,8 @@ int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeo
 			if (resolve_refs(parser, parser->root, 0)) {
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Creating rule regexes\n");
 				if (create_regexes(parser, parser->root, NULL)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Creating dmachine\n");
-					if (create_dmachine(parser)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Compile regex\n");
+					if (compile_regex(parser)) {
 						result = 1;
 					}
 				}
@@ -790,28 +769,16 @@ int srgs_parse(struct srgs_parser *parser, const char *document, int input_timeo
 		}
 		iks_parser_delete(p);
 		if (result) {
-			switch_core_hash_insert(parser->cache, document, parser->root);
+			switch_core_hash_insert(parser->cache, document, parser->compiled_regex);
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to parse grammar\n");
 			return 0;
 		}
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
+		parser->compiled_regex = compiled_regex;
 	}
-
-	setup_dmachine(parser, input_timeout_ms, digit_timeout_ms);
 	return 1;
-}
-
-/**
- * Reset parser for a new match
- * @param parser the parser
- */
-void srgs_reset(struct srgs_parser *parser)
-{
-	if (parser->dmachine) {
-		switch_ivr_dmachine_clear(parser->dmachine);
-	}
 }
 
 /**
@@ -822,30 +789,18 @@ void srgs_reset(struct srgs_parser *parser)
  */
 enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
 {
-	switch_status_t status = SWITCH_STATUS_SUCCESS;
-	switch_ivr_dmachine_match_t *match = NULL;
-	if (parser->dmachine) {
-		if (zstr(input)) {
-			status = switch_ivr_dmachine_ping(parser->dmachine, &match);
-		} else {
-			char digit[2];
-			digit[1] = '\0';
-			while (*input && status == SWITCH_STATUS_SUCCESS) {
-				digit[0] = *input;
-				status = switch_ivr_dmachine_feed(parser->dmachine, digit, &match);
-				input++;
-			}
-		}
-		if (status == SWITCH_STATUS_TIMEOUT) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "TIMEOUT\n");
-			return SMT_TIMEOUT;
-		}
-		if (zstr(input) && match) {
-			if (match->type == DM_MATCH_POSITIVE) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "MATCH\n");
-				return SMT_MATCH;
-			}
-		}
+	int result = 0;
+	int ovector[30];
+	int workspace[1024];
+	result = pcre_dfa_exec(parser->compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
+		ovector, sizeof(ovector) / sizeof(ovector[0]),
+		workspace, sizeof(workspace) / sizeof(workspace[0]));
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "match = %i\n", result);
+	if (result > 0) {
+		return SMT_MATCH;
+	}
+	if (result == PCRE_ERROR_PARTIAL) {
+		return SMT_MATCH_PARTIAL;
 	}
 	return SMT_NO_MATCH;
 }
