@@ -40,9 +40,10 @@ enum srgs_match_type {
 	SMT_MATCH_PARTIAL
 };
 
-extern struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid);
+extern struct srgs_parser *srgs_parser_new(const char *uuid);
 extern int srgs_parse(struct srgs_parser *parser, const char *document);
 extern enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input);
+extern void srgs_parser_destroy(struct srgs_parser *parser);
 
 #endif
 

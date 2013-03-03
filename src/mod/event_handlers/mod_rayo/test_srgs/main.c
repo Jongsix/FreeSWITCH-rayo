@@ -47,11 +47,9 @@ static const char *adhearsion_ask_grammar =
  */
 static void test_match_adhearsion_ask_grammar(void)
 {
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar));
 
 	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "0"));
@@ -71,7 +69,7 @@ static void test_match_adhearsion_ask_grammar(void)
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "223"));
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#"));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 static const char *multi_digit_grammar =
@@ -100,11 +98,9 @@ static const char *multi_digit_grammar =
  */
 static void test_match_multi_digit_grammar(void)
 {
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_digit_grammar));
 
 	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "0"));
@@ -124,7 +120,7 @@ static void test_match_multi_digit_grammar(void)
 	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "223"));
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#"));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 static const char *multi_rule_grammar =
@@ -154,11 +150,9 @@ static const char *multi_rule_grammar =
 
 static void test_match_multi_rule_grammar(void)
 {
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar));
 
 	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "0"));
@@ -178,7 +172,7 @@ static void test_match_multi_rule_grammar(void)
 	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "223"));
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#"));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 static const char *rayo_example_grammar =
@@ -218,11 +212,9 @@ static const char *rayo_example_grammar =
 
 static void test_match_rayo_example_grammar(void)
 {
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 	ASSERT_EQUALS(1, srgs_parse(parser, rayo_example_grammar));
 	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "0"));
 	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1"));
@@ -244,7 +236,7 @@ static void test_match_rayo_example_grammar(void)
 	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "223"));
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "0123456789*#"));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 static const char *bad_ref_grammar =
@@ -304,11 +296,9 @@ static const char *adhearsion_ask_grammar_bad =
 
 static void test_parse_grammar(void)
 {
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 
 	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar));
 	ASSERT_EQUALS(0, srgs_parse(parser, adhearsion_ask_grammar_bad));
@@ -317,7 +307,7 @@ static void test_parse_grammar(void)
 	ASSERT_EQUALS(0, srgs_parse(NULL, adhearsion_ask_grammar_bad));
 	ASSERT_EQUALS(0, srgs_parse(parser, bad_ref_grammar));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 static const char *repeat_item_grammar_bad =
@@ -587,12 +577,9 @@ static const char *repeat_item_plus_grammar =
 
 static void test_repeat_item_grammar(void)
 {
-
-	switch_memory_pool_t *pool;
 	struct srgs_parser *parser;
 
-	switch_core_new_memory_pool(&pool);
-	parser = srgs_parser_new(pool, "1234");
+	parser = srgs_parser_new("1234");
 	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad));
 	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad2));
 	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad3));
@@ -669,7 +656,7 @@ static void test_repeat_item_grammar(void)
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A#"));
 	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A"));
 
-	switch_core_destroy_memory_pool(&pool);
+	srgs_parser_destroy(parser);
 }
 
 /**

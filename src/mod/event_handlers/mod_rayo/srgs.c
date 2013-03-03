@@ -522,13 +522,14 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 
 /**
  * Create a new parser.
- * @param pool the pool to use
  * @param uuid optional uuid for logging
  * @return the created parser
  */
-struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid)
+struct srgs_parser *srgs_parser_new(const char *uuid)
 {
+	switch_memory_pool_t *pool = NULL;
 	struct srgs_parser *parser = NULL;
+	switch_core_new_memory_pool(&pool);
 	if (pool) {
 		parser = switch_core_alloc(pool, sizeof(*parser));
 		parser->pool = pool;
@@ -537,6 +538,28 @@ struct srgs_parser *srgs_parser_new(switch_memory_pool_t *pool, const char *uuid
 		switch_core_hash_init(&parser->rules, pool);
 	}
 	return parser;
+}
+
+/**
+ * Destroy the parser.
+ * @param parser to destroy
+ */
+void srgs_parser_destroy(struct srgs_parser *parser)
+{
+	switch_memory_pool_t *pool = parser->pool;
+	switch_hash_index_t *hi = NULL;
+
+	/* clean up all cached grammars */
+	for (hi = switch_core_hash_first(parser->cache); hi; hi = switch_core_hash_next(hi)) {
+		pcre *compiled_regex = NULL;
+		const void *key;
+		void *val;
+		switch_core_hash_this(hi, &key, NULL, &val);
+		compiled_regex = (pcre *)val;
+		switch_assert(compiled_regex);
+		pcre_free(compiled_regex);
+	}
+	switch_core_destroy_memory_pool(&pool);
 }
 
 /**
