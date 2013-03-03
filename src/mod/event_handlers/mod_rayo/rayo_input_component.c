@@ -165,6 +165,10 @@ static switch_status_t input_component_on_hangup(switch_core_session_t *session)
 		handler->done = 1;
 		rayo_call_component_send_complete(handler->call, handler->jid, COMPONENT_COMPLETE_HANGUP);
 	}
+	if (handler) {
+		srgs_parser_destroy(handler->parser);
+		handler->parser = NULL;
+	}
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -177,7 +181,7 @@ static switch_status_t input_component_on_read_frame(switch_core_session_t *sess
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler) {
+	if (handler && !handler->done) {
 		int elapsed_ms = (switch_micro_time_now() - handler->last_digit_time) / 1000;
 		if (handler->num_digits && handler->inter_digit_timeout > 0 && elapsed_ms > handler->inter_digit_timeout) {
 			handler->done = 1;
@@ -205,7 +209,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler) {
+	if (handler && !handler->done) {
 		enum srgs_match_type match;
 		handler->digits[handler->num_digits] = dtmf->digit;
 		handler->num_digits++;
@@ -296,7 +300,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	if (!handler) {
 		/* create input handler */
 		handler = switch_core_session_alloc(session, sizeof(*handler));
-		handler->parser = srgs_parser_new(switch_core_session_get_pool(session), switch_core_session_get_uuid(session));
+		handler->parser = srgs_parser_new(switch_core_session_get_uuid(session));
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
 	}
 	handler->num_digits = 0;
