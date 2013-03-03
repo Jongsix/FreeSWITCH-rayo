@@ -4,7 +4,7 @@ IKS_DIR=$(BASE)/libs/iksemel
 PCRE_DIR=$(BASE)/libs/pcre
 IKS_LA=$(IKS_DIR)/src/libiksemel.la
 PCRE_LA=$(PCRE_DIR)/libpcre.la
-LOCAL_CFLAGS += -I$(BASE)/libs/iksemel/include -I$(BASE)/libs/pcre/include
+LOCAL_CFLAGS += -I$(BASE)/libs/iksemel/include -I$(BASE)/libs/pcre
 LOCAL_OBJS= $(IKS_LA) \
 	$(PCRE_LA) \
 	iks_helpers.o \
