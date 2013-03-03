@@ -391,11 +391,13 @@ static int process_item(struct srgs_parser *parser, char **atts)
 		int i = 0;
 		while (atts[i]) {
 			if (!strcmp("repeat", atts[i])) {
+				/* repeats of 0 are not supported by this code */
 				char *repeat = atts[i + 1];
 				if (zstr(repeat)) {
 					return IKS_BADXML;
 				}
 				if (switch_is_number(repeat)) {
+					/* single number */
 					int repeat_val = atoi(repeat);
 					if (repeat_val < 1) {
 						return IKS_BADXML;
@@ -404,8 +406,29 @@ static int process_item(struct srgs_parser *parser, char **atts)
 					item->value.item.repeat_max = repeat_val;
 					return IKS_OK;
 				} else {
-					/* TODO support repeat range */
-					return IKS_BADXML;
+					/* range */
+					char *min = switch_core_strdup(parser->pool, repeat);
+					char *max = strchr(min, '-');
+					if (max) {
+						*max = '\0';
+						max++;
+					} else {
+						return IKS_BADXML;
+					}
+					if (switch_is_number(min) && (switch_is_number(max) || zstr(max))) {
+						int min_val = atoi(min);
+						int max_val = zstr(max) ? INT_MAX : atoi(max);
+						/* max must be >= min and > 0
+						   min must be >= 0 */
+						if ((max_val <= 0) || (max_val < min_val) || (min_val < 0)) {
+							return IKS_BADXML;
+						}
+						item->value.item.repeat_min = min_val;
+						item->value.item.repeat_max = max_val;
+						return IKS_OK;
+					} else {
+						return IKS_BADXML;
+					}
 				}
 			}
 			i += 2;
@@ -624,7 +647,17 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				}
 				if (node->value.item.repeat_min != 1 || node->value.item.repeat_max != 1) {
 					if (node->value.item.repeat_min != node->value.item.repeat_max) {
-						stream->write_function(stream, "){%i,%i}", node->value.item.repeat_min, node->value.item.repeat_max);
+						if (node->value.item.repeat_min == 0 && node->value.item.repeat_max == INT_MAX) {
+								stream->write_function(stream, ")*");
+						} else if (node->value.item.repeat_min == 0 && node->value.item.repeat_max == 1) {
+								stream->write_function(stream, ")?");
+						} else if (node->value.item.repeat_min == 1 && node->value.item.repeat_max == INT_MAX) {
+							stream->write_function(stream, ")+");
+						} else if (node->value.item.repeat_max == INT_MAX) {
+							stream->write_function(stream, "){%i,1000}", node->value.item.repeat_min);
+						} else {
+							stream->write_function(stream, "){%i,%i}", node->value.item.repeat_min, node->value.item.repeat_max);
+						}
 					} else {
 						stream->write_function(stream, "){%i}", node->value.item.repeat_min);
 					}

@@ -320,6 +320,358 @@ static void test_parse_grammar(void)
 	switch_core_destroy_memory_pool(&pool);
 }
 
+static const char *repeat_item_grammar_bad =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"3-1\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar_bad2 =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"-1\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar_bad3 =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"1--1\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar_bad4 =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"ABC\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar_bad5 =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar_bad6 =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"       <item>\n"
+	"         <item repeat=\"1-Z\">4</item>\n"
+	"           #\n"
+	"       </item>"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_grammar =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"digit\">\n"
+	"    <one-of>\n"
+	"       <item> 0 </item>\n"
+	"       <item> 1 </item>\n"
+	"       <item> 2 </item>\n"
+	"       <item> 3 </item>\n"
+	"       <item> 4 </item>\n"
+	"       <item> 5 </item>\n"
+	"       <item> 6 </item>\n"
+	"       <item> 7 </item>\n"
+	"       <item> 8 </item>\n"
+	"       <item> 9 </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"       <item>\n"
+	"         <item repeat=\"4-4\"><ruleref uri=\"#digit\"/></item>\n"
+	"           #\n"
+	"         </item>"
+	"       <item>"
+	"         * 9 \n"
+	"       </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_range_grammar =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"digit\">\n"
+	"    <one-of>\n"
+	"       <item> 0 </item>\n"
+	"       <item> 1 </item>\n"
+	"       <item> 2 </item>\n"
+	"       <item> 3 </item>\n"
+	"       <item> 4 </item>\n"
+	"       <item> 5 </item>\n"
+	"       <item> 6 </item>\n"
+	"       <item> 7 </item>\n"
+	"       <item> 8 </item>\n"
+	"       <item> 9 </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"       <item>\n"
+	"         <item repeat=\"4-6\"><ruleref uri=\"#digit\"/></item>\n"
+	"           #\n"
+	"         </item>"
+	"       <item>"
+	"         * 9 \n"
+	"       </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_optional_grammar =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"digit\">\n"
+	"    <one-of>\n"
+	"       <item> 0 </item>\n"
+	"       <item> 1 </item>\n"
+	"       <item> 2 </item>\n"
+	"       <item> 3 </item>\n"
+	"       <item> 4 </item>\n"
+	"       <item> 5 </item>\n"
+	"       <item> 6 </item>\n"
+	"       <item> 7 </item>\n"
+	"       <item> 8 </item>\n"
+	"       <item> 9 </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"       <item>\n"
+	"         <item repeat=\"0-1\"><ruleref uri=\"#digit\"/></item>\n"
+	"           #\n"
+	"         </item>"
+	"       <item>"
+	"         * 9 \n"
+	"       </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_star_grammar =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"digit\">\n"
+	"    <one-of>\n"
+	"       <item> 0 </item>\n"
+	"       <item> 1 </item>\n"
+	"       <item> 2 </item>\n"
+	"       <item> 3 </item>\n"
+	"       <item> 4 </item>\n"
+	"       <item> 5 </item>\n"
+	"       <item> 6 </item>\n"
+	"       <item> 7 </item>\n"
+	"       <item> 8 </item>\n"
+	"       <item> 9 </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"       <item>\n"
+	"         <item repeat=\"0-\"><ruleref uri=\"#digit\"/></item>\n"
+	"           #\n"
+	"         </item>"
+	"       <item>"
+	"         * 9 \n"
+	"       </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *repeat_item_plus_grammar =
+	"<grammar mode=\"dtmf\" version=\"1.0\""
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\""
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"digit\">\n"
+	"    <one-of>\n"
+	"       <item> 0 </item>\n"
+	"       <item> 1 </item>\n"
+	"       <item> 2 </item>\n"
+	"       <item> 3 </item>\n"
+	"       <item> 4 </item>\n"
+	"       <item> 5 </item>\n"
+	"       <item> 6 </item>\n"
+	"       <item> 7 </item>\n"
+	"       <item> 8 </item>\n"
+	"       <item> 9 </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"pin\" scope=\"public\">\n"
+	"    <one-of>\n"
+	"       <item>\n"
+	"         <item repeat=\"1-\"><ruleref uri=\"#digit\"/></item>\n"
+	"           #\n"
+	"         </item>"
+	"       <item>"
+	"         * 9 \n"
+	"       </item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static void test_repeat_item_grammar(void)
+{
+
+	switch_memory_pool_t *pool;
+	struct srgs_parser *parser;
+
+	switch_core_new_memory_pool(&pool);
+	parser = srgs_parser_new(pool, "1234");
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad));
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad2));
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad3));
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad4));
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad5));
+	ASSERT_EQUALS(0, srgs_parse(parser, repeat_item_grammar_bad6));
+	ASSERT_EQUALS(1, srgs_parse(parser, repeat_item_grammar));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1111#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1111"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1234#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1234"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "11115#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "11115"));
+	ASSERT_EQUALS(1, srgs_parse(parser, repeat_item_range_grammar));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1111#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1111"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1234#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1234"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "11115#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "11115"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "111156#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "111156"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111567#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111567"));
+	ASSERT_EQUALS(1, srgs_parse(parser, repeat_item_optional_grammar));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1234#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1234"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "11115#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "11115"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "111156#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "111156"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111567#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "1111567"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, ""));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A"));
+	ASSERT_EQUALS(1, srgs_parse(parser, repeat_item_plus_grammar));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1111#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1111"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1234#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1234"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "11115#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "11115"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "111156#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "111156"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "111157#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "111157"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, ""));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A"));
+	ASSERT_EQUALS(1, srgs_parse(parser, repeat_item_star_grammar));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1111#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1111"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1234#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1234"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "11115#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "11115"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "111156#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "111156"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "111157#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "111157"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "1#"));
+	ASSERT_EQUALS(SMT_MATCH_PARTIAL, srgs_match(parser, "1"));
+	ASSERT_EQUALS(SMT_MATCH, srgs_match(parser, "#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, ""));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A#"));
+	ASSERT_EQUALS(SMT_NO_MATCH, srgs_match(parser, "A"));
+
+	switch_core_destroy_memory_pool(&pool);
+}
+
 /**
  * main program
  */
@@ -332,5 +684,6 @@ int main(int argc, char **argv)
 	TEST(test_match_multi_digit_grammar);
 	TEST(test_match_multi_rule_grammar);
 	TEST(test_match_rayo_example_grammar);
+	TEST(test_repeat_item_grammar);
 	return 0;
 }
