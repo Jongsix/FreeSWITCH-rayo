@@ -1982,13 +1982,45 @@ static void on_call_originate_event(struct rayo_session *rsession, switch_event_
  */
 static void on_call_end_event(struct rayo_session *rsession, switch_event_t *event)
 {
+	const char *offered_clients = switch_event_get_header(event, "variable_rayo_offered_client");
 	iks *revent = create_rayo_event("end", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
 		switch_event_get_header(event, "variable_rayo_dcp_jid"));
 	iks *end = iks_find(revent, "end");
 	iks_insert(end, "hangup");
-	iks_send(rsession->parser, revent);
-	iks_delete(revent);
+
+	/* forward event to each offered client */
+	/* variable contains clients like this:   ARRAY::client_jid1|:client_jid2|:client_jid3 */
+	if (offered_clients && !strncmp("ARRAY::", offered_clients, 7) && strlen(offered_clients) > 7) {
+		char *offered_clients_dup = strdup(offered_clients);
+		char *client_jid = offered_clients_dup + 7;
+		while (!zstr(client_jid)) {
+			char *next = strstr(client_jid, "|:");
+
+			/* is last client jid? */
+			if (zstr(next)) {
+				iks_insert_attrib(revent, "to", client_jid);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending <end> to offered client %s\n", client_jid);
+				rayo_iks_send(revent);
+				break;
+			} else {
+				*next = '\0';
+				iks_insert_attrib(revent, "to", client_jid);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending <end> to offered client %s\n", client_jid);
+				rayo_iks_send(revent);
+
+				/* get next client jid */
+				client_jid = next + 2;
+			}
+		}
+		iks_delete(revent);
+		switch_safe_free(offered_clients_dup);
+	} else {
+		/* just one offered client- send to DCP */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending <end> to DCP only\n");
+		iks_send(rsession->parser, revent);
+		iks_delete(revent);
+	}
 }
 
 /**
@@ -2521,6 +2553,7 @@ static switch_status_t rayo_session_offer_call(struct rayo_session *rsession, st
 	switch_event_create_subclass(&offer_event, SWITCH_EVENT_CUSTOM, RAYO_EVENT_OFFER);
 	switch_channel_event_set_data(switch_core_session_get_channel(call->session), offer_event);
 	switch_core_hash_insert(call->pcps, rsession->client_jid_full, "1");
+	switch_channel_add_variable_var_check(switch_core_session_get_channel(call->session), "rayo_offered_client", rsession->client_jid_full, SWITCH_FALSE, SWITCH_STACK_PUSH);
 	if (switch_queue_trypush(rsession->event_queue, offer_event) == SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Offered call to %s\n", rsession->client_jid_full);
 		return SWITCH_STATUS_SUCCESS;
