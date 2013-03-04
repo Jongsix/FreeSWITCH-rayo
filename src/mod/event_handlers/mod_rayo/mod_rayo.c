@@ -195,7 +195,7 @@ struct rayo_mixer {
 };
 
 /**
- * A subscriber to mixer events
+ * A member of a mixer
  */
 struct rayo_mixer_member {
 	/** JID of member */
