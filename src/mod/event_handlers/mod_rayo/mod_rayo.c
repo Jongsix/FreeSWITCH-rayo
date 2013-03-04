@@ -1966,20 +1966,38 @@ static void on_call_ringing_event(struct rayo_session *rsession, switch_event_t 
  */
 static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *event)
 {
-	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
+	const char *a_uuid = switch_event_get_header(event, "Unique-ID");
+	const char *b_uuid = switch_event_get_header(event, "Bridge-B-Unique-ID");
+	struct rayo_call *call = rayo_call_locate(a_uuid);
+	struct rayo_call *b_call;
+	
+	/* send A-leg event */
 	iks *revent = create_rayo_event("joined", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
 		switch_event_get_header(event, "variable_rayo_dcp_jid"));
 	iks *joined = iks_find(revent, "joined");
-	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
+	iks_insert_attrib(joined, "call-id", b_uuid);
 
 	if (call) {
 		call->joined = 1;
 		rayo_call_unlock(call);
 	}
-
 	iks_send(rsession->parser, revent);
 	iks_delete(revent);
+
+	/* send B-leg event */
+	b_call = rayo_call_locate(b_uuid);
+	if (b_call) {
+		switch_channel_t *b_channel = switch_core_session_get_channel(b_call->session);
+		revent = create_rayo_event("joined", RAYO_NS,
+			switch_channel_get_variable(b_channel, "rayo_call_jid"),
+			switch_channel_get_variable(b_channel, "rayo_dcp_jid"));
+		joined = iks_find(revent, "joined");
+		rayo_call_unlock(b_call);
+		iks_insert_attrib(joined, "call-id", a_uuid);
+		rayo_iks_send(revent); /* DCP might be different, so can't send on this session */
+		iks_delete(revent);
+	}
 }
 
 /**
@@ -1989,18 +2007,37 @@ static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *
  */
 static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t *event)
 {
-	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
+	const char *a_uuid = switch_event_get_header(event, "Unique-ID");
+	const char *b_uuid = switch_event_get_header(event, "Bridge-B-Unique-ID");
+	struct rayo_call *call = rayo_call_locate(a_uuid);
+	struct rayo_call *b_call;
+
+	/* send A-leg event */
 	iks *revent = create_rayo_event("unjoined", RAYO_NS,
 		switch_event_get_header(event, "variable_rayo_call_jid"),
 		switch_event_get_header(event, "variable_rayo_dcp_jid"));
 	iks *joined = iks_find(revent, "unjoined");
-	iks_insert_attrib(joined, "call-id", switch_event_get_header(event, "Bridge-B-Unique-ID"));
+	iks_insert_attrib(joined, "call-id", b_uuid);
 	iks_send(rsession->parser, revent);
 	iks_delete(revent);
 
 	if (call) {
 		call->joined = 0;
 		rayo_call_unlock(call);
+	}
+
+	/* send B-leg event */
+	b_call = rayo_call_locate(b_uuid);
+	if (b_call) {
+		switch_channel_t *b_channel = switch_core_session_get_channel(b_call->session);
+		revent = create_rayo_event("unjoined", RAYO_NS,
+			switch_channel_get_variable(b_channel, "rayo_call_jid"),
+			switch_channel_get_variable(b_channel, "rayo_dcp_jid"));
+		joined = iks_find(revent, "unjoined");
+		rayo_call_unlock(b_call);
+		iks_insert_attrib(joined, "call-id", a_uuid);
+		rayo_iks_send(revent); /* DCP might be different, so can't send on this session */
+		iks_delete(revent);
 	}
 }
 
