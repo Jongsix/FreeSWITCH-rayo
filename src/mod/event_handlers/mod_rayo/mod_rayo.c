@@ -188,8 +188,30 @@ struct rayo_mixer {
 	const char *name;
 	/** member JIDs */
 	switch_hash_t *members;
+	/** subscriber JIDs */
+	switch_hash_t *subscribers;
 	/** mixer memory pool */
 	switch_memory_pool_t *pool;
+};
+
+/**
+ * A subscriber to mixer events
+ */
+struct rayo_mixer_member {
+	/** JID of member */
+	const char *jid;
+	/** Controlling party JID */
+	const char *dcp_jid;
+};
+
+/**
+ * A subscriber to mixer events
+ */
+struct rayo_mixer_subscriber {
+	/** JID of subscriber */
+	const char *jid;
+	/** Number of controlled parties in mixer */
+	int ref_count;
 };
 
 /**
@@ -416,7 +438,7 @@ static struct rayo_mixer *rayo_mixer_create(const char *name)
 	struct rayo_mixer *mixer = NULL;
 	switch_memory_pool_t *pool = NULL;
 	if (switch_core_new_memory_pool(&pool) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool for mixer!\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create memory pool for mixer %s!\n", name);
 		return NULL;
 	}
 	mixer = switch_core_alloc(pool, sizeof(*mixer));
@@ -424,6 +446,7 @@ static struct rayo_mixer *rayo_mixer_create(const char *name)
 	mixer->name = switch_core_strdup(pool, name);
 	mixer->jid = switch_core_sprintf(pool, "%s@%s", name, globals.domain);
 	switch_core_hash_init(&mixer->members, pool);
+	switch_core_hash_init(&mixer->subscribers, pool);
 	return mixer;
 }
 
@@ -843,8 +866,6 @@ static iks *join_mixer(struct rayo_session *rsession, struct rayo_call *call, ik
 	} else {
 		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
-	iks_send(rsession->parser, response);
-	iks_delete(response);
 	switch_safe_free(conf_args);
 	return response;
 }
@@ -1685,21 +1706,21 @@ static iks* create_rayo_event(const char *name, const char *namespace, const cha
 }
 
 /**
- * Send event to mixer members
+ * Send event to mixer subscribers
  * @param mixer the mixer
  * @param rayo_event the event to send
  */
 static void broadcast_mixer_event(struct rayo_mixer *mixer, iks *rayo_event)
 {
 	switch_hash_index_t *hi = NULL;
-	for (hi = switch_core_hash_first(mixer->members); hi; hi = switch_core_hash_next(hi)) {
+	for (hi = switch_core_hash_first(mixer->subscribers); hi; hi = switch_core_hash_next(hi)) {
 		const void *key;
 		void *val;
-		const char *client_jid;
+		struct rayo_mixer_subscriber *subscriber;
 		switch_core_hash_this(hi, &key, NULL, &val);
-		client_jid = (const char *)val;
-		switch_assert(client_jid);
-		iks_insert_attrib(rayo_event, "to", client_jid);
+		subscriber = (struct rayo_mixer_subscriber *)val;
+		switch_assert(subscriber);
+		iks_insert_attrib(rayo_event, "to", subscriber->jid);
 		rayo_iks_send(rayo_event);
 	}
 }
@@ -1712,34 +1733,51 @@ static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_
 	iks *delete_member_event, *x;
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
 	struct rayo_call *call;
+	struct rayo_mixer_member *member;
+	struct rayo_mixer_subscriber *subscriber;
 
 	/* not a rayo mixer */
 	if (!mixer) {
 		return;
 	}
 
+	/* remove member from mixer */
+	member = (struct rayo_mixer_member *)switch_core_hash_find(mixer->members, uuid);
+	if (!member) {
+		/* not a member */
+		return;
+	}
+	switch_core_hash_delete(mixer->members, uuid);
+
+	/* flag call as available to join another mixer */
 	call = rayo_call_locate(uuid);
 	if (call) {
-		/* send mixer unjoined event to DCP */
-		delete_member_event = create_rayo_event("unjoined", RAYO_NS, call->jid, call->dcp_jid);
-		x = iks_find(delete_member_event, "unjoined");
-		iks_insert_attrib(x, "mixer-name", mixer->name);
-		rayo_iks_send(delete_member_event);
-		iks_delete(delete_member_event);
-
 		call->joined = 0;
 		rayo_call_unlock(call);
 	}
 
-	/* broadcast mixer unjoined event to members */
+	/* send mixer unjoined event to member DCP */
+	delete_member_event = create_rayo_event("unjoined", RAYO_NS, member->jid, member->dcp_jid);
+	x = iks_find(delete_member_event, "unjoined");
+	iks_insert_attrib(x, "mixer-name", mixer->name);
+	rayo_iks_send(delete_member_event);
+	iks_delete(delete_member_event);
+
+	/* broadcast member unjoined event to subscribers */
 	delete_member_event = create_rayo_event("unjoined", RAYO_NS, mixer->jid, "");
 	x = iks_find(delete_member_event, "unjoined");
 	iks_insert_attrib(x, "call-id", uuid);
 	broadcast_mixer_event(mixer, delete_member_event);
 	iks_delete(delete_member_event);
 
-	/* remove member from mixer */
-	switch_core_hash_delete(mixer->members, uuid);
+	/* remove member DCP as subscriber to mixer */
+	subscriber = (struct rayo_mixer_subscriber *)switch_core_hash_find(mixer->subscribers, member->dcp_jid);
+	if (subscriber) {
+		subscriber->ref_count--;
+		if (subscriber->ref_count <= 0) {
+			switch_core_hash_delete(mixer->subscribers, member->dcp_jid);
+		}
+	}
 }
 
 /**
@@ -1747,9 +1785,14 @@ static void on_mixer_delete_member_event(struct rayo_mixer *mixer, switch_event_
  */
 static void on_mixer_destroy_event(struct rayo_mixer *mixer, switch_event_t *event)
 {
-	/* remove from hash and destroy */
-	switch_core_hash_delete(globals.mixers, mixer->name);
-	rayo_mixer_destroy(mixer);
+	if (mixer) {
+		/* remove from hash and destroy */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "destroying mixer: %s\n", mixer->name);
+		switch_core_hash_delete(globals.mixers, mixer->name);
+		rayo_mixer_destroy(mixer);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "destroy: mixer not found\n");
+	}
 }
 
 /**
@@ -1764,16 +1807,32 @@ static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *
 	if (!mixer) {
 		/* new mixer */
 		const char *mixer_name = switch_event_get_header(event, "Conference-Name");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "creating mixer: %s\n", mixer_name);
 		mixer = rayo_mixer_create(mixer_name);
+		switch_core_hash_insert(globals.mixers, mixer_name, mixer);
 	}
 
 	if (call) {
-		/* add member to mixer */
-		switch_core_hash_insert(mixer->members, uuid, switch_core_strdup(mixer->pool, call->dcp_jid));
+		struct rayo_mixer_member *member = NULL;
+		/* add member DCP as subscriber to mixer */
+		struct rayo_mixer_subscriber *subscriber = (struct rayo_mixer_subscriber *)switch_core_hash_find(mixer->subscribers, call->dcp_jid);
+		if (!subscriber) {
+			subscriber = switch_core_alloc(mixer->pool, sizeof(*subscriber));
+			subscriber->ref_count = 0;
+			subscriber->jid = switch_core_strdup(mixer->pool, call->dcp_jid);
+			switch_core_hash_insert(mixer->subscribers, call->dcp_jid, subscriber);
+		}
+		subscriber->ref_count++;
 
+		/* add call as member of mixer */
+		member = switch_core_alloc(mixer->pool, sizeof(*member));
+		member->jid = switch_core_strdup(mixer->pool, call->jid);
+		member->dcp_jid = subscriber->jid;
+		switch_core_hash_insert(mixer->members, uuid, member);
+		
 		call->joined = 1;
 
-		/* send call joined event to DCP */
+		/* send mixer joined event to member DCP */
 		add_member_event = create_rayo_event("joined", RAYO_NS, call->jid, call->dcp_jid);
 		x = iks_find(add_member_event, "joined");
 		iks_insert_attrib(x, "mixer-name", mixer->name);
@@ -1782,7 +1841,7 @@ static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *
 		rayo_call_unlock(call);
 	}
 
-	/* broadcast mixer joined event to members */
+	/* broadcast member joined event to subscribers */
 	add_member_event = create_rayo_event("joined", RAYO_NS, mixer->jid, "");
 	x = iks_find(add_member_event, "joined");
 	iks_insert_attrib(x, "call-id", uuid);
@@ -1802,6 +1861,7 @@ static void route_mixer_event(switch_event_t *event)
 	struct rayo_mixer *mixer = NULL;
 
 	switch_mutex_lock(globals.mixers_mutex);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "looking for mixer: %s\n", mixer_name);
 	mixer = (struct rayo_mixer *)switch_core_hash_find(globals.mixers, mixer_name);
 
 	if (strcmp(profile, globals.mixer_conf_profile)) {
@@ -2120,7 +2180,7 @@ static void rayo_session_destroy(struct rayo_session *rsession)
 	if (rsession->parser) {
 		iks_disconnect(rsession->parser);
 	}
-	
+
 	if (rsession->filter) {
 		iks_filter_delete(rsession->filter);
 	}
