@@ -1995,6 +1995,9 @@ static void on_call_bridge_event(struct rayo_session *rsession, switch_event_t *
 		joined = iks_find(revent, "joined");
 		rayo_call_unlock(b_call);
 		iks_insert_attrib(joined, "call-id", a_uuid);
+		
+		b_call->joined = 1;
+		
 		rayo_iks_send(revent); /* DCP might be different, so can't send on this session */
 		iks_delete(revent);
 	}
@@ -2034,10 +2037,12 @@ static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t
 			switch_channel_get_variable(b_channel, "rayo_call_jid"),
 			switch_channel_get_variable(b_channel, "rayo_dcp_jid"));
 		joined = iks_find(revent, "unjoined");
-		rayo_call_unlock(b_call);
 		iks_insert_attrib(joined, "call-id", a_uuid);
 		rayo_iks_send(revent); /* DCP might be different, so can't send on this session */
 		iks_delete(revent);
+		
+		b_call->joined = 0;
+		rayo_call_unlock(b_call);
 	}
 }
 
