@@ -1355,7 +1355,7 @@ static iks *on_rayo_join(struct rayo_call *call, switch_core_session_t *session,
 
 	/* validate input attributes */
 	memset(&j_attribs, 0, sizeof(j_attribs));
-	if (!iks_attrib_parse(session, join, join_attribs_def, (struct iks_attribs *)&j_attribs)) {
+	if (!iks_attrib_parse(switch_core_session_get_uuid(session), join, join_attribs_def, (struct iks_attribs *)&j_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad join attrib\n");
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
