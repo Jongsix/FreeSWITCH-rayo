@@ -39,24 +39,58 @@
 #define RAYO_NS RAYO_BASE RAYO_VERSION
 #define RAYO_CLIENT_NS RAYO_BASE "client:" RAYO_VERSION
 
+struct rayo_actor;
 struct rayo_call;
 struct rayo_mixer;
+struct rayo_component;
 
-extern struct rayo_call *rayo_call_locate_unlocked(const char *call_uuid);
+/**
+ * Type of actor
+ */
+enum rayo_actor_type {
+	RAT_SERVER,
+	RAT_CALL,
+	RAT_MIXER,
+	RAT_COMPONENT
+};
 
 extern const char *rayo_call_get_jid(struct rayo_call *call);
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
+extern const char *rayo_call_get_uuid(struct rayo_call *call);
 extern int rayo_call_is_joined(struct rayo_call *call);
 extern int rayo_call_seq_next(struct rayo_call *call);
+extern switch_memory_pool_t *rayo_call_get_pool(struct rayo_call *call);
+extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
+extern struct rayo_call *rayo_call_locate_unlocked(const char *call_uuid);
 
 extern const char *rayo_mixer_get_jid(struct rayo_mixer *mixer);
 extern const char *rayo_mixer_get_name(struct rayo_mixer *mixer);
+extern int rayo_mixer_seq_next(struct rayo_mixer *mixer);
+extern switch_memory_pool_t *rayo_mixer_get_pool(struct rayo_mixer *mixer);
+extern struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer);
+
+extern struct rayo_component *rayo_component_locate(const char *id);
+extern void rayo_component_unlock(struct rayo_component *component);
+extern struct rayo_component *rayo_component_create(const char *type, const char *jid, const char *id, const char *ref, struct rayo_actor *parent, const char *client_jid);
+extern void rayo_component_destroy(struct rayo_component *component);
+extern const char *rayo_component_get_id(struct rayo_component *component);
+extern const char *rayo_component_get_ref(struct rayo_component *component);
+extern const char *rayo_component_get_jid(struct rayo_component *component);
+extern const char *rayo_component_get_parent_id(struct rayo_component *component);
+extern enum rayo_actor_type rayo_component_get_parent_type(struct rayo_component *component);
+extern const char *rayo_component_get_client_jid(struct rayo_component *component);
+extern switch_memory_pool_t *rayo_component_get_pool(struct rayo_component *component);
+extern void *rayo_component_get_data(struct rayo_component *component);
+extern void rayo_component_set_data(struct rayo_component *component, void *data);
 
 typedef iks *(*rayo_call_command_handler)(struct rayo_call *, switch_core_session_t *session, iks *);
 extern void rayo_call_command_handler_add(const char *name, rayo_call_command_handler fn);
 
 typedef iks *(*rayo_mixer_command_handler)(struct rayo_mixer *, iks *);
 extern void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler fn);
+
+typedef iks *(*rayo_component_command_handler)(struct rayo_component *, iks *);
+extern void rayo_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
 
 extern void rayo_iks_send(iks *msg);
 

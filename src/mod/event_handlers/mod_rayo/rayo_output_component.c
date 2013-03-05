@@ -61,6 +61,8 @@ struct output_attribs {
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
+#if 0
+
 /**
  * <output> a <speak> document
  * @param session the session to play to
@@ -174,29 +176,31 @@ switch_status_t output_documents(switch_core_session_t *session, iks *document, 
 	return SWITCH_STATUS_SUCCESS;
 }
 
+#endif
+
 /**
  * Start execution of output component
  */
-static void start_call_output_component(struct rayo_call *call, switch_core_session_t *session,  iks *iq)
+static iks *start_call_output_component(struct rayo_call *call, switch_core_session_t *session,  iks *iq)
 {
+	struct rayo_component *component = NULL;
 	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
 	iks *document = NULL;
 	switch_time_t timeout = 0;
-	int using_document = 1;
-	int i;
-	int repeat_times;
-	int repeat_interval;
-	const char *jid = NULL;
+//	int using_document = 1;
+//	int i;
+//	int repeat_times;
+//	int repeat_interval;
 
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
-	repeat_times = o_attribs.repeat_times.v.i;
-	repeat_interval = o_attribs.repeat_interval.v.i;
+//	repeat_times = o_attribs.repeat_times.v.i;
+//	repeat_interval = o_attribs.repeat_interval.v.i;
 
 	/* TODO open SSML files here.. then play the open handles below- if bad XML, we'll detect it */
 
@@ -205,19 +209,21 @@ static void start_call_output_component(struct rayo_call *call, switch_core_sess
 	if (!document) {
 		/* adhearsion non-standard <output> request */
 		document = iks_find(output, "speak");
-		using_document = 0;
+		//using_document = 0;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Have <speak> instead of <document>\n");
 	}
 
 	/* nothing to speak? */
 	if (!document) {
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 
 	/* acknowledge command */
-	jid = rayo_call_component_send_start(call, session, iq, "output");
+	component = rayo_call_component_create(NULL, call, "output", iks_find_attrib(iq, "from"));
+	rayo_component_send_start(component, iq);
 
+#if 0
 	/* is a timeout requested? */
 	if (o_attribs.max_time.v.i > 0) {
 		timeout = switch_micro_time_now() + (o_attribs.max_time.v.i * 1000);
@@ -244,35 +250,43 @@ static void start_call_output_component(struct rayo_call *call, switch_core_sess
 			}
 		}
 	}
-
+#endif
 	/* done */
 	if (switch_channel_get_callstate(switch_core_session_get_channel(session)) == CCS_HANGUP) {
 		/* hangup caused finish */
-		rayo_call_component_send_complete(call, jid, COMPONENT_COMPLETE_HANGUP);
+		rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
 	} else if (timeout && switch_micro_time_now() >= timeout) {
 		/* timed out */
-		rayo_call_component_send_complete(call, jid, OUTPUT_MAX_TIME);
+		rayo_component_send_complete(component, OUTPUT_MAX_TIME);
 	} else {
 		/* normal completion */
-		rayo_call_component_send_complete(call, jid, OUTPUT_FINISH_AHN);
+		rayo_component_send_complete(component, OUTPUT_FINISH_AHN);
 	}
+	
+	return NULL;
 }
 
 /**
  * Stop execution of output component
  */
-static iks *stop_call_output_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
 	iks *response = NULL;
 	const char *component_jid = iks_find_attrib(iq, "to");
-	
+	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
+
 	/* stop play */
-	if (switch_core_session_execute_application_async(session, "break", "") == SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_result(iq);
+	if (session) {
+		if (switch_core_session_execute_application_async(session, "break", "") == SWITCH_STATUS_SUCCESS) {
+			response = iks_new_iq_result(iq);
+		} else {
+			response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
+				component_jid);
+		}
+		switch_core_session_rwunlock(session);
 	} else {
-		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
-			component_jid);
+		response = iks_new_iq_error(iq, STANZA_ERROR_ITEM_NOT_FOUND);
 	}
 	return response;
 }
@@ -283,7 +297,8 @@ static iks *stop_call_output_component(struct rayo_call *call, switch_core_sessi
  */
 switch_status_t rayo_output_component_load(void)
 {
-	rayo_call_component_interface_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component, stop_call_output_component);
+	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
