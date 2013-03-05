@@ -177,9 +177,8 @@ switch_status_t output_documents(switch_core_session_t *session, iks *document, 
 /**
  * Start execution of output component
  */
-static void start_call_output_component(struct rayo_call *call, iks *iq)
+static void start_call_output_component(struct rayo_call *call, switch_core_session_t *session,  iks *iq)
 {
-	switch_core_session_t *session = rayo_call_get_session(call);
 	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
 	iks *document = NULL;
@@ -193,7 +192,7 @@ static void start_call_output_component(struct rayo_call *call, iks *iq)
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 	repeat_times = o_attribs.repeat_times.v.i;
@@ -212,12 +211,12 @@ static void start_call_output_component(struct rayo_call *call, iks *iq)
 
 	/* nothing to speak? */
 	if (!document) {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
 	/* acknowledge command */
-	jid = rayo_call_component_send_start(call, iq, "output");
+	jid = rayo_call_component_send_start(call, session, iq, "output");
 
 	/* is a timeout requested? */
 	if (o_attribs.max_time.v.i > 0) {
@@ -262,17 +261,17 @@ static void start_call_output_component(struct rayo_call *call, iks *iq)
 /**
  * Stop execution of output component
  */
-static iks *stop_call_output_component(struct rayo_call *call, iks *iq)
+static iks *stop_call_output_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
 	iks *response = NULL;
 	const char *component_jid = iks_find_attrib(iq, "to");
 	
 	/* stop play */
-	if (switch_core_session_execute_application_async(rayo_call_get_session(call), "break", "") == SWITCH_STATUS_SUCCESS) {
+	if (switch_core_session_execute_application_async(session, "break", "") == SWITCH_STATUS_SUCCESS) {
 		response = iks_new_iq_result(iq);
 	} else {
 		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rayo_call_get_session(call)), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
 			component_jid);
 	}
 	return response;

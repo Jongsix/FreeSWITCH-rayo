@@ -251,9 +251,8 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 /**
  * Start execution of input component
  */
-static void start_call_input_component(struct rayo_call *call, iks *iq)
+static void start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
-	switch_core_session_t *session = rayo_call_get_session(call);
 	struct input_attribs i_attribs;
 	iks *input = iks_child(iq);
 	iks *grammar = NULL;
@@ -265,7 +264,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	memset(&i_attribs, 0, sizeof(i_attribs));
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
@@ -273,7 +272,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	grammar = iks_find(input, "grammar");
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
@@ -281,7 +280,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	content_type = iks_find_attrib(grammar, "content-type");
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
@@ -289,7 +288,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	srgs = iks_find_cdata(input, "grammar");
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
@@ -314,12 +313,12 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
 	/* all good, acknowledge command */
-	handler->jid = rayo_call_component_send_start(call, iq, "input");
+	handler->jid = rayo_call_component_send_start(call, session, iq, "input");
 
 	/* install input callbacks */
 	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
@@ -330,9 +329,9 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
 /**
  * Stop execution of input component
  */
-static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
+static iks *stop_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(rayo_call_get_session(call));
+	switch_channel_t *channel = switch_core_session_get_channel(session);
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
 		handler->stop = 1;
