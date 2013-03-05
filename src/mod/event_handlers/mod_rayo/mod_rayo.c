@@ -420,7 +420,9 @@ static struct rayo_actor *rayo_actor_locate(const char *jid)
 	switch_mutex_lock(globals.actors_mutex);
 	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors, jid);
 	if (actor) {
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locking %s\n", actor->id);
 		switch_mutex_lock(actor->mutex);
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locked %s\n", actor->id);
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 	return actor;
@@ -437,7 +439,9 @@ static struct rayo_actor *rayo_actor_locate_by_id(const char *id)
 	switch_mutex_lock(globals.actors_mutex);
 	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors_by_id, id);
 	if (actor) {
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locking %s\n", actor->id);
 		switch_mutex_lock(actor->mutex);
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locked %s\n", actor->id);
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 	return actor;
@@ -450,6 +454,7 @@ static void rayo_actor_unlock(struct rayo_actor *actor)
 {
 	if (actor) {
 		switch_mutex_unlock(actor->mutex);
+		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unlocked %s\n", actor->id);
 	}
 }
 
@@ -494,21 +499,12 @@ const char *rayo_call_get_uuid(struct rayo_call *call)
 }
 
 /**
- * Acquire and read-lock session associated with call
- * @return the locked session or NULL
- */
-static switch_core_session_t *rayo_call_session_locate(struct rayo_call *call)
-{
-	return switch_core_session_locate(rayo_call_get_uuid(call));
-}
-
-/**
  * Unlock Rayo call.
  */
 static void rayo_call_unlock(struct rayo_call *call)
 {
 	if (call) {
-		switch_mutex_unlock(call->actor->mutex);
+		rayo_actor_unlock(call->actor);
 	}
 }
 
@@ -568,7 +564,7 @@ struct rayo_mixer *rayo_mixer_locate(const char *mixer_name)
 void rayo_mixer_unlock(struct rayo_mixer *mixer)
 {
 	if (mixer) {
-		switch_mutex_unlock(mixer->actor->mutex);
+		rayo_actor_unlock(mixer->actor);
 	}
 }
 
@@ -786,7 +782,6 @@ static int rayo_client_has_call_control(struct rayo_session *rsession, struct ra
 			switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_dcp_jid", call->dcp_jid);
 			control = 1;
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_INFO, "%s has control of call\n", call->dcp_jid);
-			switch_core_session_rwunlock(session);
 		}
 	} else if (!strcmp(call->dcp_jid, rsession->client_jid_full)) {
 		control = 1;
@@ -1317,6 +1312,7 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 					rayo_call_unlock(b_call);
 					goto done;
 				}
+				rayo_call_unlock(b_call);
 				stream.write_function(&stream, "%s%s &rayo(bridge %s)", gateway->dial_prefix, dial_to_stripped, call_id);
 			} else {
 				/* conference */
@@ -1800,9 +1796,10 @@ static int on_iq(void *user_data, ikspak *pak)
 		}
 		case RAT_CALL: {
 			struct rayo_call *call = (struct rayo_call *)actor->data;
-			switch_core_session_t *session = rayo_call_session_locate(call);
+			switch_core_session_t *session = switch_core_session_locate(rayo_call_get_uuid(call));
 			if (!session) {
 				/* trigger not found response */
+				rayo_actor_unlock(actor);
 				actor = NULL;
 				goto done;
 			}
@@ -2073,6 +2070,7 @@ static void on_mixer_add_member_event(struct rayo_mixer *mixer, switch_event_t *
 		iks_insert_attrib(x, "mixer-name", rayo_mixer_get_name(mixer));
 		rayo_iks_send(add_member_event);
 		iks_delete(add_member_event);
+
 		rayo_call_unlock(call);
 	}
 
@@ -2210,14 +2208,13 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 			void *val;
 			const char *client_jid = NULL;
 			switch_hash_this(hi, &key, NULL, &val);
-			client_jid = (const char *)val;
+			client_jid = (const char *)key;
 			switch_assert(client_jid);
 			iks_insert_attrib(revent, "to", client_jid);
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Sending <end> to offered client %s\n", client_jid);
 			rayo_iks_send(revent);
 		}
 		iks_delete(revent);
-		rayo_call_unlock(call);
 		rayo_call_destroy(call);
 	}
 }
