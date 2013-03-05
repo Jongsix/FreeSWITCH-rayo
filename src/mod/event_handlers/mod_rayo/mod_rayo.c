@@ -2196,6 +2196,7 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 
 	/* forward event to each offered client */
 	if (call) {
+		int no_offered_clients = 1;
 		switch_hash_index_t *hi = NULL;
 		iks *revent = create_rayo_event("end", RAYO_NS,
 			rayo_call_get_jid(call),
@@ -2213,7 +2214,15 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 			iks_insert_attrib(revent, "to", client_jid);
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Sending <end> to offered client %s\n", client_jid);
 			rayo_iks_send(revent);
+			no_offered_clients = 0;
 		}
+
+		if (no_offered_clients) {
+			/* send to DCP only */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Sending <end> to DCP %s\n", rayo_call_get_dcp_jid(call));
+			rayo_iks_send(revent);
+		}
+
 		iks_delete(revent);
 		rayo_call_destroy(call);
 	}
