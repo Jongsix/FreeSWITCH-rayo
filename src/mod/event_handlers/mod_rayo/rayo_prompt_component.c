@@ -49,28 +49,27 @@ struct prompt_attribs {
 /**
  * Start execution of prompt component
  */
-static void start_call_prompt_component(struct rayo_call *call, iks *iq)
+static void start_call_prompt_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
-	switch_core_session_t *session = rayo_call_get_session(call);
 	struct prompt_attribs p_attribs;
 	iks *prompt = iks_child(iq);
 
 	/* validate prompt attributes */
 	memset(&p_attribs, 0, sizeof(p_attribs));
 	if (!iks_attrib_parse(session, prompt, prompt_attribs_def, (struct iks_attribs *)&p_attribs)) {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return;
 	}
 
 	/* TODO implement */
 
-	rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+	rayo_component_send_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 }
 
 /**
  * Stop execution of prompt component
  */
-static iks *stop_call_prompt_component(struct rayo_call *call, iks *iq)
+static iks *stop_call_prompt_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
 	return NULL;
 }
