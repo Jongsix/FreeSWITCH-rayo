@@ -207,9 +207,12 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 		case SWITCH_ABC_TYPE_CLOSE:
 			/* check for hangup */
 			if (handler->done) {
-			} else if (handler->stop) {				
+				/* ignore */
+			} else if (handler->stop) {
+				handler->done = 1;
 				rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_STOP);
 			} else {
+				handler->done = 1;
 				rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_HANGUP);
 			}
 			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
