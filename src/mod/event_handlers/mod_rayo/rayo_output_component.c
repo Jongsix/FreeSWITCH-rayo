@@ -61,7 +61,6 @@ struct output_attribs {
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
-
 /**
  * Start execution of output component
  */
@@ -70,14 +69,13 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	struct rayo_component *component = NULL;
 	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
-	char *filename = NULL;
 	char *document_str = NULL;
-	int timeout_ms = 0;
+	switch_stream_handle_t stream = { 0 };
 
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
 
@@ -85,21 +83,29 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	component = rayo_call_component_create(NULL, call, "output", iks_find_attrib(iq, "from"));
 	rayo_component_send_start(component, iq);
 
-	/* is a timeout requested? */
-	if (o_attribs.max_time.v.i > 0) {
-		timeout_ms = (o_attribs.max_time.v.i * 1000);
+	/* build playback command */
+	SWITCH_STANDARD_STREAM(stream);
+
+	stream.write_function(&stream, "{rayo_id=%s", rayo_component_get_id(component));
+
+	if (GET_INT(o_attribs, max_time) > 0) {
+		stream.write_function(&stream, ",timeout=%i", GET_INT(o_attribs, max_time) * 1000);
+	}
+
+	if (GET_INT(o_attribs, repeat_interval) > 0) {
+		stream.write_function(&stream, ",repeat_interval=%i", GET_INT(o_attribs, repeat_interval));
+	}
+
+	if (GET_INT(o_attribs, repeat_times) > 0) {
+		stream.write_function(&stream, ",repeat_times=%i", GET_INT(o_attribs, repeat_times));
 	}
 
 	document_str = iks_string(NULL, output);
-	if (timeout_ms > 0) {
-		filename = switch_mprintf("{timeout=%i,rayo_id=%s}rayo://%s", timeout_ms, rayo_component_get_id(component), document_str);
-	} else {
-		filename = switch_mprintf("{rayo_id=%s}rayo://%s", rayo_component_get_id(component), document_str);
-	}
+	stream.write_function(&stream, "}rayo://%s", document_str);
 
-	switch_core_session_execute_application_async(session, "playback", filename);
+	switch_core_session_execute_application_async(session, "playback", stream.data);
 	iks_free(document_str);
-	switch_safe_free(filename);
+	switch_safe_free(stream.data);
 	return NULL;
 }
 
@@ -142,6 +148,10 @@ struct rayo_file_context {
 	char *ssml;
 	/** ID of the rayo output component */
 	char *component_id;
+	/** silence between repeats */
+	int repeat_interval;
+	/** number of times to repeat */
+	int repeat_times;
 };
 
 /**
@@ -159,6 +169,11 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		switch_core_file_close(&context->fh);
 	}
 
+	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
+		/* unsupported */
+		return SWITCH_STATUS_FALSE;
+	}
+
 	if (!context->cur_doc) {
 		iks *doc = iks_find(context->docs, "document");
 		if (!doc) {
@@ -173,22 +188,33 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 	} else {
 		context->cur_doc = iks_next(context->cur_doc);
 	}
-	/* TODO repeats */
-	/* TODO silence gaps */
+
+	/* done? */
+	if (!context->cur_doc) {
+		if (context->repeat_times > 1) {
+			/* repeat all document(s) */
+			context->repeat_times--;
+			if (!context->repeat_interval) {
+				goto top;
+			}
+		} else {
+			/* no more files to play */
+			return SWITCH_STATUS_FALSE;
+		}
+	}
 
 	if (!context->cur_doc) {
-		return SWITCH_STATUS_FALSE;
+		/* play silence between repeats */
+		switch_safe_free(context->ssml);
+		context->ssml = switch_mprintf("silence_stream://%i", context->repeat_interval);
+	} else {
+		/* play next document */
+		switch_safe_free(context->ssml);
+		file = iks_string(NULL, context->cur_doc);
+		context->ssml = switch_mprintf("ssml://%s", file);
+		iks_free(file);
 	}
 
-	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
-		/* unsupported */
-		return SWITCH_STATUS_FALSE;
-	}
-
-	switch_safe_free(context->ssml);
-	file = iks_string(NULL, context->cur_doc);
-	context->ssml = switch_mprintf("ssml://%s", file);
-	iks_free(file);
 	if (switch_core_file_open(&context->fh, context->ssml, handle->channels, handle->samplerate, handle->flags, NULL) != SWITCH_STATUS_SUCCESS) {
 		goto top;
 	}
@@ -219,16 +245,32 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 {
 	switch_status_t status = SWITCH_STATUS_FALSE;
 	struct rayo_file_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
+	const char *val;
 	iksparser *parser = iks_dom_new(&context->docs);
+
+	/* get additional params */
+	val = switch_event_get_header(handle->params, "rayo_id");
+	if (!zstr(val)) {
+		context->component_id = strdup(val);
+	}
+
+	val = switch_event_get_header(handle->params, "repeat_interval");
+	if (!zstr(val) && switch_is_number(val)) {
+		context->repeat_interval = atoi(val);
+	}
+
+	val = switch_event_get_header(handle->params, "repeat_times");
+	if (!zstr(val) && switch_is_number(val)) {
+		context->repeat_times = atoi(val);
+	}
+
+	/* parse rayo doc */
 	if (iks_parse(parser, path, 0, 1) == IKS_OK) {
 		handle->private_info = context;
 		status = next_file(handle);
 	}
+
 	iks_parser_delete(parser);
-	context->component_id = switch_event_get_header(handle->params, "rayo_id");
-	if (!zstr(context->component_id)) {
-		context->component_id = strdup(context->component_id);
-	}
 	return status;
 }
 
