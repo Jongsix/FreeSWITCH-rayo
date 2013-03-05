@@ -179,7 +179,7 @@ switch_status_t output_documents(switch_core_session_t *session, iks *document, 
  */
 static void start_call_output_component(struct rayo_call *call, iks *iq)
 {
-	switch_core_session_t *session = call->session;
+	switch_core_session_t *session = rayo_call_get_session(call);
 	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
 	iks *document = NULL;
@@ -268,11 +268,11 @@ static iks *stop_call_output_component(struct rayo_call *call, iks *iq)
 	const char *component_jid = iks_find_attrib(iq, "to");
 	
 	/* stop play */
-	if (switch_core_session_execute_application_async(call->session, "break", "") == SWITCH_STATUS_SUCCESS) {
+	if (switch_core_session_execute_application_async(rayo_call_get_session(call), "break", "") == SWITCH_STATUS_SUCCESS) {
 		response = iks_new_iq_result(iq);
 	} else {
 		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(call->session), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rayo_call_get_session(call)), SWITCH_LOG_INFO, "Failed to stop <output> component %s!\n",
 			component_jid);
 	}
 	return response;
