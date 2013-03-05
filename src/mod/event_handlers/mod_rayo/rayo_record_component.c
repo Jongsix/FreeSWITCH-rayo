@@ -225,6 +225,7 @@ switch_status_t rayo_record_component_load(void)
 {
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
 	rayo_call_command_handler_add("set:"RAYO_RECORD_NS":record", start_call_record_component);
+	rayo_component_command_handler_add("record", "set:"RAYO_NS":stop", stop_record_component); /* TODO remove after punchblock is updated */
 	rayo_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_record_component);
 	return SWITCH_STATUS_SUCCESS;
 }
