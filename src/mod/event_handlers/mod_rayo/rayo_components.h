@@ -66,20 +66,14 @@ extern switch_status_t rayo_output_component_shutdown(void);
 extern switch_status_t rayo_prompt_component_shutdown(void);
 extern switch_status_t rayo_record_component_shutdown(void);
 
+extern struct rayo_component *rayo_call_component_create(const char *id, struct rayo_call *call, const char *type, const char *client_jid);
+extern struct rayo_component *rayo_mixer_component_create(const char *id, struct rayo_mixer *mixer, const char *type, const char *client_jid);
+
+extern void rayo_component_send_start(struct rayo_component *component, iks *iq);
 extern void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *error_type);
+extern void rayo_component_send_complete(struct rayo_component *component, const char *reason, const char *reason_namespace);
+extern void rayo_component_send_complete_event(struct rayo_component *component, iks *response);
 
-typedef void (* rayo_call_component_start_fn)(struct rayo_call *call, switch_core_session_t *session, iks *iq);
-typedef iks *(* rayo_call_component_stop_fn)(struct rayo_call *call, switch_core_session_t *session, iks *iq);
-extern void rayo_call_component_interface_add(const char *command, rayo_call_component_start_fn start, rayo_call_component_stop_fn stop);
-
-extern const char *rayo_call_component_send_start(struct rayo_call *call, switch_core_session_t *session, iks *iq, const char *type);
-extern void rayo_call_component_send_complete(struct rayo_call *call, const char *jid, const char *reason, const char *reason_namespace);
-
-typedef void (* rayo_mixer_component_start_fn)(struct rayo_mixer *mixer, iks *iq);
-typedef iks *(* rayo_mixer_component_stop_fn)(struct rayo_mixer *mixer, iks *iq);
-extern void rayo_mixer_component_interface_add(const char *command, rayo_mixer_component_start_fn start, rayo_mixer_component_stop_fn stop);
-
-extern char *rayo_mixer_component_send_start(struct rayo_mixer *mixer, iks *iq, const char *type);
-extern void rayo_mixer_component_send_complete(struct rayo_mixer *mixer, const char *jid, const char *reason, const char *reason_namespace);
+extern iks *rayo_component_create_complete_event(struct rayo_component *component, const char *reason, const char *reason_namespace);
 
 #endif

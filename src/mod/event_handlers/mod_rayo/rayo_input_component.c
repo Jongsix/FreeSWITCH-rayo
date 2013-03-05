@@ -35,17 +35,16 @@
 
 /**
  * Send DTMF match to client
- * @param call the call that created the component_ref
- * @param jid the component JID
+ * @param component the component
  * @param digits the matching digits
  */
-static void send_input_component_dtmf_match(struct rayo_call *call, const char *jid, const char *digits)
+static void send_input_component_dtmf_match(struct rayo_component *component, const char *digits)
 {
 	iks *response = iks_new("presence");
 	iks *x;
 
-	iks_insert_attrib(response, "from", jid);
-	iks_insert_attrib(response, "to", rayo_call_get_dcp_jid(call));
+	iks_insert_attrib(response, "from", rayo_component_get_jid(component));
+	iks_insert_attrib(response, "to", rayo_component_get_client_jid(component));
 	iks_insert_attrib(response, "type", "unavailable");
 	x = iks_insert(response, "complete");
 	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
@@ -121,8 +120,8 @@ struct input_handler {
 	char digits[MAX_DTMF + 1];
 	/** The grammar parser */
 	struct srgs_parser *parser;
-	/** The call */
-	struct rayo_call *call;
+	/** The component */
+	struct rayo_component *component;
 	/** component jid */
 	const char *jid;
 	/** time when last digit was received */
@@ -135,71 +134,9 @@ struct input_handler {
 	int stop;
 	/** done flag */
 	int done;
+	/** media bug to monitor frames / control input lifecycle */
+	switch_media_bug_t *bug;
 };
-
-static switch_status_t input_component_on_hangup(switch_core_session_t *session);
-
-/**
- * channel state callbacks
- */
-static const switch_state_handler_table_t input_component_state_handlers = {
-	/*.on_init */ NULL,
-	/*.on_routing */ NULL,
-	/*.on_execute */ NULL,
-	/*.on_hangup */ input_component_on_hangup,
-	/*.on_exchange_media */ NULL,
-	/*.on_soft_execute */ NULL,
-	/*.on_consume_media */ NULL,
-	/*.on_hibernate */ NULL
-};
-
-/**
- * Monitor for hangup and send complete
- */
-static switch_status_t input_component_on_hangup(switch_core_session_t *session)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler && !handler->done) {
-		handler->done = 1;
-		rayo_call_component_send_complete(handler->call, handler->jid, COMPONENT_COMPLETE_HANGUP);
-	}
-	if (handler) {
-		srgs_parser_destroy(handler->parser);
-		handler->parser = NULL;
-	}
-	return SWITCH_STATUS_SUCCESS;
-}
-
-static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction);
-
-/**
- * Monitor DTMF timeouts
- */
-static switch_status_t input_component_on_read_frame(switch_core_session_t *session, switch_frame_t **frame, switch_io_flag_t flags, int i)
-{
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler && !handler->done) {
-		int elapsed_ms = (switch_micro_time_now() - handler->last_digit_time) / 1000;
-		if (handler->num_digits && handler->inter_digit_timeout > 0 && elapsed_ms > handler->inter_digit_timeout) {
-			handler->done = 1;
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
-			rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOMATCH);
-
-			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-		} else if (!handler->num_digits && handler->initial_timeout > 0 && elapsed_ms > handler->initial_timeout) {
-			handler->done = 1;
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
-			rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOINPUT);
-
-			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-			switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
-		}
-	}
-	return SWITCH_STATUS_SUCCESS;
-}
 
 /**
  * Process DTMF press
@@ -226,21 +163,17 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 			case SMT_NO_MATCH: {
 				/* notify of no-match and remove input handler */
 				handler->done = 1;
+				switch_core_media_bug_remove(session, &handler->bug);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "NO MATCH = %s\n", handler->digits);
-				rayo_call_component_send_complete(handler->call, handler->jid, INPUT_NOMATCH);
-
-				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+				rayo_component_send_complete(handler->component, INPUT_NOMATCH);
 				break;
 			}
 			case SMT_MATCH: {
 				/* notify of match and remove input handler */
 				handler->done = 1;
+				switch_core_media_bug_remove(session, &handler->bug);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
-				send_input_component_dtmf_match(handler->call, handler->jid, handler->digits);
-
-				switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
-				switch_core_event_hook_remove_read_frame(session, input_component_on_read_frame);
+				send_input_component_dtmf_match(handler->component, handler->digits);
 				break;
 			}
 		}
@@ -249,9 +182,52 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 }
 
 /**
+ * Monitor for input
+ */
+static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
+{
+	switch_core_session_t *session = switch_core_media_bug_get_session(bug);
+	struct input_handler *handler = (struct input_handler *)user_data;
+	switch(type) {
+		case SWITCH_ABC_TYPE_INIT: {
+			switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
+			break;
+		}
+		case SWITCH_ABC_TYPE_READ_REPLACE:
+			/* check for timeout */
+			if (!handler->done) {
+				int elapsed_ms = (switch_micro_time_now() - handler->last_digit_time) / 1000;
+				if (handler->num_digits && handler->inter_digit_timeout > 0 && elapsed_ms > handler->inter_digit_timeout) {
+					handler->done = 1;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
+					rayo_component_send_complete(handler->component, INPUT_NOMATCH);
+				} else if (!handler->num_digits && handler->initial_timeout > 0 && elapsed_ms > handler->initial_timeout) {
+					handler->done = 1;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
+					rayo_component_send_complete(handler->component, INPUT_NOINPUT);
+				}
+			}
+			return SWITCH_FALSE;
+		case SWITCH_ABC_TYPE_CLOSE:
+			/* check for hangup */
+			if (handler->done) {
+			} else if (handler->stop) {				
+				rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_STOP);
+			} else {
+				rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_HANGUP);
+			}
+			switch_core_event_hook_remove_recv_dtmf(session, input_component_on_dtmf);
+			break;
+		default:
+			break;
+	}
+	return SWITCH_TRUE;
+}
+
+/**
  * Start execution of input component
  */
-static void start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
 	struct input_attribs i_attribs;
 	iks *input = iks_child(iq);
@@ -265,7 +241,7 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 
 	/* missing grammar */
@@ -273,7 +249,7 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 
 	/* only support srgs */
@@ -281,7 +257,7 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 
 	/* missing grammar body */
@@ -289,7 +265,7 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
 
@@ -303,9 +279,10 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	}
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
-	handler->call = call;
+	handler->component = NULL;
 	handler->stop = 0;
 	handler->done = 0;
+	handler->bug = NULL;
 	handler->last_digit_time = switch_micro_time_now();
 	handler->initial_timeout = GET_INT(i_attribs, initial_timeout);
 	handler->inter_digit_timeout = GET_INT(i_attribs, inter_digit_timeout);
@@ -314,27 +291,36 @@ static void start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!srgs_parse(handler->parser, srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return;
+		return NULL;
 	}
 
-	/* all good, acknowledge command */
-	handler->jid = rayo_call_component_send_start(call, session, iq, "input");
+	/* create component */
+	handler->component = rayo_call_component_create(NULL, call, "input", iks_find_attrib(iq, "from"));
+	rayo_component_set_data(handler->component, handler);
 
-	/* install input callbacks */
-	switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
-	switch_core_event_hook_add_read_frame(session, input_component_on_read_frame);
-	switch_channel_add_state_handler(switch_core_session_get_channel(session), &input_component_state_handlers);
+	/* start input detection */
+	switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
+
+	/* acknowledge command */
+	rayo_component_send_start(handler->component, iq);
+	
+	return NULL;
 }
 
 /**
  * Stop execution of input component
  */
-static iks *stop_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static iks *stop_input_component(struct rayo_component *component, iks *iq)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
-	if (handler) {
-		handler->stop = 1;
+	struct input_handler *handler = (struct input_handler *)rayo_component_get_data(component);
+	
+	if (handler && !handler->done && !handler->stop && handler->bug) {
+		switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
+		if (session) {
+			handler->stop = 1;
+			switch_core_media_bug_remove(session, &handler->bug);
+			switch_core_session_rwunlock(session);
+		}
 	}
 	return iks_new_iq_result(iq);
 }
@@ -345,8 +331,8 @@ static iks *stop_call_input_component(struct rayo_call *call, switch_core_sessio
  */
 switch_status_t rayo_input_component_load(void)
 {
-
-	rayo_call_component_interface_add("set:"RAYO_INPUT_NS":input", start_call_input_component, stop_call_input_component);
+	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
+	rayo_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 
