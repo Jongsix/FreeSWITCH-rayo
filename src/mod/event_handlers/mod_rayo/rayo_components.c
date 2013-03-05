@@ -59,7 +59,11 @@ struct rayo_component *rayo_call_component_create(const char *id, struct rayo_ca
 {
 	const char *ref = switch_core_sprintf(rayo_call_get_pool(call), "%s-%d", type, rayo_call_seq_next(call));
 	const char *jid = switch_core_sprintf(rayo_call_get_pool(call), "%s/%s", rayo_call_get_uuid(call), ref);
-	struct rayo_component *component = rayo_component_create(type, id, jid, ref, rayo_call_get_actor(call), client_jid);
+	struct rayo_component *component;
+	if (zstr(id)) {
+		id = jid;
+	}
+	component = rayo_component_create(type, id, jid, ref, rayo_call_get_actor(call), client_jid);
 	return component;
 }
 
@@ -140,7 +144,7 @@ void rayo_component_send_complete(struct rayo_component *component, const char *
 switch_status_t rayo_components_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool)
 {
 	rayo_input_component_load();
-	rayo_output_component_load();
+	rayo_output_component_load(module_interface, pool);
 	rayo_record_component_load();
 	rayo_prompt_component_load();
 

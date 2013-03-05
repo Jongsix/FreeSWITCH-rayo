@@ -61,122 +61,6 @@ struct output_attribs {
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
-#if 0
-
-/**
- * <output> a <speak> document
- * @param session the session to play to
- * @param document the document to play
- * @param timeout the time to stop playing.  0 if unbounded.
- * @return status
- */
-switch_status_t output_speak_document(switch_core_session_t *session, iks *document, switch_time_t timeout)
-{
-	switch_status_t status = SWITCH_STATUS_FALSE;
-	char *name;
-	int max_time_ms = -1;
-
-	if (!document) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "No document to play!\n");
-		return SWITCH_STATUS_FALSE;
-	}
-
-	/* calculate relative timeout */
-	if (timeout) {
-		switch_time_t now = switch_micro_time_now();
-		if (now >= timeout) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Reached <speak> timeout!\n");
-			return SWITCH_STATUS_FALSE;
-		}
-		max_time_ms = (int)((timeout - now) / 1000);
-
-		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
-		max_time_ms += 40;
-	}
-
-	name = iks_name(document);
-	if (!strcmp("speak", name)) {
-		char *ssml = iks_string(NULL, document);
-		char *filename = NULL;
-
-		/* append timeout param and SSML file format and the SSML document */
-		filename = switch_mprintf("{timeout=%i}ssml://%s", max_time_ms, ssml);
-
-		/* play the file */
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", filename);
-		status = switch_ivr_play_file(session, NULL, filename, NULL);
-
-		iks_free(ssml);
-		switch_safe_free(filename);
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <speak>, got: <%s>!\n", name);
-	}
-	return status;
-}
-
-/**
- * <output> a <speak> document
- * @param session the session to play to
- * @param silence_ms the duration of silence to play
- * @param timeout the time to stop playing.  0 if unbounded.
- * @return status
- */
-switch_status_t output_silence(switch_core_session_t *session, int silence_ms, switch_time_t timeout)
-{
-	switch_status_t status;
-	char *filename = NULL;
-	int max_time_ms = -1;
-
-	/* calculate relative timeout */
-	if (timeout) {
-		switch_time_t now = switch_micro_time_now();
-		if (now >= timeout) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Reached <silence> timeout!\n");
-			return SWITCH_STATUS_FALSE;
-		}
-		max_time_ms = (int)((timeout - now) / 1000);
-
-		/* Add extra frame or two of time to ensure play returns after timeout so we can detect it. */
-		max_time_ms += 40;
-	}
-
-	/* append timeout param and SSML file format and the SSML document */
-	filename = switch_mprintf("{timeout=%i}silence_stream://%i", max_time_ms, silence_ms);
-
-	/* play the file */
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Playing %s\n", filename);
-	status = switch_ivr_play_file(session, NULL, filename, NULL);
-
-	switch_safe_free(filename);
-
-	return status;
-}
-
-/**
- * <output> <document>s
- * @param session the session to play to
- * @param document the document(s) to play
- * @param timeout the time to stop playing.  0 if unbounded.
- * @return status
- */
-switch_status_t output_documents(switch_core_session_t *session, iks *document, switch_time_t timeout)
-{
-	/* play each <document> */
-	for (; document; document = iks_next_tag(document)) {
-		if (!strcmp("document", iks_name(document))) {
-			/* play the <speak> document */
-			switch_status_t status;
-			if ((status = output_speak_document(session, iks_child(document), timeout)) != SWITCH_STATUS_SUCCESS) {
-				return status;
-			}
-		} else {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Expected <document>, got: <%s>!\n", iks_name(document));
-		}
-	}
-	return SWITCH_STATUS_SUCCESS;
-}
-
-#endif
 
 /**
  * Start execution of output component
@@ -186,35 +70,13 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	struct rayo_component *component = NULL;
 	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
-	iks *document = NULL;
-	switch_time_t timeout = 0;
-//	int using_document = 1;
-//	int i;
-//	int repeat_times;
-//	int repeat_interval;
+	char *filename = NULL;
+	char *document_str = NULL;
+	int timeout_ms = 0;
 
 	/* validate output attributes */
 	memset(&o_attribs, 0, sizeof(o_attribs));
 	if (!iks_attrib_parse(session, output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return NULL;
-	}
-//	repeat_times = o_attribs.repeat_times.v.i;
-//	repeat_interval = o_attribs.repeat_interval.v.i;
-
-	/* TODO open SSML files here.. then play the open handles below- if bad XML, we'll detect it */
-
-	/* find document to speak */
-	document = iks_find(output, "document");
-	if (!document) {
-		/* adhearsion non-standard <output> request */
-		document = iks_find(output, "speak");
-		//using_document = 0;
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Have <speak> instead of <document>\n");
-	}
-
-	/* nothing to speak? */
-	if (!document) {
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
@@ -223,46 +85,21 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	component = rayo_call_component_create(NULL, call, "output", iks_find_attrib(iq, "from"));
 	rayo_component_send_start(component, iq);
 
-#if 0
 	/* is a timeout requested? */
 	if (o_attribs.max_time.v.i > 0) {
-		timeout = switch_micro_time_now() + (o_attribs.max_time.v.i * 1000);
+		timeout_ms = (o_attribs.max_time.v.i * 1000);
 	}
 
-	/* render document(s) */
-	for (i = 0; i < repeat_times; i++) {
-
-		/* play silence between documents */
-		if (i > 0 && repeat_interval > 0) {
-			if (output_silence(session, repeat_interval, timeout) != SWITCH_STATUS_SUCCESS) {
-				break;
-			}
-		}
-
-		/* play document */
-		if (using_document) {
-			if (output_documents(session, document, timeout) != SWITCH_STATUS_SUCCESS) {
-				break;
-			}
-		} else {
-			if (output_speak_document(session, document, timeout) != SWITCH_STATUS_SUCCESS) {
-				break;
-			}
-		}
-	}
-#endif
-	/* done */
-	if (switch_channel_get_callstate(switch_core_session_get_channel(session)) == CCS_HANGUP) {
-		/* hangup caused finish */
-		rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
-	} else if (timeout && switch_micro_time_now() >= timeout) {
-		/* timed out */
-		rayo_component_send_complete(component, OUTPUT_MAX_TIME);
+	document_str = iks_string(NULL, output);
+	if (timeout_ms > 0) {
+		filename = switch_mprintf("{timeout=%i,rayo_id=%s}rayo://%s", timeout_ms, rayo_component_get_id(component), document_str);
 	} else {
-		/* normal completion */
-		rayo_component_send_complete(component, OUTPUT_FINISH_AHN);
+		filename = switch_mprintf("{rayo_id=%s}rayo://%s", rayo_component_get_id(component), document_str);
 	}
-	
+
+	switch_core_session_execute_application_async(session, "playback", filename);
+	iks_free(document_str);
+	switch_safe_free(filename);
 	return NULL;
 }
 
@@ -292,13 +129,193 @@ static iks *stop_output_component(struct rayo_component *component, iks *iq)
 }
 
 /**
- * Initialize input component
+ * Rayo document playback state
+ */
+struct rayo_file_context {
+	/** handle to current file */
+	switch_file_handle_t fh;
+	/** documents to play */
+	iks *docs;
+	/** current document being played */
+	iks *cur_doc;
+	/** current file string being played */
+	char *ssml;
+	/** ID of the rayo output component */
+	char *component_id;
+};
+
+/**
+ * open next file for reading
+ * @param handle the file handle
+ */
+static switch_status_t next_file(switch_file_handle_t *handle)
+{
+	struct rayo_file_context *context = handle->private_info;
+	char *file;
+
+  top:
+
+	if (switch_test_flag((&context->fh), SWITCH_FILE_OPEN)) {
+		switch_core_file_close(&context->fh);
+	}
+
+	if (!context->cur_doc) {
+		iks *doc = iks_find(context->docs, "document");
+		if (!doc) {
+			doc = iks_find(context->docs, "speak");
+		}
+		if (!doc) {
+			iks_delete(context->docs);
+			context->cur_doc = NULL;
+			return SWITCH_STATUS_FALSE;
+		}
+		context->cur_doc = doc;
+	} else {
+		context->cur_doc = iks_next(context->cur_doc);
+	}
+	/* TODO repeats */
+	/* TODO silence gaps */
+
+	if (!context->cur_doc) {
+		return SWITCH_STATUS_FALSE;
+	}
+
+	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
+		/* unsupported */
+		return SWITCH_STATUS_FALSE;
+	}
+
+	switch_safe_free(context->ssml);
+	file = iks_string(NULL, context->cur_doc);
+	context->ssml = switch_mprintf("ssml://%s", file);
+	iks_free(file);
+	if (switch_core_file_open(&context->fh, context->ssml, handle->channels, handle->samplerate, handle->flags, NULL) != SWITCH_STATUS_SUCCESS) {
+		goto top;
+	}
+
+	handle->samples = context->fh.samples;
+	handle->format = context->fh.format;
+	handle->sections = context->fh.sections;
+	handle->seekable = context->fh.seekable;
+	handle->speed = context->fh.speed;
+	handle->interval = context->fh.interval;
+
+	if (switch_test_flag((&context->fh), SWITCH_FILE_NATIVE)) {
+		switch_set_flag(handle, SWITCH_FILE_NATIVE);
+	} else {
+		switch_clear_flag(handle, SWITCH_FILE_NATIVE);
+	}
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Transforms Rayo document into sub-format and opens file_string.
+ * @param handle
+ * @param path the inline Rayo document
+ * @return SWITCH_STATUS_SUCCESS if opened
+ */
+static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *path)
+{
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	struct rayo_file_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
+	iksparser *parser = iks_dom_new(&context->docs);
+	if (iks_parse(parser, path, 0, 1) == IKS_OK) {
+		handle->private_info = context;
+		status = next_file(handle);
+	}
+	iks_parser_delete(parser);
+	context->component_id = switch_event_get_header(handle->params, "rayo_id");
+	if (!zstr(context->component_id)) {
+		context->component_id = strdup(context->component_id);
+	}
+	return status;
+}
+
+/**
+ * Close SSML document.
+ * @param handle
+ * @return SWITCH_STATUS_SUCCESS
+ */
+static switch_status_t rayo_file_close(switch_file_handle_t *handle)
+{
+	struct rayo_file_context *context = (struct rayo_file_context *)handle->private_info;
+	struct rayo_component *component = NULL;
+
+	/* close SSML file */
+	if (switch_test_flag((&context->fh), SWITCH_FILE_OPEN)) {
+		return switch_core_file_close(&context->fh);
+	}
+
+	/* notify of component completion */
+	if (!zstr(context->component_id)) {
+		component = rayo_component_locate(context->component_id);
+		if (component) {
+			/* send completion and destroy */
+			rayo_component_send_complete(component, OUTPUT_FINISH_AHN);
+			/* TODO hangup / timed out */
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to find component: %s\n", context->component_id);
+		}
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing component ID\n");
+	}
+
+	/* cleanup internals */
+	switch_safe_free(context->ssml);
+	context->ssml = NULL;
+	if (context->docs) {
+		iks_delete(context->docs);
+		context->docs = NULL;
+	}
+	switch_safe_free(context->component_id);
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Read from SSML document
+ * @param handle
+ * @param data
+ * @param len
+ * @return
+ */
+static switch_status_t rayo_file_read(switch_file_handle_t *handle, void *data, size_t *len)
+{
+	switch_status_t status;
+	struct rayo_file_context *context = (struct rayo_file_context *)handle->private_info;
+	size_t llen = *len;
+
+	status = switch_core_file_read(&context->fh, data, len);
+	if (status != SWITCH_STATUS_SUCCESS) {
+		if ((status = next_file(handle)) != SWITCH_STATUS_SUCCESS) {
+			return status;
+		}
+		*len = llen;
+		status = switch_core_file_read(&context->fh, data, len);
+	}
+	return status;
+}
+
+static char *rayo_supported_formats[] = { "rayo", NULL };
+
+/**
+ * Initialize output component
  * @return SWITCH_STATUS_SUCCESS if successful
  */
-switch_status_t rayo_output_component_load(void)
+switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool)
 {
+	switch_file_interface_t *file_interface;
 	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
 	rayo_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+
+	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
+	file_interface->interface_name = "mod_rayo";
+	file_interface->extens = rayo_supported_formats;
+	file_interface->file_open = rayo_file_open;
+	file_interface->file_close = rayo_file_close;
+	file_interface->file_read = rayo_file_read;
+	
 	return SWITCH_STATUS_SUCCESS;
 }
 
