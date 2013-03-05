@@ -126,7 +126,7 @@ extern ATTRIB_RULE(positive_or_neg_one);
 extern ATTRIB_RULE(any);
 extern ATTRIB_RULE(decimal_between_zero_and_one);
 
-extern int iks_attrib_parse(switch_core_session_t *session, iks *node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs);
+extern int iks_attrib_parse(const char *log_id, iks *node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs);
 
 #endif
 

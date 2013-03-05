@@ -237,7 +237,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 
 	/* validate input attributes */
 	memset(&i_attribs, 0, sizeof(i_attribs));
-	if (!iks_attrib_parse(session, input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
+	if (!iks_attrib_parse(switch_core_session_get_uuid(session), input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
