@@ -48,12 +48,11 @@ extern const char *rayo_call_get_jid(struct rayo_call *call);
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 extern int rayo_call_is_joined(struct rayo_call *call);
 extern int rayo_call_seq_next(struct rayo_call *call);
-extern switch_core_session_t *rayo_call_get_session(struct rayo_call *call);
 
 extern const char *rayo_mixer_get_jid(struct rayo_mixer *mixer);
 extern const char *rayo_mixer_get_name(struct rayo_mixer *mixer);
 
-typedef iks *(*rayo_call_command_handler)(struct rayo_call *, iks *);
+typedef iks *(*rayo_call_command_handler)(struct rayo_call *, switch_core_session_t *session, iks *);
 extern void rayo_call_command_handler_add(const char *name, rayo_call_command_handler fn);
 
 typedef iks *(*rayo_mixer_command_handler)(struct rayo_mixer *, iks *);

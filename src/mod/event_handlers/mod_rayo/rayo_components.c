@@ -74,28 +74,6 @@ static struct {
 } globals;
 
 /**
- * Create a component ref
- * @param call the rayo call
- * @param type the component type "(nput/output/record/prompt/etc)
- * @return the component ref
- */
-static char *call_component_ref_create(struct rayo_call *call, const char *type)
-{
-	return switch_core_session_sprintf(rayo_call_get_session(call), "%s-%d", type, rayo_call_seq_next(call));
-}
-
-/**
- * Create a component Jabber ID
- * @param call the rayo call
- * @param component_ref the component ref
- * @return the Jabber ID
- */
-static char *call_component_jid_create(struct rayo_call *call, const char *component_ref)
-{
-	return switch_core_session_sprintf(rayo_call_get_session(call), "%s/%s", rayo_call_get_jid(call), component_ref);
-}
-
-/**
  * Send IQ error to controlling client from call
  * @param call the call
  * @param iq the request that caused the error
@@ -111,15 +89,16 @@ void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *e
 /**
  * Notify of new call component
  * @param call the call
+ * @param session the session
  * @param iq that requested the component
  * @param type the type of component
  * @return the component JID
  */
-const char *rayo_call_component_send_start(struct rayo_call *call, iks *iq, const char *type)
+const char *rayo_call_component_send_start(struct rayo_call *call, switch_core_session_t *session, iks *iq, const char *type)
 {
 	iks *x, *response = NULL;
-	const char *ref = call_component_ref_create(call, type);
-	const char *jid = call_component_jid_create(call, ref);
+	const char *ref = switch_core_session_sprintf(session, "%s-%d", type, rayo_call_seq_next(call));
+	const char *jid = switch_core_session_sprintf(session, "%s/%s", rayo_call_get_jid(call), ref);
 	struct active_component *component = malloc(sizeof(*component));
 	memset(component, 0, sizeof(*component));
 	component->type = type;
@@ -212,7 +191,7 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 	if (!iks_has_children(iq)) {
 		/* shouldn't happen if APP was executed by this module */
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Bad request!\n");
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_BAD_REQUEST);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	} 
 
@@ -220,9 +199,9 @@ SWITCH_STANDARD_APP(rayo_call_component_app)
 	command = iks_name(iks_child(iq));
 	component_interface = switch_core_hash_find(globals.call_component_interfaces, command);
 	if (component_interface && component_interface->start) {
-		component_interface->start(call, iq);
+		component_interface->start(call, session, iq);
 	} else {
-		rayo_call_component_send_iq_error(call, iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 	}
 
 done:
@@ -237,17 +216,18 @@ done:
 /**
  * Handle Rayo call Component request
  * @param call the Rayo call
+ * @param session the session
  * @param node the <iq> node
  * @return the response
  */
-static iks *on_rayo_call_component(struct rayo_call *call, iks *node)
+static iks *on_rayo_call_component(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
 	char *play = iks_string(NULL, node);
 	/* forward document to call thread by executing custom application */
-	if (!play || switch_core_session_execute_application_async(rayo_call_get_session(call), "rayo_call_component", play) != SWITCH_STATUS_SUCCESS) {
+	if (!play || switch_core_session_execute_application_async(session, "rayo_call_component", play) != SWITCH_STATUS_SUCCESS) {
 		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(rayo_call_get_session(call)), SWITCH_LOG_INFO, "Failed to execute rayo_call_component!\n");
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Failed to execute rayo_call_component!\n");
 	}
 	if (play) {
 		iks_free(play);
@@ -258,10 +238,11 @@ static iks *on_rayo_call_component(struct rayo_call *call, iks *node)
 /**
  * Handle <iq><stop> request
  * @param call the Rayo call
+ * @param session the session
  * @param node the <iq> node
  * @return the response
  */
-static iks *on_rayo_call_stop(struct rayo_call *call, iks *node)
+static iks *on_rayo_call_stop(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	char *component_jid = iks_find_attrib(node, "to");
 	iks *response = NULL;
@@ -276,7 +257,7 @@ static iks *on_rayo_call_stop(struct rayo_call *call, iks *node)
 	} else if (component->is_call) {
 		struct call_component_interface *component_interface = switch_core_hash_find(globals.call_component_interfaces, component->type);
 		if (component_interface && component_interface->stop) {
-			response = component_interface->stop(call, node);
+			response = component_interface->stop(call, session, node);
 		} else {
 			response = iks_new_iq_error(node, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED);
 		}
