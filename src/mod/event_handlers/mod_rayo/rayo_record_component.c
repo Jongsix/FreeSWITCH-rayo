@@ -140,7 +140,7 @@ static void on_record_stop_event(switch_event_t *event)
 		if (!zstr(size)) {
 			iks_insert_attrib(x, "size", size);
 		}
-		rayo_event_iks_send(event, presence);
+		rayo_iks_send(presence);
 		iks_delete(presence);
 		switch_safe_free(uri);
 	}
@@ -151,7 +151,7 @@ static void on_record_stop_event(switch_event_t *event)
  */
 static void start_call_record_component(struct rayo_call *call, iks *iq)
 {
-	switch_core_session_t *session = call->session;
+	switch_core_session_t *session = rayo_call_get_session(call);
 	struct record_attribs r_attribs;
 	iks *record = iks_child(iq);
 	switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -231,11 +231,11 @@ static void start_call_record_component(struct rayo_call *call, iks *iq)
 static iks *stop_call_record_component(struct rayo_call *call, iks *iq)
 {
 	const char *component_jid = iks_find_attrib(iq, "to");
-	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	switch_channel_t *channel = switch_core_session_get_channel(rayo_call_get_session(call));
 	const char *file = switch_channel_get_variable(channel, component_jid);
 
 	if (!zstr(file)) {
-		switch_ivr_stop_record_session(call->session, file);
+		switch_ivr_stop_record_session(rayo_call_get_session(call), file);
 	}
 
 	return iks_new_iq_result(iq);
