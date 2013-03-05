@@ -51,7 +51,7 @@ struct prompt_attribs {
  */
 static void start_call_prompt_component(struct rayo_call *call, iks *iq)
 {
-	switch_core_session_t *session = call->session;
+	switch_core_session_t *session = rayo_call_get_session(call);
 	struct prompt_attribs p_attribs;
 	iks *prompt = iks_child(iq);
 

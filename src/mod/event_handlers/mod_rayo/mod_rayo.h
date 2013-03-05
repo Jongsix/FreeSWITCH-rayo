@@ -39,37 +39,26 @@
 #define RAYO_NS RAYO_BASE RAYO_VERSION
 #define RAYO_CLIENT_NS RAYO_BASE "client:" RAYO_VERSION
 
-/**
- * A call controlled by Rayo
- */
-struct rayo_call {
-	/** The session this call belongs to */
-	switch_core_session_t *session;
-	/** The call JID */
-	char *jid;
-	/** Definitive controlling party JID */
-	char *dcp_jid;
-	/** Potential controlling parties */
-	switch_hash_t *pcps;
-	/** synchronizes access to this call */
-	switch_mutex_t *mutex;
-	/** next component ref */
-	int next_ref;
-	/** current idle start time */
-	switch_time_t idle_start_time;
-	/** true if joined */
-	int joined;
-};
+struct rayo_call;
+struct rayo_mixer;
 
-extern struct rayo_call *rayo_call_get(switch_core_session_t *session);
-extern struct rayo_call *rayo_call_locate(const char *uuid);
-extern void rayo_call_unlock(struct rayo_call *call);
+extern struct rayo_call *rayo_call_locate_unlocked(const char *call_uuid);
 
-typedef iks *(*rayo_command_handler)(const char *server_jid, struct rayo_call *, iks *);
-extern void rayo_command_handler_add(const char *name, rayo_command_handler fn);
+extern const char *rayo_call_get_jid(struct rayo_call *call);
+extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
+extern int rayo_call_is_joined(struct rayo_call *call);
+extern int rayo_call_seq_next(struct rayo_call *call);
+extern switch_core_session_t *rayo_call_get_session(struct rayo_call *call);
 
-extern void rayo_call_iks_send(struct rayo_call *call, iks *msg);
-extern void rayo_event_iks_send(switch_event_t *event, iks *msg);
+extern const char *rayo_mixer_get_jid(struct rayo_mixer *mixer);
+extern const char *rayo_mixer_get_name(struct rayo_mixer *mixer);
+
+typedef iks *(*rayo_call_command_handler)(struct rayo_call *, iks *);
+extern void rayo_call_command_handler_add(const char *name, rayo_call_command_handler fn);
+
+typedef iks *(*rayo_mixer_command_handler)(struct rayo_mixer *, iks *);
+extern void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler fn);
+
 extern void rayo_iks_send(iks *msg);
 
 #endif

@@ -41,12 +41,11 @@
  */
 static void send_input_component_dtmf_match(struct rayo_call *call, const char *jid, const char *digits)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(call->session);
 	iks *response = iks_new("presence");
 	iks *x;
 
 	iks_insert_attrib(response, "from", jid);
-	iks_insert_attrib(response, "to", switch_channel_get_variable(channel, "rayo_dcp_jid"));
+	iks_insert_attrib(response, "to", rayo_call_get_dcp_jid(call));
 	iks_insert_attrib(response, "type", "unavailable");
 	x = iks_insert(response, "complete");
 	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
@@ -56,7 +55,7 @@ static void send_input_component_dtmf_match(struct rayo_call *call, const char *
 	iks_insert_attrib(x, "confidence", "1.0");
 	x = iks_insert(x, "utterance");
 	iks_insert_cdata(x, digits, strlen(digits));
-	rayo_call_iks_send(call, response);
+	rayo_iks_send(response);
 	iks_delete(response);
 }
 
@@ -254,7 +253,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
  */
 static void start_call_input_component(struct rayo_call *call, iks *iq)
 {
-	switch_core_session_t *session = call->session;
+	switch_core_session_t *session = rayo_call_get_session(call);
 	struct input_attribs i_attribs;
 	iks *input = iks_child(iq);
 	iks *grammar = NULL;
@@ -333,7 +332,7 @@ static void start_call_input_component(struct rayo_call *call, iks *iq)
  */
 static iks *stop_call_input_component(struct rayo_call *call, iks *iq)
 {
-	switch_channel_t *channel = switch_core_session_get_channel(call->session);
+	switch_channel_t *channel = switch_core_session_get_channel(rayo_call_get_session(call));
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 	if (handler) {
 		handler->stop = 1;
