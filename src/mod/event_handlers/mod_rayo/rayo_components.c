@@ -58,7 +58,7 @@ void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *e
 struct rayo_component *rayo_call_component_create(const char *id, struct rayo_call *call, const char *type, const char *client_jid)
 {
 	const char *ref = switch_core_sprintf(rayo_call_get_pool(call), "%s-%d", type, rayo_call_seq_next(call));
-	const char *jid = switch_core_sprintf(rayo_call_get_pool(call), "%s/%s", rayo_call_get_uuid(call), ref);
+	const char *jid = switch_core_sprintf(rayo_call_get_pool(call), "%s/%s", rayo_call_get_jid(call), ref);
 	struct rayo_component *component;
 	if (zstr(id)) {
 		id = jid;

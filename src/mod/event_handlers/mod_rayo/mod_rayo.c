@@ -2033,11 +2033,13 @@ static int on_iq(void *user_data, ikspak *pak)
 	if (command) {
 		actor = rayo_actor_locate(to);
 		if (!actor) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to locate %s\n", to);
 			goto done;
 		}
 
 		handler = rayo_command_handler_find(actor, iq_type, iks_name(command), iks_find_attrib(command, "xmlns"));
 		if (!handler) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Handler not found for %s, %s\n", to, iks_name(command));
 			goto done;
 		}
 
@@ -2056,6 +2058,7 @@ static int on_iq(void *user_data, ikspak *pak)
 			switch_core_session_t *session = switch_core_session_locate(rayo_call_get_uuid(call));
 			if (!session) {
 				/* trigger not found response */
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Session not found for %s\n", to);
 				rayo_actor_unlock(actor);
 				actor = NULL;
 				goto done;
