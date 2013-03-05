@@ -142,7 +142,7 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 
 	/* validate record attributes */
 	memset(&r_attribs, 0, sizeof(r_attribs));
-	if (!iks_attrib_parse(session, record, record_attribs_def, (struct iks_attribs *)&r_attribs)) {
+	if (!iks_attrib_parse(switch_core_session_get_uuid(session), record, record_attribs_def, (struct iks_attribs *)&r_attribs)) {
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}

@@ -249,20 +249,20 @@ static int get_attrib(const struct iks_attrib_definition *attrib_def, struct iks
 
 /**
  * Get attribs from XML node
- * @param session the session getting the attribs
+ * @param log_id ID for error logging
  * @param node the XML node to search
  * @param attrib_def the attributes to get
  * @param attribs struct to fill
  * @return SWITCH_TRUE if the attribs are valid
  */
-int iks_attrib_parse(switch_core_session_t *session, iks* node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs)
+int iks_attrib_parse(const char *log_id, iks* node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs)
 {
 	struct iks_attrib *attrib = attribs->attrib;
 	int success = SWITCH_TRUE;
 	for (; success && attrib_def->name; attrib_def++) {
 		success &= get_attrib(attrib_def, attrib, node);
 		if (!success) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", iks_name(node), attrib_def->name, attrib->v.s, attrib->test);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(log_id), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", iks_name(node), attrib_def->name, attrib->v.s, attrib->test);
 		}
 		attrib++;
 	}
