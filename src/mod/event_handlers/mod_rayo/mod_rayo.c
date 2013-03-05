@@ -271,7 +271,7 @@ struct rayo_component {
 /**
  * Convert Rayo state to string
  * @param state the Rayo state
- * @return the string value of type or "UNKNOWN"
+ * @return the string value of state or "UNKNOWN"
  */
 static const char *rayo_session_state_to_string(enum rayo_session_state state)
 {
@@ -286,6 +286,22 @@ static const char *rayo_session_state_to_string(enum rayo_session_state state)
 		case SS_DESTROY: return "DESTROY";
 		default: return "UNKNOWN";
 	}
+}
+
+/**
+ * Convert Rayo actor type to string
+ * @param type the Rayo actor type
+ * @return the string value of type or "UNKNOWN"
+ */
+static const char *rayo_actor_type_to_string(enum rayo_actor_type type)
+{
+	switch(type) {
+		case RAT_CALL: return "CALL";
+		case RAT_COMPONENT: return "COMPONENT";
+		case RAT_MIXER: return "MIXER";
+		case RAT_SERVER: return "SERVER";
+	}
+	return "UNKNOWN";
 }
 
 /**
@@ -3257,11 +3273,58 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 	return status;
 }
 
+static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *stream)
+{
+	stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, actor->jid);
+}
+
+static void rayo_session_dump(struct rayo_session *rsession, switch_stream_handle_t *stream)
+{
+	stream->write_function(stream, "JID='%s',STATE='%s'", rsession->client_jid_full, rayo_session_state_to_string(rsession->state));
+}
+
+SWITCH_STANDARD_API(rayo_api)
+{
+	switch_hash_index_t *hi;
+
+	stream->write_function(stream, "CLIENTS:\n");
+	switch_mutex_lock(globals.clients_mutex);
+	for (hi = switch_core_hash_first(globals.clients); hi; hi = switch_core_hash_next(hi)) {
+		struct rayo_session *rsession = NULL;
+		const void *key;
+		void *val;
+		switch_core_hash_this(hi, &key, NULL, &val);
+		rsession = (struct rayo_session *)val;
+		switch_assert(rsession);
+		stream->write_function(stream, "\t");
+		rayo_session_dump(rsession, stream);
+		stream->write_function(stream, "\n");
+	}
+	switch_mutex_unlock(globals.clients_mutex);
+
+	stream->write_function(stream, "ACTORS:\n");
+	switch_mutex_lock(globals.actors_mutex);
+	for (hi = switch_core_hash_first(globals.actors); hi; hi = switch_core_hash_next(hi)) {
+		struct rayo_actor *actor = NULL;
+		const void *key;
+		void *val;
+		switch_core_hash_this(hi, &key, NULL, &val);
+		actor = (struct rayo_actor *)val;
+		switch_assert(actor);
+		stream->write_function(stream, "\t");
+		rayo_actor_dump(actor, stream);
+		stream->write_function(stream, "\n");
+	}
+	switch_mutex_unlock(globals.actors_mutex);
+	return SWITCH_STATUS_SUCCESS;
+}
+
 /**
  * Load module
  */
 SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 {
+	switch_api_interface_t *api_interface;
 	switch_application_interface_t *app_interface;
 
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
@@ -3308,6 +3371,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, "conference::maintenance", route_mixer_event, NULL);
 
 	SWITCH_ADD_APP(app_interface, "rayo", "Offer call control to Rayo client(s)", "", rayo_app, RAYO_USAGE, SAF_SUPPORT_NOMEDIA);
+	SWITCH_ADD_API(api_interface, "rayo", "Query rayo status", rayo_api, "show");
 	
 	/* set up rayo components */
 	rayo_components_load(module_interface, pool);
