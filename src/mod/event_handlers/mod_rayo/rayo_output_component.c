@@ -349,6 +349,7 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 {
 	switch_file_interface_t *file_interface;
 	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_NS":stop", stop_output_component); /* TODO remove when punchblock is updated */
 	rayo_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
 
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);

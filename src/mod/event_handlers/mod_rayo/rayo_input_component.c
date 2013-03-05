@@ -33,6 +33,19 @@
 
 #define MAX_DTMF 1024
 
+/* not yet supported by adhearsion */
+//#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
+//#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
+#define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
+
+/* this is not part of rayo spec */
+#define INPUT_NOINPUT "noinput", RAYO_INPUT_COMPLETE_NS
+#define INPUT_SUCCESS "success", RAYO_INPUT_COMPLETE_NS
+
+#define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
+
 /**
  * Send DTMF match to client
  * @param component the component
@@ -40,22 +53,14 @@
  */
 static void send_input_component_dtmf_match(struct rayo_component *component, const char *digits)
 {
-	iks *response = iks_new("presence");
-	iks *x;
-
-	iks_insert_attrib(response, "from", rayo_component_get_jid(component));
-	iks_insert_attrib(response, "to", rayo_component_get_client_jid(component));
-	iks_insert_attrib(response, "type", "unavailable");
-	x = iks_insert(response, "complete");
-	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
-	x = iks_insert(x, "success"); /* TODO rayo spec says this should be "match" */
-	iks_insert_attrib(x, "xmlns", RAYO_INPUT_COMPLETE_NS);
+	iks *presence = rayo_component_create_complete_event(component, INPUT_SUCCESS);
+	iks *x = iks_find(presence, "complete");
+	x = iks_find(x, "success");
 	iks_insert_attrib(x, "mode", "dtmf");
 	iks_insert_attrib(x, "confidence", "1.0");
 	x = iks_insert(x, "utterance");
 	iks_insert_cdata(x, digits, strlen(digits));
-	rayo_iks_send(response);
-	iks_delete(response);
+	rayo_component_send_complete_event(component, presence);
 }
 
 static ATTRIB_RULE(input_mode)
@@ -97,18 +102,6 @@ struct input_attribs {
 	struct iks_attrib min_confidence;
 	struct iks_attrib max_silence;
 };
-
-/* not yet supported by adhearsion */
-//#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
-#define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
-
-/* this is not part of rayo spec */
-#define INPUT_NOINPUT "noinput", RAYO_INPUT_COMPLETE_NS
-
-#define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
 
 /**
  * Current digit collection state
@@ -193,7 +186,8 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 			switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
 			break;
 		}
-		case SWITCH_ABC_TYPE_READ_REPLACE:
+		case SWITCH_ABC_TYPE_READ_REPLACE: {
+			switch_frame_t *rframe = switch_core_media_bug_get_read_replace_frame(bug);
 			/* check for timeout */
 			if (!handler->done) {
 				int elapsed_ms = (switch_micro_time_now() - handler->last_digit_time) / 1000;
@@ -207,7 +201,9 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 					rayo_component_send_complete(handler->component, INPUT_NOINPUT);
 				}
 			}
-			return SWITCH_FALSE;
+			switch_core_media_bug_set_read_replace_frame(bug, rframe);
+			break;
+		}
 		case SWITCH_ABC_TYPE_CLOSE:
 			/* check for hangup */
 			if (handler->done) {
@@ -332,6 +328,7 @@ static iks *stop_input_component(struct rayo_component *component, iks *iq)
 switch_status_t rayo_input_component_load(void)
 {
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
+	rayo_component_command_handler_add("input", "set:"RAYO_NS":stop", stop_input_component); /* TODO remove when punchblock is updated */
 	rayo_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
