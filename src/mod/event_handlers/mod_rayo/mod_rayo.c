@@ -725,6 +725,7 @@ struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer)
 	return mixer->actor;
 }
 
+#define rayo_actor_create(type, subtype, id, jid, data, size) _rayo_actor_create(type, subtype, id, jid, data, size, __FILE__, __LINE__)
 /**
  * Create a rayo actor
  * @param type of actor (MIXER, CALL, SERVER, COMPONENT)
@@ -734,7 +735,7 @@ struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer)
  * @param data to allocate
  * @param size of data to allocate
  */
-struct rayo_actor *rayo_actor_create(enum rayo_actor_type type, const char *subtype, const char *id, const char *jid, void **data, size_t size)
+static struct rayo_actor *_rayo_actor_create(enum rayo_actor_type type, const char *subtype, const char *id, const char *jid, void **data, size_t size, const char *file, int line)
 {
 	switch_memory_pool_t *pool;
 	struct rayo_actor *actor = NULL;
@@ -764,6 +765,8 @@ struct rayo_actor *rayo_actor_create(enum rayo_actor_type type, const char *subt
 	switch_core_hash_insert(globals.actors, actor->jid, actor);
 	switch_mutex_unlock(globals.actors_mutex);
 	
+	switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Create %s\n", actor->jid);
+	
 	return actor;
 }
 
@@ -791,19 +794,20 @@ switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor)
 	return actor->pool;
 }
 
+#define rayo_call_create(session) _rayo_call_create(session, __FILE__, __LINE__)
 /**
  * Create Rayo call
  * @param session
  * @return the call
  */
-static struct rayo_call *rayo_call_create(switch_core_session_t *session)
+static struct rayo_call *_rayo_call_create(switch_core_session_t *session, const char *file, int line)
 {
 	const char *uuid = switch_core_session_get_uuid(session);
 	const char *call_jid = switch_core_session_sprintf(session, "%s@%s", uuid, globals.domain);
 	struct rayo_actor *actor = NULL;
 	struct rayo_call *call = NULL;
 
-	actor = rayo_actor_create(RAT_CALL, "", uuid, call_jid, (void **)&call, sizeof(*call));
+	actor = _rayo_actor_create(RAT_CALL, "", uuid, call_jid, (void **)&call, sizeof(*call), file, line);
 
 	/* create call */
 	call->dcp_jid = "";
@@ -824,18 +828,19 @@ switch_memory_pool_t *rayo_call_get_pool(struct rayo_call *call)
 	return call->actor->pool;
 }
 
+#define rayo_mixer_create(name) _rayo_mixer_create(name, __FILE__, __LINE__)
 /**
  * Create Rayo mixer
  * @param name of this mixer
  * @return the mixer
  */
-static struct rayo_mixer *rayo_mixer_create(const char *name)
+static struct rayo_mixer *_rayo_mixer_create(const char *name, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
 	struct rayo_mixer *mixer = NULL;
 	char *mixer_jid = switch_mprintf("%s@%s", name, globals.domain);
 
-	actor = rayo_actor_create(RAT_MIXER, "", name, mixer_jid, (void **)&mixer, sizeof(*mixer));
+	actor = _rayo_actor_create(RAT_MIXER, "", name, mixer_jid, (void **)&mixer, sizeof(*mixer), file, line);
 	switch_core_hash_init(&mixer->members, actor->pool);
 	switch_core_hash_init(&mixer->subscribers, actor->pool);
 
@@ -881,12 +886,12 @@ const char *rayo_mixer_get_name(struct rayo_mixer *mixer)
  * @param client_jid the client that created this component
  * @return the component
  */
-struct rayo_component *rayo_component_create(const char *type, const char *id, const char *jid, const char *ref, struct rayo_actor *parent, const char *client_jid)
+struct rayo_component *_rayo_component_create(const char *type, const char *id, const char *jid, const char *ref, struct rayo_actor *parent, const char *client_jid, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
 	struct rayo_component *component = NULL;
 
-	actor = rayo_actor_create(RAT_COMPONENT, type, id, jid, (void **)&component, sizeof(*component));
+	actor = _rayo_actor_create(RAT_COMPONENT, type, id, jid, (void **)&component, sizeof(*component), file, line);
 	component->actor = actor;
 	component->client_jid = switch_core_strdup(actor->pool, client_jid);
 	component->parent_type = parent->type;
@@ -3168,6 +3173,12 @@ SWITCH_STANDARD_APP(rayo_app)
 			iks_delete(offer);
 		}
 		switch_mutex_unlock(globals.clients_mutex);
+
+		/* nobody to offer to */
+		if (!ok) {
+			rayo_call_destroy(call);
+			switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
+		}
 	}
 
 done:
@@ -3182,8 +3193,6 @@ done:
 			switch_core_session_execute_application(session, app, app_args);
 		}
 		switch_ivr_park(session, NULL);
-	} else {
-		switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
 	}
 
 	rayo_call_unlock(call);
