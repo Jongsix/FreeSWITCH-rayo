@@ -174,6 +174,8 @@ static struct {
 	switch_hash_t *command_handlers;
 	/** Active XMPP actors mapped by JID */
 	switch_hash_t *actors;
+	/** XMPP actors pending destruction */
+	switch_hash_t *destroy_actors;
 	/** Active XMPP actors mapped by internal ID */
 	switch_hash_t *actors_by_id;
 	/** synchronizes access to actors */
@@ -509,22 +511,25 @@ static struct rayo_actor *_rayo_actor_locate_by_id(const char *id, const char *f
 	return actor;
 }
 
+#define rayo_actor_destroy(actor) _rayo_actor_destroy(actor, __FILE__, __LINE__)
 /**
  * Destroy a rayo actor
  */
-static void rayo_actor_destroy(struct rayo_actor *actor)
+static void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int line)
 {
 	switch_memory_pool_t *pool = actor->pool;
 	switch_mutex_lock(globals.actors_mutex);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroy %s requested: ref_count = %i\n", actor->jid, actor->ref_count);
+	switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroy %s requested: ref_count = %i\n", actor->jid, actor->ref_count);
 	switch_core_hash_delete(globals.actors, actor->jid);
 	if (!zstr(actor->id)) {
 		switch_core_hash_delete(globals.actors_by_id, actor->id);
 	}
 	actor->destroy = 1;
 	if (actor->ref_count <= 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroying %s\n", actor->jid);
+		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroying %s\n", actor->jid);
 		switch_core_destroy_memory_pool(&pool);
+	} else {
+		switch_core_hash_insert(globals.destroy_actors, actor->jid, actor);
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 }
@@ -540,7 +545,7 @@ static void _rayo_actor_unlock(struct rayo_actor *actor, const char *file, int l
 		actor->ref_count--;
 		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Unlock %s: ref count = %i\n", actor->jid, actor->ref_count);
 		if (actor->ref_count <= 0 && actor->destroy) {
-			rayo_actor_destroy(actor);
+			_rayo_actor_destroy(actor, file, line);
 		}
 		switch_mutex_unlock(globals.actors_mutex);
 	}
@@ -569,6 +574,8 @@ static struct rayo_call *_rayo_call_locate(const char *call_uuid, const char *fi
 	struct rayo_actor *actor = _rayo_actor_locate_by_id(call_uuid, file, line);
 	if (actor && actor->type == RAT_CALL) {
 		return (struct rayo_call *)actor->data;
+	} else if (actor) {
+		rayo_actor_unlock(actor);
 	}
 	return NULL;
 }
@@ -593,13 +600,14 @@ static void _rayo_call_unlock(struct rayo_call *call, const char *file, int line
 	}
 }
 
+#define rayo_call_destroy(call) _rayo_call_destroy(call, __FILE__, __LINE__)
 /**
  * Destroy Rayo call.
  */
-static void rayo_call_destroy(struct rayo_call *call)
+static void _rayo_call_destroy(struct rayo_call *call, const char *file, int line)
 {
 	if (call) {
-		rayo_actor_destroy(call->actor);
+		_rayo_actor_destroy(call->actor, file, line);
 	}
 }
 
@@ -659,6 +667,8 @@ struct rayo_mixer *_rayo_mixer_locate(const char *mixer_name, const char *file, 
 	struct rayo_actor *actor = _rayo_actor_locate_by_id(mixer_name, file, line);
 	if (actor && actor->type == RAT_MIXER) {
 		return (struct rayo_mixer *)actor->data;
+	} else if (actor) {
+		rayo_actor_unlock(actor);
 	}
 	return NULL;
 }
@@ -674,13 +684,14 @@ void _rayo_mixer_unlock(struct rayo_mixer *mixer, const char *file, int line)
 	}
 }
 
+#define rayo_mixer_destroy(mixer) _rayo_mixer_destroy(mixer, __FILE__, __LINE__)
 /**
  * Destroy Rayo mixer.
  */
-void rayo_mixer_destroy(struct rayo_mixer *mixer)
+static void _rayo_mixer_destroy(struct rayo_mixer *mixer, const char *file, int line)
 {
 	if (mixer) {
-		rayo_actor_destroy(mixer->actor);
+		_rayo_actor_destroy(mixer->actor, file, line);
 	}
 }
 
@@ -885,10 +896,10 @@ struct rayo_component *rayo_component_create(const char *type, const char *id, c
 /**
  * Destroy Rayo component
  */
-void rayo_component_destroy(struct rayo_component *component)
+void _rayo_component_destroy(struct rayo_component *component, const char *file, int line)
 {
 	if (component) {
-		rayo_actor_destroy(component->actor);
+		_rayo_actor_destroy(component->actor, file, line);
 	}
 }
 
@@ -975,6 +986,8 @@ struct rayo_component *_rayo_component_locate(const char *id, const char *file, 
 	struct rayo_actor *actor = _rayo_actor_locate_by_id(id, file, line);
 	if (actor && actor->type == RAT_COMPONENT) {
 		return (struct rayo_component *)actor->data;
+	} else if (actor) {
+		rayo_actor_unlock(actor);
 	}
 	return NULL;
 }
@@ -3297,7 +3310,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 
 static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *stream)
 {
-	stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, actor->jid);
+	stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',REFS=%i", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, actor->jid, actor->ref_count);
 }
 
 static void rayo_session_dump(struct rayo_session *rsession, switch_stream_handle_t *stream)
@@ -3324,7 +3337,7 @@ SWITCH_STANDARD_API(rayo_api)
 	}
 	switch_mutex_unlock(globals.clients_mutex);
 
-	stream->write_function(stream, "ACTORS:\n");
+	stream->write_function(stream, "\nACTORS:\n");
 	switch_mutex_lock(globals.actors_mutex);
 	for (hi = switch_core_hash_first(globals.actors); hi; hi = switch_core_hash_next(hi)) {
 		struct rayo_actor *actor = NULL;
@@ -3337,7 +3350,21 @@ SWITCH_STANDARD_API(rayo_api)
 		rayo_actor_dump(actor, stream);
 		stream->write_function(stream, "\n");
 	}
+
+	stream->write_function(stream, "\nDEAD ACTORS:\n");
+	for (hi = switch_core_hash_first(globals.destroy_actors); hi; hi = switch_core_hash_next(hi)) {
+		struct rayo_actor *actor = NULL;
+		const void *key;
+		void *val;
+		switch_core_hash_this(hi, &key, NULL, &val);
+		actor = (struct rayo_actor *)val;
+		switch_assert(actor);
+		stream->write_function(stream, "\t");
+		rayo_actor_dump(actor, stream);
+		stream->write_function(stream, "\n");
+	}
 	switch_mutex_unlock(globals.actors_mutex);
+	
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -3361,6 +3388,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.clients, pool);
 	switch_mutex_init(&globals.clients_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	switch_core_hash_init(&globals.actors, pool);
+	switch_core_hash_init(&globals.destroy_actors, pool);
 	switch_core_hash_init(&globals.actors_by_id, pool);
 	switch_mutex_init(&globals.actors_mutex, SWITCH_MUTEX_NESTED, pool);
 	switch_core_hash_init(&globals.dial_gateways, pool);

@@ -38,7 +38,7 @@ struct output_component {
 	int stop;
 };
 
-#define OUTPUT_COMPONENT(x) ((struct output_component *)(x))
+#define OUTPUT_COMPONENT(x) ((struct output_component *)(rayo_component_get_data(x)))
 
 /**
  * <output> component validation
@@ -120,6 +120,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	switch_core_session_execute_application_async(session, "playback", stream.data);
 	iks_free(document_str);
 	switch_safe_free(stream.data);
+	rayo_component_unlock(component);
 	return NULL;
 }
 
@@ -226,6 +227,7 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
  */
 static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
 	OUTPUT_COMPONENT(component)->stop = 1;
 	return iks_new_iq_result(iq);
 }
@@ -257,11 +259,13 @@ struct rayo_file_context {
 static switch_status_t next_file(switch_file_handle_t *handle)
 {
 	struct rayo_file_context *context = handle->private_info;
+	struct output_component *output = context->component ? OUTPUT_COMPONENT(context->component) : NULL;
 	char *file;
 
   top:
 
-	if (OUTPUT_COMPONENT(context->component)->stop) {
+	if (output && output->stop) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stop requested\n", rayo_component_get_jid(context->component));
 		return SWITCH_STATUS_FALSE;
 	}
 
@@ -314,7 +318,6 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		context->ssml = switch_mprintf("ssml://%s", file);
 		iks_free(file);
 	}
-
 	if (switch_core_file_open(&context->fh, context->ssml, handle->channels, handle->samplerate, handle->flags, NULL) != SWITCH_STATUS_SUCCESS) {
 		goto top;
 	}
@@ -352,9 +355,6 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	val = switch_event_get_header(handle->params, "rayo_id");
 	if (!zstr(val)) {
 		context->component = rayo_component_locate(val);
-		if (context->component) {
-			rayo_component_unlock(context->component);
-		}
 	}
 
 	val = switch_event_get_header(handle->params, "repeat_interval");
@@ -371,9 +371,18 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	if (iks_parse(parser, path, 0, 1) == IKS_OK) {
 		handle->private_info = context;
 		status = next_file(handle);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Parse error! %s\n", path);
 	}
 
 	iks_parser_delete(parser);
+
+	if (status != SWITCH_STATUS_SUCCESS && context->component) {
+		/* TODO send error */
+		rayo_component_unlock(context->component);
+		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
+	}
+
 	return status;
 }
 
@@ -394,10 +403,9 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 	/* notify of component completion */
 	if (context->component) {
 		/* send completion and destroy */
+		rayo_component_unlock(context->component);
 		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
 		/* TODO hangup / timed out */
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing component ID\n");
 	}
 
 	/* cleanup internals */

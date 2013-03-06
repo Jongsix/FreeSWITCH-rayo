@@ -74,7 +74,8 @@ extern struct rayo_component *_rayo_component_locate(const char *id, const char 
 #define rayo_component_unlock(component) _rayo_component_unlock(component, __FILE__, __LINE__)
 extern void _rayo_component_unlock(struct rayo_component *component, const char *file, int line);
 extern struct rayo_component *rayo_component_create(const char *type, const char *jid, const char *id, const char *ref, struct rayo_actor *parent, const char *client_jid);
-extern void rayo_component_destroy(struct rayo_component *component);
+#define rayo_component_destroy(component) _rayo_component_destroy(component, __FILE__, __LINE__)
+extern void _rayo_component_destroy(struct rayo_component *component, const char *file, int line);
 extern const char *rayo_component_get_id(struct rayo_component *component);
 extern const char *rayo_component_get_ref(struct rayo_component *component);
 extern const char *rayo_component_get_jid(struct rayo_component *component);
