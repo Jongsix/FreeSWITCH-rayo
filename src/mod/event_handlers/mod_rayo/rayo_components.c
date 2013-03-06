@@ -79,7 +79,11 @@ struct rayo_component *rayo_mixer_component_create(const char *id, struct rayo_m
 {
 	const char *ref = switch_core_sprintf(rayo_mixer_get_pool(mixer), "%s-%d", type, rayo_mixer_seq_next(mixer));
 	const char *jid = switch_core_sprintf(rayo_mixer_get_pool(mixer), "%s/%s", rayo_mixer_get_name(mixer), ref);
-	struct rayo_component *component = rayo_component_create(type, id, jid, ref, rayo_mixer_get_actor(mixer), client_jid);
+	struct rayo_component *component;
+	if (zstr(id)) {
+		id = jid;
+	}
+	component = rayo_component_create(type, id, jid, ref, rayo_mixer_get_actor(mixer), client_jid);
 	return component;
 }
 
@@ -127,6 +131,7 @@ void rayo_component_send_complete_event(struct rayo_component *component, iks *r
 {
 	rayo_iks_send(response);
 	iks_delete(response);
+	rayo_component_unlock(component);
 	rayo_component_destroy(component);
 }
 

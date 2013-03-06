@@ -297,11 +297,11 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	handler->component = rayo_call_component_create(NULL, call, "input", iks_find_attrib(iq, "from"));
 	rayo_component_set_data(handler->component, handler);
 
-	/* start input detection */
-	switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
-
 	/* acknowledge command */
 	rayo_component_send_start(handler->component, iq);
+	
+	/* start input detection */
+	switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
 	
 	return NULL;
 }
