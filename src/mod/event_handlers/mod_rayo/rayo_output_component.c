@@ -117,7 +117,13 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	document_str = iks_string(NULL, output);
 	stream.write_function(&stream, "}rayo://%s", document_str);
 
-	switch_core_session_execute_application_async(session, "playback", stream.data);
+	if (rayo_call_is_joined(call) /* || rayo_call_is_playing(call) */) {
+		/* mixed */
+		switch_ivr_displace_session(session, stream.data, 0, "m");
+	} else {
+		/* normal play */
+		switch_core_session_execute_application_async(session, "playback", stream.data);
+	}
 	iks_free(document_str);
 	switch_safe_free(stream.data);
 	rayo_component_unlock(component);

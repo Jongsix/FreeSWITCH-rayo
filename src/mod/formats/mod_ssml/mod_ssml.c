@@ -768,7 +768,7 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 	rlen = *len * 2; /* rlen (bytes) = len (samples) * 2 */
 
 	if (context->lead) {
-		memset(data, 0, *len);
+		memset(data, 255, *len);
 		context->lead--;
 	} else if (!context->done) {
 		context->flags = SWITCH_SPEECH_FLAG_BLOCKING;
