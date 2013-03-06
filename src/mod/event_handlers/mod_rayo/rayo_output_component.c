@@ -379,7 +379,6 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 
 	if (status != SWITCH_STATUS_SUCCESS && context->component) {
 		/* TODO send error */
-		rayo_component_unlock(context->component);
 		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
 	}
 
@@ -403,7 +402,6 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 	/* notify of component completion */
 	if (context->component) {
 		/* send completion and destroy */
-		rayo_component_unlock(context->component);
 		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
 		/* TODO hangup / timed out */
 	}

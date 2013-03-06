@@ -519,14 +519,17 @@ static void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int 
 {
 	switch_memory_pool_t *pool = actor->pool;
 	switch_mutex_lock(globals.actors_mutex);
-	switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroy %s requested: ref_count = %i\n", actor->jid, actor->ref_count);
-	switch_core_hash_delete(globals.actors, actor->jid);
-	if (!zstr(actor->id)) {
-		switch_core_hash_delete(globals.actors_by_id, actor->id);
+	if (!actor->destroy) {
+		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroy %s requested: ref_count = %i\n", actor->jid, actor->ref_count);
+		switch_core_hash_delete(globals.actors, actor->jid);
+		if (!zstr(actor->id)) {
+			switch_core_hash_delete(globals.actors_by_id, actor->id);
+		}
 	}
 	actor->destroy = 1;
 	if (actor->ref_count <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroying %s\n", actor->jid);
+		switch_core_hash_delete(globals.destroy_actors, actor->jid);
 		switch_core_destroy_memory_pool(&pool);
 	} else {
 		switch_core_hash_insert(globals.destroy_actors, actor->jid, actor);
