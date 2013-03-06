@@ -1097,7 +1097,6 @@ static int rayo_client_has_call_control(struct rayo_session *rsession, struct ra
 static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
 {
 	iks *response = NULL;
-	char *from = iks_find_attrib(node, "from");
 	char *to = iks_find_attrib(node, "to");
 	int bad = zstr(iks_find_attrib(node, "id"));
 
@@ -1105,19 +1104,12 @@ static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
 		to = rsession->server_jid;
 		iks_insert_attrib(node, "to", to);
 	}
-	
-	if (zstr(from)) {
-		from = rsession->client_jid_full;
-		iks_insert_attrib(node, "from", from);
-	}
 
 	/* check if AUTHENTICATED and to= server JID */
 	if (bad) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
-	} else if (strcmp(rsession->server_jid, to)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
 	}
 
 	if (response) {
@@ -1139,26 +1131,12 @@ static int rayo_server_command_ok(struct rayo_session *rsession, iks *node)
 static int rayo_call_command_ok(struct rayo_session *rsession, struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
-	char *from = iks_find_attrib(node, "from");
-	char *to = iks_find_attrib(node, "to");
-	int bad = zstr(to) || zstr(iks_find_attrib(node, "id"));
-
-	/* set if missing in request */
-	if (zstr(to)) {
-		to = rsession->server_jid;
-		iks_insert_attrib(node, "to", to);
-	}
-	if (zstr(from)) {
-		from = rsession->client_jid_full;
-		iks_insert_attrib(node, "from", from);
-	}
+	int bad = zstr(iks_find_attrib(node, "id"));
 
 	if (bad) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rsession->state == SS_NEW) {
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
-	} else if (!call) {
-		response = iks_new_iq_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
 	} else if (rsession->state != SS_ONLINE) {
 		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 	} else if (!rayo_client_has_call_control(rsession, call, session)) {
@@ -1170,6 +1148,38 @@ static int rayo_call_command_ok(struct rayo_session *rsession, struct rayo_call 
 		iks_delete(response);
 		return 0;
 	}
+	return 1;
+}
+
+/**
+ * Check Rayo component command for errors.
+ * @param rsession the session
+ * @param component the component
+ * @param node the <iq> node
+ * @return 0 if error
+ */
+static int rayo_component_command_ok(struct rayo_session *rsession, struct rayo_component *component, iks *node)
+{
+	iks *response = NULL;
+	char *from = iks_find_attrib(node, "from");
+	int bad = zstr(iks_find_attrib(node, "id"));
+
+	if (bad) {
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+	} else if (rsession->state == SS_NEW) {
+		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
+	} else if (rsession->state != SS_ONLINE) {
+		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+	} else if (strcmp(component->client_jid, from)) {
+		/* does not have control of this component */
+		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+	}
+	if (response) {
+		iks_send(rsession->parser, response);
+		iks_delete(response);
+		return 0;
+	}
+
 	return 1;
 }
 
@@ -2061,8 +2071,15 @@ static int on_iq(void *user_data, ikspak *pak)
 	iks *command = iks_child(iq);
 	const char *iq_type = iks_find_attrib_soft(iq, "type");
 	const char *to = iks_find_attrib_soft(iq, "to");
+	const char *from = iks_find_attrib_soft(iq, "from");
+
 	if (zstr(to)) {
 		to = rsession->server_jid;
+	}
+
+	/* assume client JID */
+	if (zstr(from)) {
+		iks_insert_attrib(iq, "from", rsession->client_jid_full);
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, iq, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
@@ -2113,16 +2130,20 @@ static int on_iq(void *user_data, ikspak *pak)
 		}
 		case RAT_COMPONENT: {
 			struct rayo_component *component = (struct rayo_component *)actor->data;
-			iks *response = handler->fn.component(component, iq);
-			if (response) {
-				iks_send(rsession->parser, response);
-				iks_delete(response);
+			if (rayo_component_command_ok(rsession, component, iq)) {
+				iks *response = handler->fn.component(component, iq);
+				if (response) {
+					iks_send(rsession->parser, response);
+					iks_delete(response);
+				}
 			}
+			break;
 		}
 		case RAT_SERVER:
 			if (rayo_server_command_ok(rsession, iq)) {
 				handler->fn.server(rsession, iq);
 			}
+			break;
 		}
 	}
 
