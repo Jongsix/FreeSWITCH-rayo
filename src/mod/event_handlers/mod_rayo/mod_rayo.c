@@ -816,6 +816,7 @@ static struct rayo_call *_rayo_call_create(switch_core_session_t *session, const
 	call->actor = actor;
 	switch_core_hash_init(&call->pcps, actor->pool);
 	switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_call_jid", call_jid);
+	switch_channel_set_private(switch_core_session_get_channel(session), "rayo_call_private", call);
 	return call;
 }
 
@@ -2528,8 +2529,9 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 		}
 
 		iks_delete(revent);
-		rayo_call_unlock(call);
+		rayo_call_unlock(call); /* decrement ref from creation */
 		rayo_call_destroy(call);
+		rayo_call_unlock(call); /* decrement this ref */
 	}
 }
 
@@ -3101,8 +3103,7 @@ SWITCH_STANDARD_APP(rayo_app)
 {
 	int ok = 0;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	const char *uuid = switch_core_session_get_uuid(session);
-	struct rayo_call *call = rayo_call_locate(uuid);
+	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, "rayo_call_private");
 	const char *app = ""; /* optional app to execute */
 	const char *app_args = ""; /* app args */
 
@@ -3123,13 +3124,12 @@ SWITCH_STANDARD_APP(rayo_app)
 				goto done;
 			}
 		}
-
 		if (!call) {
 			int i;
 			/* wait for call to be created from ORIGINATION event */
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Don't have rayo call yet\n");
 			for (i = 0; i < 50 && !call; i++) {
-				call = rayo_call_locate(uuid);
+				call = (struct rayo_call *)switch_channel_get_private(channel, "rayo_call_private");
 				switch_yield(20000);
 			}
 			switch_channel_audio_sync(channel);
@@ -3187,15 +3187,12 @@ done:
 		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
 		switch_channel_set_variable(channel, "transfer_after_bridge", "false");
 		switch_channel_set_variable(channel, "park_after_bridge", "true");
-		switch_channel_set_private(channel, "rayo_call_private", call);
 		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
 		if (!zstr(app)) {
 			switch_core_session_execute_application(session, app, app_args);
 		}
 		switch_ivr_park(session, NULL);
 	}
-
-	rayo_call_unlock(call);
 }
 
 /**
