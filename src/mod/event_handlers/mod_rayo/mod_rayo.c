@@ -844,7 +844,7 @@ static struct rayo_mixer *_rayo_mixer_create(const char *name, const char *file,
 	actor = _rayo_actor_create(RAT_MIXER, "", name, mixer_jid, (void **)&mixer, sizeof(*mixer), file, line);
 	switch_core_hash_init(&mixer->members, actor->pool);
 	switch_core_hash_init(&mixer->subscribers, actor->pool);
-
+	mixer->actor = actor;
 	switch_safe_free(mixer_jid);
 
 	return mixer;
