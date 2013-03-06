@@ -69,8 +69,10 @@ extern int rayo_mixer_seq_next(struct rayo_mixer *mixer);
 extern switch_memory_pool_t *rayo_mixer_get_pool(struct rayo_mixer *mixer);
 extern struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer);
 
-extern struct rayo_component *rayo_component_locate(const char *id);
-extern void rayo_component_unlock(struct rayo_component *component);
+#define rayo_component_locate(id) _rayo_component_locate(id, __FILE__, __LINE__)
+extern struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line);
+#define rayo_component_unlock(component) _rayo_component_unlock(component, __FILE__, __LINE__)
+extern void _rayo_component_unlock(struct rayo_component *component, const char *file, int line);
 extern struct rayo_component *rayo_component_create(const char *type, const char *jid, const char *id, const char *ref, struct rayo_actor *parent, const char *client_jid);
 extern void rayo_component_destroy(struct rayo_component *component);
 extern const char *rayo_component_get_id(struct rayo_component *component);

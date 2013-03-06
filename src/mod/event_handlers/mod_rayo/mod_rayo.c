@@ -71,6 +71,10 @@ struct rayo_actor {
 	int seq;
 	/** Actor data */
 	void *data;
+	/** number of users of this actor */
+	int ref_count;
+	/** destroy flag */
+	int destroy;
 };
 
 typedef void (*rayo_server_command_handler)(struct rayo_session *, iks *);
@@ -392,7 +396,7 @@ static void rayo_server_command_handler_add(const char *name, rayo_server_comman
 }
 
 /**
- * Add Rayo command handler functio n
+ * Add Rayo command handler function
  * @param name the command name
  * @param fn the command callback function
  */
@@ -407,7 +411,7 @@ void rayo_call_command_handler_add(const char *name, rayo_call_command_handler f
 }
 
 /**
- * Add Rayo command handler functio n
+ * Add Rayo command handler function
  * @param name the command name
  * @param fn the command callback function
  */
@@ -422,7 +426,7 @@ void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler
 }
 
 /**
- * Add Rayo command handler functio n
+ * Add Rayo command handler function
  * @param subtype the command subtype
  * @param name the command name
  * @param fn the command callback function
@@ -459,52 +463,86 @@ static struct rayo_command_handler *rayo_command_handler_find(struct rayo_actor 
 	return handler;
 }
 
+#define rayo_actor_locate(jid) _rayo_actor_locate(jid, __FILE__, __LINE__)
 /**
- * Get exclusive access to Rayo actor with JID.
+ * Get access to Rayo actor with JID.
  * @param jid the JID
  * @return the actor or NULL.  Call rayo_actor_unlock() when done with pointer.
  */
-struct rayo_actor *rayo_actor_locate(const char *jid)
+static struct rayo_actor *_rayo_actor_locate(const char *jid, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
 	switch_mutex_lock(globals.actors_mutex);
 	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors, jid);
 	if (actor) {
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locking %s\n", actor->id);
-		switch_mutex_lock(actor->mutex);
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locked %s\n", actor->id);
+		if (!actor->destroy) {
+			actor->ref_count++;
+			switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Locate %s: ref count = %i\n", actor->jid, actor->ref_count);
+		} else {
+			actor = NULL;
+		}
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 	return actor;
 }
 
+#define rayo_actor_locate_by_id(id) _rayo_actor_locate_by_id(id, __FILE__, __LINE__)
 /**
  * Get exclusive access to Rayo actor with internal ID
  * @param id the internal ID
  * @return the actor or NULL.  Call rayo_actor_unlock() when done with pointer.
  */
-static struct rayo_actor *rayo_actor_locate_by_id(const char *id)
+static struct rayo_actor *_rayo_actor_locate_by_id(const char *id, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
 	switch_mutex_lock(globals.actors_mutex);
 	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors_by_id, id);
 	if (actor) {
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locking %s\n", actor->id);
-		switch_mutex_lock(actor->mutex);
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Locked %s\n", actor->id);
+		if (!actor->destroy) {
+			actor->ref_count++;
+			switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Locate %s: ref count = %i\n", actor->jid, actor->ref_count);
+		} else {
+			actor = NULL;
+		}
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 	return actor;
 }
 
 /**
+ * Destroy a rayo actor
+ */
+static void rayo_actor_destroy(struct rayo_actor *actor)
+{
+	switch_memory_pool_t *pool = actor->pool;
+	switch_mutex_lock(globals.actors_mutex);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroy %s requested: ref_count = %i\n", actor->jid, actor->ref_count);
+	switch_core_hash_delete(globals.actors, actor->jid);
+	if (!zstr(actor->id)) {
+		switch_core_hash_delete(globals.actors_by_id, actor->id);
+	}
+	actor->destroy = 1;
+	if (actor->ref_count <= 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Destroying %s\n", actor->jid);
+		switch_core_destroy_memory_pool(&pool);
+	}
+	switch_mutex_unlock(globals.actors_mutex);
+}
+
+#define rayo_actor_unlock(actor) _rayo_actor_unlock(actor, __FILE__, __LINE__)
+/**
  * Unlock rayo actor
  */
-void rayo_actor_unlock(struct rayo_actor *actor)
+static void _rayo_actor_unlock(struct rayo_actor *actor, const char *file, int line)
 {
 	if (actor) {
-		switch_mutex_unlock(actor->mutex);
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unlocked %s\n", actor->id);
+		switch_mutex_lock(globals.actors_mutex);
+		actor->ref_count--;
+		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Unlock %s: ref count = %i\n", actor->jid, actor->ref_count);
+		if (actor->ref_count <= 0 && actor->destroy) {
+			rayo_actor_destroy(actor);
+		}
+		switch_mutex_unlock(globals.actors_mutex);
 	}
 }
 
@@ -513,34 +551,22 @@ void rayo_actor_unlock(struct rayo_actor *actor)
  */
 static int rayo_actor_seq_next(struct rayo_actor *actor)
 {
-	return actor->seq++;
+	int seq;
+	switch_mutex_lock(actor->mutex);
+	seq = actor->seq++;
+	switch_mutex_unlock(actor->mutex);
+	return seq;
 }
 
-/**
- * Get non-exclusive access to Rayo call data.  Safe only if used by channel thread accessing its own call data.
- * @param call_uuid the FreeSWITCH call UUID
- * @return the call or NULL.
- */
-struct rayo_call *rayo_call_locate_unlocked(const char *call_uuid)
-{
-	struct rayo_actor *actor = NULL;
-	switch_mutex_lock(globals.actors_mutex);
-	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors_by_id, call_uuid);
-	switch_mutex_unlock(globals.actors_mutex);
-	if (actor && actor->type == RAT_CALL) {
-		return (struct rayo_call *)actor->data;
-	}
-	return NULL;
-}
-
+#define rayo_call_locate(call_uuid) _rayo_call_locate(call_uuid, __FILE__, __LINE__)
 /**
  * Get exclusive access to Rayo call data.  Use to access call data outside channel thread.
  * @param call_uuid the FreeSWITCH call UUID
  * @return the call or NULL.
  */
-static struct rayo_call *rayo_call_locate(const char *call_uuid)
+static struct rayo_call *_rayo_call_locate(const char *call_uuid, const char *file, int line)
 {
-	struct rayo_actor *actor = rayo_actor_locate_by_id(call_uuid);
+	struct rayo_actor *actor = _rayo_actor_locate_by_id(call_uuid, file, line);
 	if (actor && actor->type == RAT_CALL) {
 		return (struct rayo_call *)actor->data;
 	}
@@ -556,13 +582,24 @@ const char *rayo_call_get_uuid(struct rayo_call *call)
 	return call->actor->id;
 }
 
+#define rayo_call_unlock(call) _rayo_call_unlock(call, __FILE__, __LINE__)
 /**
  * Unlock Rayo call.
  */
-static void rayo_call_unlock(struct rayo_call *call)
+static void _rayo_call_unlock(struct rayo_call *call, const char *file, int line)
 {
 	if (call) {
-		rayo_actor_unlock(call->actor);
+		_rayo_actor_unlock(call->actor, file, line);
+	}
+}
+
+/**
+ * Destroy Rayo call.
+ */
+static void rayo_call_destroy(struct rayo_call *call)
+{
+	if (call) {
+		rayo_actor_destroy(call->actor);
 	}
 }
 
@@ -611,27 +648,39 @@ struct rayo_actor *rayo_call_get_actor(struct rayo_call *call)
 	return call->actor;
 }
 
+#define rayo_mixer_locate(mixer_name) _rayo_mixer_locate(mixer_name, __FILE__, __LINE__)
 /**
  * Get access to Rayo mixer data.
  * @param mixer_name the mixer name
  * @return the mixer or NULL. Call rayo_mixer_unlock() when done with mixer pointer.
  */
-struct rayo_mixer *rayo_mixer_locate(const char *mixer_name)
+struct rayo_mixer *_rayo_mixer_locate(const char *mixer_name, const char *file, int line)
 {
-	struct rayo_actor *actor = rayo_actor_locate_by_id(mixer_name);
+	struct rayo_actor *actor = _rayo_actor_locate_by_id(mixer_name, file, line);
 	if (actor && actor->type == RAT_MIXER) {
 		return (struct rayo_mixer *)actor->data;
 	}
 	return NULL;
 }
 
+#define rayo_mixer_unlock(mixer) _rayo_mixer_unlock(mixer, __FILE__, __LINE__)
 /**
  * Unlock Rayo mixer.
  */
-void rayo_mixer_unlock(struct rayo_mixer *mixer)
+void _rayo_mixer_unlock(struct rayo_mixer *mixer, const char *file, int line)
 {
 	if (mixer) {
-		rayo_actor_unlock(mixer->actor);
+		_rayo_actor_unlock(mixer->actor, file, line);
+	}
+}
+
+/**
+ * Destroy Rayo mixer.
+ */
+void rayo_mixer_destroy(struct rayo_mixer *mixer)
+{
+	if (mixer) {
+		rayo_actor_destroy(mixer->actor);
 	}
 }
 
@@ -688,6 +737,8 @@ struct rayo_actor *rayo_actor_create(enum rayo_actor_type type, const char *subt
 	actor->jid = switch_core_strdup(pool, jid);
 	actor->data = switch_core_alloc(pool, size);
 	actor->seq = 1;
+	actor->ref_count = 1;
+	actor->destroy = 0;
 	*data = actor->data;
 	switch_mutex_init(&actor->mutex, SWITCH_MUTEX_NESTED, pool);
 
@@ -700,21 +751,6 @@ struct rayo_actor *rayo_actor_create(enum rayo_actor_type type, const char *subt
 	switch_mutex_unlock(globals.actors_mutex);
 	
 	return actor;
-}
-
-/**
- * Destroy a rayo actor
- */
-void rayo_actor_destroy(struct rayo_actor *actor)
-{
-	switch_memory_pool_t *pool = actor->pool;
-	switch_mutex_lock(globals.actors_mutex);
-	switch_core_hash_delete(globals.actors, actor->jid);
-	if (!zstr(actor->id)) {
-		switch_core_hash_delete(globals.actors_by_id, actor->id);
-	}
-	switch_mutex_unlock(globals.actors_mutex);
-	switch_core_destroy_memory_pool(&pool);
 }
 
 /**
@@ -766,17 +802,6 @@ static struct rayo_call *rayo_call_create(switch_core_session_t *session)
 }
 
 /**
- * Destroy rayo call
- * @param call to destroy
- */
-static void rayo_call_destroy(struct rayo_call *call)
-{
-	if (call) {
-		rayo_actor_destroy(call->actor);
-	}
-}
-
-/**
  * @param call the call
  * @return the call's pool
  */
@@ -803,17 +828,6 @@ static struct rayo_mixer *rayo_mixer_create(const char *name)
 	switch_safe_free(mixer_jid);
 
 	return mixer;
-}
-
-/**
- * Destroy mixer
- * @param mixer to destroy
- */
-static void rayo_mixer_destroy(struct rayo_mixer *mixer)
-{
-	if (mixer) {
-		rayo_actor_destroy(mixer->actor);
-	}
 }
 
 /**
@@ -877,6 +891,7 @@ void rayo_component_destroy(struct rayo_component *component)
 		rayo_actor_destroy(component->actor);
 	}
 }
+
 
 /**
  * @return component ref
@@ -955,9 +970,9 @@ void rayo_component_set_data(struct rayo_component *component, void *data)
  * @param id the component internal ID
  * @return the component or NULL. Call rayo_component_unlock() when done with component pointer.
  */
-struct rayo_component *rayo_component_locate(const char *id)
+struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line)
 {
-	struct rayo_actor *actor = rayo_actor_locate_by_id(id);
+	struct rayo_actor *actor = _rayo_actor_locate_by_id(id, file, line);
 	if (actor && actor->type == RAT_COMPONENT) {
 		return (struct rayo_component *)actor->data;
 	}
@@ -967,10 +982,10 @@ struct rayo_component *rayo_component_locate(const char *id)
 /**
  * Unlock Rayo component
  */
-void rayo_component_unlock(struct rayo_component *component)
+void _rayo_component_unlock(struct rayo_component *component, const char *file, int line)
 {
 	if (component) {
-		rayo_actor_unlock(component->actor);
+		_rayo_actor_unlock(component->actor, file, line);
 	}
 }
 
@@ -2492,6 +2507,7 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 		}
 
 		iks_delete(revent);
+		rayo_call_unlock(call);
 		rayo_call_destroy(call);
 	}
 }
@@ -3042,7 +3058,7 @@ static iks *rayo_create_offer(struct rayo_call *call, switch_core_session_t *ses
 static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, switch_frame_t **frame, switch_io_flag_t flags, int i)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
-	struct rayo_call *call = (struct rayo_call *)rayo_call_locate_unlocked(switch_core_session_get_uuid(session));
+	struct rayo_call *call = (struct rayo_call *)switch_channel_get_private(channel, "rayo_call_private");
 	if (call) {
 		switch_time_t now = switch_micro_time_now();
 		switch_time_t idle_start = call->idle_start_time;
@@ -3065,7 +3081,7 @@ SWITCH_STANDARD_APP(rayo_app)
 	int ok = 0;
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	const char *uuid = switch_core_session_get_uuid(session);
-	struct rayo_call *call = rayo_call_locate_unlocked(uuid);
+	struct rayo_call *call = rayo_call_locate(uuid);
 	const char *app = ""; /* optional app to execute */
 	const char *app_args = ""; /* app args */
 
@@ -3092,7 +3108,7 @@ SWITCH_STANDARD_APP(rayo_app)
 			/* wait for call to be created from ORIGINATION event */
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Don't have rayo call yet\n");
 			for (i = 0; i < 50 && !call; i++) {
-				call = rayo_call_locate_unlocked(uuid);
+				call = rayo_call_locate(uuid);
 				switch_yield(20000);
 			}
 			switch_channel_audio_sync(channel);
@@ -3144,6 +3160,7 @@ done:
 		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
 		switch_channel_set_variable(channel, "transfer_after_bridge", "false");
 		switch_channel_set_variable(channel, "park_after_bridge", "true");
+		switch_channel_set_private(channel, "rayo_call_private", call);
 		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
 		if (!zstr(app)) {
 			switch_core_session_execute_application(session, app, app_args);
@@ -3152,6 +3169,8 @@ done:
 	} else {
 		switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
 	}
+
+	rayo_call_unlock(call);
 }
 
 /**
@@ -3343,7 +3362,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_mutex_init(&globals.clients_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	switch_core_hash_init(&globals.actors, pool);
 	switch_core_hash_init(&globals.actors_by_id, pool);
-	switch_mutex_init(&globals.actors_mutex, SWITCH_MUTEX_UNNESTED, pool);
+	switch_mutex_init(&globals.actors_mutex, SWITCH_MUTEX_NESTED, pool);
 	switch_core_hash_init(&globals.dial_gateways, pool);
 
 	/* server commands */
