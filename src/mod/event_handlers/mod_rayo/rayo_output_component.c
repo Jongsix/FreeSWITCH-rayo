@@ -394,11 +394,6 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 {
 	struct rayo_file_context *context = (struct rayo_file_context *)handle->private_info;
 
-	/* close SSML file */
-	if (switch_test_flag((&context->fh), SWITCH_FILE_OPEN)) {
-		return switch_core_file_close(&context->fh);
-	}
-
 	/* notify of component completion */
 	if (context->component) {
 		/* send completion and destroy */
@@ -412,6 +407,11 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 	if (context->docs) {
 		iks_delete(context->docs);
 		context->docs = NULL;
+	}
+
+	/* close SSML file */
+	if (switch_test_flag((&context->fh), SWITCH_FILE_OPEN)) {
+		return switch_core_file_close(&context->fh);
 	}
 
 	return SWITCH_STATUS_SUCCESS;
