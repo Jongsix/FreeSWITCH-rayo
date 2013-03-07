@@ -1303,9 +1303,6 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 
 static ATTRIB_RULE(join_direction)
 {
-	attrib->type = IAT_STRING;
-	attrib->test = "(send || recv || duplex)";
-	attrib->v.s = (char *)value;
 	/* for now, only allow duplex
 	return !strcmp("send", value) || !strcmp("recv", value) || !strcmp("duplex", value); */
 	return !strcmp("duplex", value);
@@ -1313,33 +1310,18 @@ static ATTRIB_RULE(join_direction)
 
 static ATTRIB_RULE(join_media)
 {
-	attrib->type = IAT_STRING;
-	attrib->test = "(bridge || direct)";
-	attrib->v.s = (char *)value;
 	return !strcmp("bridge", value) || !strcmp("direct", value);
 }
 
 /**
  * <join> command validation
  */
-static const struct iks_attrib_definition join_attribs_def[] = {
-	ATTRIB(direction, duplex, join_direction),
-	ATTRIB(media, bridge, join_media),
-	ATTRIB(call-id,, any),
-	ATTRIB(mixer-name,, any),
-	LAST_ATTRIB
-};
-
-/**
- * <join> command attributes
- */
-struct join_attribs {
-	int size;
-	struct iks_attrib direction;
-	struct iks_attrib media;
-	struct iks_attrib call_id;
-	struct iks_attrib mixer_name;
-};
+ELEMENT(RAYO_JOIN)
+	ATTRIB(direction, duplex, join_direction)
+	ATTRIB(media, bridge, join_media)
+	ATTRIB(call-id,, any)
+	ATTRIB(mixer-name,, any)
+ELEMENT_END
 
 /**
  * Join calls together
@@ -1409,24 +1391,26 @@ static iks *on_rayo_join(struct rayo_call *call, switch_core_session_t *session,
 {
 	iks *response = NULL;
 	iks *join = iks_find(node, "join");
-	struct join_attribs j_attribs;
+	const char *mixer_name;
+	const char *call_id;
 
 	/* validate input attributes */
-	memset(&j_attribs, 0, sizeof(j_attribs));
-	if (!iks_attrib_parse(switch_core_session_get_uuid(session), join, join_attribs_def, (struct iks_attribs *)&j_attribs)) {
+	if (!VALIDATE_RAYO_JOIN(join)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad join attrib\n");
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
+	mixer_name = iks_find_attrib(join, "mixer-name");
+	call_id = iks_find_attrib(join, "call-id");
 
 	/* can't join both mixer and call */
-	if (!zstr(GET_STRING(j_attribs, mixer_name)) && !zstr(GET_STRING(j_attribs, call_id))) {
+	if (!zstr(mixer_name) && !zstr(call_id)) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 
 	/* need to join *something* */
-	if (zstr(GET_STRING(j_attribs, mixer_name)) && zstr(GET_STRING(j_attribs, call_id))) {
+	if (zstr(mixer_name) && zstr(call_id)) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
@@ -1437,12 +1421,12 @@ static iks *on_rayo_join(struct rayo_call *call, switch_core_session_t *session,
 		goto done;
 	}
 
-	if (!zstr(GET_STRING(j_attribs, mixer_name))) {
+	if (!zstr(mixer_name)) {
 		/* join conference */
-		response = join_mixer(call, session, node, GET_STRING(j_attribs, mixer_name));
+		response = join_mixer(call, session, node,  mixer_name);
 	} else {
 		/* bridge calls */
-		response = join_call(call, session, node, GET_STRING(j_attribs, call_id), GET_STRING(j_attribs, media));
+		response = join_call(call, session, node, call_id, iks_find_attrib(join, "media"));
 	}
 
 done:
@@ -2016,7 +2000,7 @@ static int rayo_send_header_auth(struct rayo_session *rsession)
  */
 static void on_auth(struct rayo_session *rsession, iks *node)
 {
-	char *xmlns, *mechanism;
+	const char *xmlns, *mechanism;
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 

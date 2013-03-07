@@ -43,28 +43,14 @@ struct output_component {
 /**
  * <output> component validation
  */
-static const struct iks_attrib_definition output_attribs_def[] = {
-	ATTRIB(start-offset, 0, not_negative),
-	ATTRIB(start-paused, false, bool),
-	ATTRIB(repeat-interval, 0, not_negative),
-	ATTRIB(repeat-times, 1, positive),
-	ATTRIB(max-time, -1, positive_or_neg_one),
-	ATTRIB(renderer,, any),
-	LAST_ATTRIB
-};
-
-/**
- * <output> component attributes
- */
-struct output_attribs {
-	int size;
-	struct iks_attrib start_offset;
-	struct iks_attrib start_paused;
-	struct iks_attrib repeat_interval;
-	struct iks_attrib repeat_times;
-	struct iks_attrib max_time;
-	struct iks_attrib renderer;
-};
+ELEMENT(RAYO_OUTPUT)
+	ATTRIB(start-offset, 0, not_negative)
+	ATTRIB(start-paused, false, bool)
+	ATTRIB(repeat-interval, 0, not_negative)
+	ATTRIB(repeat-times, 1, positive)
+	ATTRIB(max-time, -1, positive_or_neg_one)
+	ATTRIB(renderer,, any)
+ELEMENT_END
 
 /* adhearsion uses incorrect reason for finish... this is a temporary fix */
 #define OUTPUT_FINISH_AHN "success", RAYO_OUTPUT_COMPLETE_NS
@@ -78,17 +64,21 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 {
 	struct rayo_component *component = NULL;
 	struct output_component *output_component = NULL;
-	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
 	char *document_str = NULL;
 	switch_stream_handle_t stream = { 0 };
+	int max_time;
+	int repeat_interval;
+	int repeat_times;
 
 	/* validate output attributes */
-	memset(&o_attribs, 0, sizeof(o_attribs));
-	if (!iks_attrib_parse(switch_core_session_get_uuid(session), output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
 		iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
+	max_time = iks_find_int_attrib(output, "max-time");
+	repeat_interval = iks_find_int_attrib(output, "repeat-interval");
+	repeat_times = iks_find_int_attrib(output, "repeat-times");
 
 	/* acknowledge command */
 	component = rayo_call_component_create(NULL, call, "output", iks_find_attrib(iq, "from"));
@@ -102,16 +92,16 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 
 	stream.write_function(&stream, "{rayo_id=%s", rayo_component_get_id(component));
 
-	if (GET_INT(o_attribs, max_time) > 0) {
-		stream.write_function(&stream, ",timeout=%i", GET_INT(o_attribs, max_time) * 1000);
+	if (max_time > 0) {
+		stream.write_function(&stream, ",timeout=%i", max_time * 1000);
 	}
 
-	if (GET_INT(o_attribs, repeat_interval) > 0) {
-		stream.write_function(&stream, ",repeat_interval=%i", GET_INT(o_attribs, repeat_interval));
+	if (repeat_interval > 0) {
+		stream.write_function(&stream, ",repeat_interval=%i", repeat_interval);
 	}
 
-	if (GET_INT(o_attribs, repeat_times) > 0) {
-		stream.write_function(&stream, ",repeat_times=%i", GET_INT(o_attribs, repeat_times));
+	if (repeat_times > 0) {
+		stream.write_function(&stream, ",repeat_times=%i", repeat_times);
 	}
 
 	document_str = iks_string(NULL, output);
@@ -191,17 +181,21 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 {
 	struct output_component *output_component = NULL;
 	struct rayo_component *component = NULL;
-	struct output_attribs o_attribs;
 	iks *output = iks_find(iq, "output");
 	char *document_str = NULL;
 	switch_stream_handle_t stream = { 0 };
+	int max_time;
+	int repeat_interval;
+	int repeat_times;
 
 	/* validate output attributes */
-	memset(&o_attribs, 0, sizeof(o_attribs));
-	if (!iks_attrib_parse(rayo_mixer_get_name(mixer), output, output_attribs_def, (struct iks_attribs *)&o_attribs)) {
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
 		iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
+	max_time = iks_find_int_attrib(output, "max-time");
+	repeat_interval = iks_find_int_attrib(output, "repeat-interval");
+	repeat_times = iks_find_int_attrib(output, "repeat-times");
 
 	/* acknowledge command */
 	component = rayo_mixer_component_create(NULL, mixer, "output", iks_find_attrib(iq, "from"));
@@ -215,16 +209,16 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 
 	stream.write_function(&stream, "%s play {rayo_id=%s", rayo_mixer_get_name(mixer), rayo_component_get_id(component));
 
-	if (GET_INT(o_attribs, max_time) > 0) {
-		stream.write_function(&stream, ",timeout=%i", GET_INT(o_attribs, max_time) * 1000);
+	if (max_time > 0) {
+		stream.write_function(&stream, ",timeout=%i", max_time * 1000);
 	}
 
-	if (GET_INT(o_attribs, repeat_interval) > 0) {
-		stream.write_function(&stream, ",repeat_interval=%i", GET_INT(o_attribs, repeat_interval));
+	if (repeat_interval > 0) {
+		stream.write_function(&stream, ",repeat_interval=%i", repeat_interval);
 	}
 
-	if (GET_INT(o_attribs, repeat_times) > 0) {
-		stream.write_function(&stream, ",repeat_times=%i", GET_INT(o_attribs, repeat_times));
+	if (repeat_times > 0) {
+		stream.write_function(&stream, ",repeat_times=%i", repeat_times);
 	}
 
 	document_str = iks_string(NULL, output);

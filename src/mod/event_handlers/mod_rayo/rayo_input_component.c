@@ -65,9 +65,6 @@ static void send_input_component_dtmf_match(struct rayo_component *component, co
 
 static ATTRIB_RULE(input_mode)
 {
-	attrib->type = IAT_STRING;
-	attrib->test = "(any || dtmf || speech)";
-	attrib->v.s = (char *)value;
 	/* for now, only allow dtmf;
 	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value); */
 	return !strcmp("dtmf", value);
@@ -76,32 +73,16 @@ static ATTRIB_RULE(input_mode)
 /**
  * <input> component validation
  */
-static const struct iks_attrib_definition input_attribs_def[] = {
-	ATTRIB(mode, any, input_mode),
-	ATTRIB(terminator,, any),
-	ATTRIB(recognizer, en-US, any),
-	ATTRIB(initial-timeout, -1, positive_or_neg_one),
-	ATTRIB(inter-digit-timeout, -1, positive_or_neg_one),
-	ATTRIB(sensitivity, 0.5, decimal_between_zero_and_one),
-	ATTRIB(min-confidence, 0, decimal_between_zero_and_one),
-	ATTRIB(max-silence, -1, positive_or_neg_one),
-	LAST_ATTRIB
-};
-
-/**
- * <input> component attributes
- */
-struct input_attribs {
-	int size;
-	struct iks_attrib mode;
-	struct iks_attrib terminator;
-	struct iks_attrib recognizer;
-	struct iks_attrib initial_timeout;
-	struct iks_attrib inter_digit_timeout;
-	struct iks_attrib sensitivity;
-	struct iks_attrib min_confidence;
-	struct iks_attrib max_silence;
-};
+ELEMENT(RAYO_INPUT)
+	ATTRIB(mode, any, input_mode)
+	ATTRIB(terminator,, any)
+	ATTRIB(recognizer, en-US, any)
+	ATTRIB(initial-timeout, -1, positive_or_neg_one)
+	ATTRIB(inter-digit-timeout, -1, positive_or_neg_one)
+	ATTRIB(sensitivity, 0.5, decimal_between_zero_and_one)
+	ATTRIB(min-confidence, 0, decimal_between_zero_and_one)
+	ATTRIB(max-silence, -1, positive_or_neg_one)
+ELEMENT_END
 
 /**
  * Current digit collection state
@@ -228,7 +209,6 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
  */
 static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
-	struct input_attribs i_attribs;
 	iks *input = iks_child(iq);
 	iks *grammar = NULL;
 	char *content_type = NULL;
@@ -236,8 +216,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	struct input_handler *handler = NULL;
 
 	/* validate input attributes */
-	memset(&i_attribs, 0, sizeof(i_attribs));
-	if (!iks_attrib_parse(switch_core_session_get_uuid(session), input, input_attribs_def, (struct iks_attribs *)&i_attribs)) {
+	if (!VALIDATE_RAYO_INPUT(input)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
@@ -283,8 +262,8 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	handler->done = 0;
 	handler->bug = NULL;
 	handler->last_digit_time = switch_micro_time_now();
-	handler->initial_timeout = GET_INT(i_attribs, initial_timeout);
-	handler->inter_digit_timeout = GET_INT(i_attribs, inter_digit_timeout);
+	handler->initial_timeout = iks_find_int_attrib(input, "initial-timeout");
+	handler->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
 
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs)) {

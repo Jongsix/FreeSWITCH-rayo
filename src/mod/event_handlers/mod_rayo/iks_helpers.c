@@ -81,10 +81,60 @@ iks *iks_new_iq_result(iks *iq)
  * @param attrib the Attribute name
  * @return the attribute value
  */
-char *iks_find_attrib_soft(iks *xml, const char *attrib)
+const char *iks_find_attrib_soft(iks *xml, const char *attrib)
 {
 	char *value = iks_find_attrib(xml, attrib);
 	return zstr(value) ? "" : value;
+}
+
+/**
+ * Get attribute value of node, returning default value if missing.  The default value
+ * is set in the node if missing.
+ * @param xml the XML node to search
+ * @param attrib the Attribute name
+ * @return the attribute value
+ */
+const char *iks_find_attrib_default(iks *xml, const char *attrib, const char *def)
+{
+	char *value = iks_find_attrib(xml, attrib);
+	if (!value) {
+		iks_insert_attrib(xml, attrib, def);
+		return def;
+	}
+	return value;
+}
+
+/**
+ * Get attribute integer value of node
+ * @param xml the XML node to search
+ * @param attrib the Attribute name
+ * @return the attribute value
+ */
+int iks_find_int_attrib(iks *xml, const char *attrib)
+{
+	return atoi(iks_find_attrib_soft(xml, attrib));
+}
+
+/**
+ * Get attribute boolean value of node
+ * @param xml the XML node to search
+ * @param attrib the Attribute name
+ * @return the attribute value
+ */
+int iks_find_bool_attrib(iks *xml, const char *attrib)
+{
+	return switch_true(iks_find_attrib_soft(xml, attrib));
+}
+
+/**
+ * Get attribute double value of node
+ * @param xml the XML node to search
+ * @param attrib the Attribute name
+ * @return the attribute value
+ */
+double iks_find_decimal_attrib(iks *xml, const char *attrib)
+{
+	return atof(iks_find_attrib_soft(xml, attrib));
 }
 
 /**
@@ -128,33 +178,28 @@ const char *iks_net_error_to_string(int err)
 }
 
 /**
- * Assign value to attribute if boolean
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate boolean
+ * @param value
+ * @return SWTICH_TRUE if boolean
  */
-int iks_attrib_is_bool(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_INTEGER;
-	attrib->test = "(true || false)";
+int iks_attrib_is_bool(const char *value)
+{
 	if (!zstr(value) && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
-		attrib->v.i = switch_true(value);
 		return SWITCH_TRUE;
 	}
 	return SWITCH_FALSE;
 }
 
 /**
- * Assign value to attribute if not negative
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if not negative
  */
-int iks_attrib_is_not_negative(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_INTEGER;
-	attrib->test = "(>= 0)";
+int iks_attrib_is_not_negative(const char *value)
+{
 	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i >= 0) {
+		int value_i = atoi(value);
+		if (value_i >= 0) {
 			return SWITCH_TRUE;
 		}
 	}
@@ -162,17 +207,15 @@ int iks_attrib_is_not_negative(struct iks_attrib *attrib, const char *value) {
 }
 
 /**
- * Assign value to attribute if positive
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if positive
  */
-int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_INTEGER;
-	attrib->test = "(> 0)";
+int iks_attrib_is_positive(const char *value)
+{
 	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i > 0) {
+		int value_i = atoi(value);
+		if (value_i > 0) {
 			return SWITCH_TRUE;
 		}
 	}
@@ -180,17 +223,15 @@ int iks_attrib_is_positive(struct iks_attrib *attrib, const char *value) {
 }
 
 /**
- * Assign value to attribute if positive or -1
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if positive or -1
  */
-int iks_attrib_is_positive_or_neg_one(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_INTEGER;
-	attrib->test = "(-1 || > 0)";
+int iks_attrib_is_positive_or_neg_one(const char *value)
+{
 	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.i = atoi(value);
-		if (attrib->v.i == -1 || attrib->v.i > 0) {
+		int value_i = atoi(value);
+		if (value_i == -1 || value_i > 0) {
 			return SWITCH_TRUE;
 		}
 	}
@@ -198,76 +239,31 @@ int iks_attrib_is_positive_or_neg_one(struct iks_attrib *attrib, const char *val
 }
 
 /**
- * Assign value to attribute
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate string
+ * @param value
+ * @return SWTICH_TRUE
  */
-int iks_attrib_is_any(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_STRING;
-	attrib->test = "(*)";
-	attrib->v.s = (char *)value;
+int iks_attrib_is_any(const char *value) 
+{
 	return SWITCH_TRUE;
 }
 
 /**
- * Assign value to attribute if 0.0 <= x <= 1.0
- * @param attrib to assign to
- * @param value assigned
- * @return SWTICH_TRUE if value is valid
+ * Validate decimal
+ * @param value
+ * @return SWTICH_TRUE if 0.0 <= x <= 1.0
  */
-int iks_attrib_is_decimal_between_zero_and_one(struct iks_attrib *attrib, const char *value) {
-	attrib->type = IAT_DECIMAL;
-	attrib->test = "(>= 0.0 && <= 1.0)";
+int iks_attrib_is_decimal_between_zero_and_one(const char *value) 
+{
 	if (!zstr(value) && switch_is_number(value)) {
-		attrib->v.d = atof(value);
-		if (attrib->v.d >= 0.0 || attrib->v.d <= 1.0) {
+		double value_d = atof(value);
+		if (value_d >= 0.0 || value_d <= 1.0) {
 			return SWITCH_TRUE;
 		}
 	}
 	return SWITCH_FALSE;
 }
 
-/**
- * Search node for attribute, returning default if not set
- * @param attrib_def the attribute validation definition
- * @param attrib the attribute to set
- * @param node XML node to search
- * @return SWITCH_TRUE if successful
- */
-static int get_attrib(const struct iks_attrib_definition *attrib_def, struct iks_attrib *attrib, iks *node)
-{
-	const char *value = iks_find_attrib(node, attrib_def->name);
-	value = zstr(value) ? attrib_def->default_value : value;
-	if (attrib_def->fn(attrib, value)) {
-		return SWITCH_TRUE;
-	}
-	attrib->type = IAT_STRING;
-	attrib->v.s = (char *)value; /* remember bad value */
-	return SWITCH_FALSE;
-}
-
-/**
- * Get attribs from XML node
- * @param log_id ID for error logging
- * @param node the XML node to search
- * @param attrib_def the attributes to get
- * @param attribs struct to fill
- * @return SWITCH_TRUE if the attribs are valid
- */
-int iks_attrib_parse(const char *log_id, iks* node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs)
-{
-	struct iks_attrib *attrib = attribs->attrib;
-	int success = SWITCH_TRUE;
-	for (; success && attrib_def->name; attrib_def++) {
-		success &= get_attrib(attrib_def, attrib, node);
-		if (!success) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(log_id), SWITCH_LOG_INFO, "FAILED: <%s %s='%s'> !%s\n", iks_name(node), attrib_def->name, attrib->v.s, attrib->test);
-		}
-		attrib++;
-	}
-	return success;
-}
 
 /* For Emacs:
  * Local Variables:

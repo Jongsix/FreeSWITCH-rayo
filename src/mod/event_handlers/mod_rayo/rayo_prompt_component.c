@@ -34,18 +34,9 @@
 /**
  * <prompt> component validation
  */
-static const struct iks_attrib_definition prompt_attribs_def[] = {
-	ATTRIB(barge-in, true, bool),
-	LAST_ATTRIB
-};
-
-/**
- * <prompt> component attributes
- */
-struct prompt_attribs {
-	int size;
-	struct iks_attrib barge_in;
-};
+ELEMENT(RAYO_PROMPT)
+	ATTRIB(barge-in, true, bool)
+ELEMENT_END
 #endif
 
 /**
