@@ -63,61 +63,22 @@
 
 extern iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type);
 extern iks *iks_new_iq_result(iks *iq);
-extern char *iks_find_attrib_soft(iks *xml, const char *attrib);
+extern const char *iks_find_attrib_soft(iks *xml, const char *attrib);
+extern const char *iks_find_attrib_default(iks *xml, const char *attrib, const char *def);
+extern int iks_find_bool_attrib(iks *xml, const char *attrib);
+extern int iks_find_int_attrib(iks *xml, const char *attrib);
+extern double iks_find_decimal_attrib(iks *xml, const char *attrib);
 extern const char *iks_node_type_to_string(int type);
 extern const char *iks_net_error_to_string(int err);
 
+/** A function to validate attribute value */
+typedef int (*iks_attrib_validation_function)(const char *);
 
-/**
- * Type of attribute value
- */
-enum iks_attrib_type {
-	IAT_STRING = 0,
-	IAT_INTEGER,
-	IAT_DECIMAL
-};
+#define ELEMENT(name) static int VALIDATE_##name(iks *node) { int result = 1;
+#define ATTRIB(name, def, rule) result &= iks_attrib_is_##rule(iks_find_attrib_default(node, #name, #def));
+#define ELEMENT_END return result; }
 
-/**
- * An attribute in XML node
- */
-struct iks_attrib {
-	union {
-		char *s;
-		int i;
-		double d;
-	} v;
-	enum iks_attrib_type type;
-	const char *test;
-};
-
-/** A function to validate and convert string attrib */
-typedef int (*iks_attrib_conversion_function)(struct iks_attrib *, const char *);
-
-/**
- * Defines rules for attribute validation
- */
-struct iks_attrib_definition {
-	const char *name;
-	const char *default_value;
-	iks_attrib_conversion_function fn;
-};
-
-/**
- * Attributes to get
- */
-struct iks_attribs {
-	int size;
-	struct iks_attrib attrib[];
-};
-
-#define ATTRIB(name, default_value, rule) { #name, #default_value, iks_attrib_is_ ## rule }
-#define LAST_ATTRIB { NULL, NULL, NULL }
-#define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (struct iks_attrib *attrib, const char *value)
-
-#define GET_INT(attribs, param) attribs.param.v.i
-#define GET_BOOL(attribs, param) attribs.param.v.i
-#define GET_STRING(attribs, param) attribs.param.v.s
-#define GET_DOUBLE(attribs, param) attribs.param.v.d
+#define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (const char *value)
 
 extern ATTRIB_RULE(bool);
 extern ATTRIB_RULE(not_negative);
@@ -125,8 +86,6 @@ extern ATTRIB_RULE(positive);
 extern ATTRIB_RULE(positive_or_neg_one);
 extern ATTRIB_RULE(any);
 extern ATTRIB_RULE(decimal_between_zero_and_one);
-
-extern int iks_attrib_parse(const char *log_id, iks *node, const struct iks_attrib_definition *attrib_def, struct iks_attribs *attribs);
 
 #endif
 
