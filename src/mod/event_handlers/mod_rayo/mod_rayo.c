@@ -3253,6 +3253,7 @@ done:
 		switch_channel_set_variable(channel, "hangup_after_bridge", "false");
 		switch_channel_set_variable(channel, "transfer_after_bridge", "false");
 		switch_channel_set_variable(channel, "park_after_bridge", "true");
+		switch_channel_set_variable(channel, SWITCH_SEND_SILENCE_WHEN_IDLE_VARIABLE, "5000"); /* required so that output mixing works */
 		switch_core_event_hook_add_read_frame(session, rayo_call_on_read_frame);
 		if (!zstr(app)) {
 			switch_core_session_execute_application(session, app, app_args);
