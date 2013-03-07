@@ -117,7 +117,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	document_str = iks_string(NULL, output);
 	stream.write_function(&stream, "}rayo://%s", document_str);
 
-	if (rayo_call_is_joined(call) /* || rayo_call_is_playing(call) */) {
+	if (rayo_call_is_joined(call) || rayo_call_is_playing(call)) {
 		/* mixed */
 		switch_ivr_displace_session(session, stream.data, 0, "m");
 	} else {
@@ -130,6 +130,9 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	return NULL;
 }
 
+/**
+ * Background API data
+ */
 struct bg_api_cmd {
 	const char *cmd;
 	const char *args;
@@ -155,6 +158,11 @@ static void *SWITCH_THREAD_FUNC bg_api_thread(switch_thread_t *thread, void *obj
 	return NULL;
 }
 
+/**
+ * Run a background API command
+ * @param cmd API command
+ * @param args API args
+ */
 static void rayo_api_execute_async(const char *cmd, const char *args)
 {
 	switch_thread_t *thread;

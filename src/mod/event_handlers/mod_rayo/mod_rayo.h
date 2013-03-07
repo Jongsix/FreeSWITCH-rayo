@@ -58,10 +58,10 @@ extern const char *rayo_call_get_jid(struct rayo_call *call);
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 extern const char *rayo_call_get_uuid(struct rayo_call *call);
 extern int rayo_call_is_joined(struct rayo_call *call);
+extern int rayo_call_is_playing(struct rayo_call *call);
 extern int rayo_call_seq_next(struct rayo_call *call);
 extern switch_memory_pool_t *rayo_call_get_pool(struct rayo_call *call);
 extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
-extern struct rayo_call *rayo_call_locate_unlocked(const char *call_uuid);
 
 extern const char *rayo_mixer_get_jid(struct rayo_mixer *mixer);
 extern const char *rayo_mixer_get_name(struct rayo_mixer *mixer);

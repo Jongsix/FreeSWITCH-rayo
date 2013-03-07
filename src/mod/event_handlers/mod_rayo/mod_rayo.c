@@ -220,6 +220,8 @@ struct rayo_call {
 	switch_time_t idle_start_time;
 	/** true if joined */
 	int joined;
+	/** true if playing in channel thread */
+	int playing;
 };
 
 /**
@@ -639,6 +641,15 @@ const char *rayo_call_get_dcp_jid(struct rayo_call *call)
 int rayo_call_is_joined(struct rayo_call *call)
 {
 	return call->joined;
+}
+
+/**
+ * @param call the Rayo call
+ * @return true if playing
+ */
+int rayo_call_is_playing(struct rayo_call *call)
+{
+	return call->playing;
 }
 
 /**
@@ -2118,7 +2129,10 @@ static int on_iq(void *user_data, ikspak *pak)
 				goto done;
 			}
 			if (rayo_call_command_ok(rsession, call, session, iq)) {
-				iks *response = handler->fn.call(call, session, iq);
+				iks *response;
+				switch_mutex_lock(actor->mutex);
+				response = handler->fn.call(call, session, iq);
+				switch_mutex_unlock(actor->mutex);
 				call->idle_start_time = switch_micro_time_now();
 				if (response) {
 					iks_send(rsession->parser, response);
@@ -2131,7 +2145,10 @@ static int on_iq(void *user_data, ikspak *pak)
 		case RAT_COMPONENT: {
 			struct rayo_component *component = (struct rayo_component *)actor->data;
 			if (rayo_component_command_ok(rsession, component, iq)) {
-				iks *response = handler->fn.component(component, iq);
+				iks *response;
+				switch_mutex_lock(actor->mutex);
+				response = handler->fn.component(component, iq);
+				switch_mutex_unlock(actor->mutex);
 				if (response) {
 					iks_send(rsession->parser, response);
 					iks_delete(response);
@@ -2666,6 +2683,44 @@ static void on_call_unbridge_event(struct rayo_session *rsession, switch_event_t
 }
 
 /**
+ * Handle call execute event
+ * @param rsession the Rayo session
+ * @param event the ringing event
+ */
+static void on_call_execute_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
+	if (call) {
+		if (!strcmp("playback", switch_event_get_header(event, "Application"))) {
+			switch_mutex_lock(call->actor->mutex);
+			call->playing = 1;
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Call started playing\n");
+			switch_mutex_unlock(call->actor->mutex);
+		}
+		rayo_call_unlock(call);
+	}
+}
+
+/**
+ * Handle call execute complete event
+ * @param rsession the Rayo session
+ * @param event the ringing event
+ */
+static void on_call_execute_complete_event(struct rayo_session *rsession, switch_event_t *event)
+{
+	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
+	if (call) {
+		if (!strcmp("playback", switch_event_get_header(event, "Application"))) {
+			switch_mutex_lock(call->actor->mutex);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Call stopped playing\n");
+			call->playing = 0;
+			switch_mutex_unlock(call->actor->mutex);
+		}
+		rayo_call_unlock(call);
+	}
+}
+
+/**
  * Handle events delivered to this session
  * @param rsession the Rayo session to handle the event
  * @param event the event.  This event must be destroyed by this function.
@@ -2692,6 +2747,12 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 			break;
 		case SWITCH_EVENT_CHANNEL_UNBRIDGE:
 			on_call_unbridge_event(rsession, event);
+			break;
+		case SWITCH_EVENT_CHANNEL_EXECUTE:
+			on_call_execute_event(rsession, event);
+ 			break;
+		case SWITCH_EVENT_CHANNEL_EXECUTE_COMPLETE:
+			on_call_execute_complete_event(rsession, event);
 			break;
 		case SWITCH_EVENT_CUSTOM: {
 			char *event_subclass = switch_event_get_header(event, "Event-Subclass");
@@ -3446,6 +3507,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_DESTROY, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_BRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_UNBRIDGE, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_EXECUTE, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_EXECUTE_COMPLETE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, RAYO_EVENT_XMPP_SEND, route_call_event, NULL);
 
 	switch_event_bind(modname, SWITCH_EVENT_CUSTOM, "conference::maintenance", route_mixer_event, NULL);
