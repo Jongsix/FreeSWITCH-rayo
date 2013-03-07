@@ -34,62 +34,30 @@
 /* 1000 Hz beep for 250ms */
 #define RECORD_BEEP "tone_stream://%(250,0,1000)"
 
-enum record_direction {
-	RD_DUPLEX,
-	RD_SEND,
-	RD_RECV
-};
-
 /**
  * Validate <record direction="">
  */
 static ATTRIB_RULE(record_direction)
 {
-	attrib->type = IAT_INTEGER;
-	attrib->test = "(duplex || send || recv)";
-	if (!strcmp("duplex", value)) {
-		attrib->v.i = RD_DUPLEX;
-	} else if (!strcmp("send", value)) {
-		attrib->v.i = RD_SEND;
-	} else if (!strcmp("recv", value)) {
-		attrib->v.i = RD_RECV;
-	} else {
-		return 0;
-	}
-	return 1;
+	return (!strcmp("duplex", value) || 
+		!strcmp("send", value) ||
+		!strcmp("recv", value));
 }
 
 /**
  * <record> component validation
  */
-static const struct iks_attrib_definition record_attribs_def[] = {
-	ATTRIB(format, mp3, any),
-	ATTRIB(start-beep, false, bool),
-	ATTRIB(stop-beep, false, bool),
-	ATTRIB(start-paused, false, bool),
-	ATTRIB(max-duration, -1, positive_or_neg_one),
-	ATTRIB(initial-timeout, -1, positive_or_neg_one),
-	ATTRIB(final-timeout, -1, positive_or_neg_one),
-	ATTRIB(direction, duplex, record_direction),
-	ATTRIB(mix, false, bool),
-	LAST_ATTRIB
-};
-
-/**
- * <record> component attributes
- */
-struct record_attribs {
-	int size;
-	struct iks_attrib format;
-	struct iks_attrib start_beep;
-	struct iks_attrib stop_beep;
-	struct iks_attrib start_paused;
-	struct iks_attrib max_duration;
-	struct iks_attrib initial_timeout;
-	struct iks_attrib final_timeout;
-	struct iks_attrib direction;
-	struct iks_attrib mix;
-};
+ELEMENT(RAYO_RECORD)
+	ATTRIB(format, mp3, any)
+	ATTRIB(start-beep, false, bool)
+	ATTRIB(stop-beep, false, bool)
+	ATTRIB(start-paused, false, bool)
+	ATTRIB(max-duration, -1, positive_or_neg_one)
+	ATTRIB(initial-timeout, -1, positive_or_neg_one)
+	ATTRIB(final-timeout, -1, positive_or_neg_one)
+	ATTRIB(direction, duplex, record_direction)
+	ATTRIB(mix, false, bool)
+ELEMENT_END
 
 /**
  * Handle RECORD_STOP event from FreeSWITCH.
@@ -134,23 +102,33 @@ static void on_record_stop_event(switch_event_t *event)
  */
 static iks *start_call_record_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
-	struct record_attribs r_attribs;
 	iks *record = iks_child(iq);
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	char *file = NULL;
 	int max_duration_sec = 0;
+	int max_duration;
+	int initial_timeout;
+	int final_timeout;
+	const char *direction;
+	int mix;
+	int start_beep;
 
 	/* validate record attributes */
-	memset(&r_attribs, 0, sizeof(r_attribs));
-	if (!iks_attrib_parse(switch_core_session_get_uuid(session), record, record_attribs_def, (struct iks_attribs *)&r_attribs)) {
+	if (!VALIDATE_RAYO_RECORD(record)) {
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
+	max_duration = iks_find_int_attrib(record, "max-duration");
+	initial_timeout = iks_find_int_attrib(record, "initial-timeout");
+	final_timeout = iks_find_int_attrib(record, "final-timeout");
+	direction = iks_find_attrib(record, "direction");
+	mix = iks_find_bool_attrib(record, "mix");
+	start_beep = iks_find_bool_attrib(record, "start-beep");
 
 	/* create record filename from session UUID and ref */
 	/* for example: 1234-1234-1234-1234/record-30.wav */
 	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, 
-									   switch_core_session_get_uuid(session), r_attribs.format.v.s);
+									   switch_core_session_get_uuid(session), iks_find_attrib(record, "format"));
 
 	switch_channel_set_variable(channel, "RECORD_HANGUP_ON_ERROR", "false");
 	switch_channel_set_variable(channel, "RECORD_TOGGLE_ON_REPEAT", "");
@@ -168,28 +146,24 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 	//switch_channel_set_variable(channel, "enable_file_write_buffering", "");
 
 	/* max duration attribute is in milliseconds- convert to seconds */
-	if (r_attribs.max_duration.v.i > 0) {
-		max_duration_sec = ceil((double)r_attribs.max_duration.v.i / 1000.0);
+	if (max_duration > 0) {
+		max_duration_sec = ceil((double)max_duration / 1000.0);
 	}
 
-	switch (r_attribs.direction.v.i) {
-		case RD_DUPLEX:
-			if (r_attribs.mix.v.i) {
-				/* STEREO */
-				switch_channel_set_variable(channel, "RECORD_STEREO", "true");
-			} /* else MONO (default) */
-			break;
-		case RD_SEND:
-			/* record audio sent from the caller */
-			switch_channel_set_variable(channel, "RECORD_READ_ONLY", "true");
-			break;
-		case RD_RECV:
-			/* record audio received by the caller */
-			switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "true");
-			break;
+	if (!strcmp(direction, "duplex")) {
+		if (mix) {
+			/* STEREO */
+			switch_channel_set_variable(channel, "RECORD_STEREO", "true");
+		} /* else MONO (default) */
+	} else if (!strcmp(direction, "send")) {
+		/* record audio sent from the caller */
+		switch_channel_set_variable(channel, "RECORD_READ_ONLY", "true");
+	} else if (!strcmp(direction, "recv")) {
+		/* record audio received by the caller */
+		switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "true");
 	};
 
-	if (r_attribs.start_beep.v.i) {
+	if (start_beep) {
 		switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL);
 	}
 
