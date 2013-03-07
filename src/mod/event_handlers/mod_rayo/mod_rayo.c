@@ -2349,6 +2349,7 @@ static void on_mixer_destroy_event(struct rayo_mixer *mixer, switch_event_t *eve
 	if (mixer) {
 		/* remove from hash and destroy */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "destroying mixer: %s\n", rayo_mixer_get_name(mixer));
+		rayo_mixer_unlock(mixer); /* release original lock */
 		rayo_mixer_destroy(mixer);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "destroy: mixer not found\n");
