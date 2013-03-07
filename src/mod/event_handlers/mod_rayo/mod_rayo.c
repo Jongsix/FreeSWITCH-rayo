@@ -1290,14 +1290,12 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 	/* do hangup */
 	if (!zstr(hangup_cause)) {
 		/* TODO set hangup signaling headers */
-		if (switch_core_session_execute_application_async(session, "hangup", hangup_cause) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(node);
-		} else {
-			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		}
+		switch_ivr_kill_uuid(rayo_call_get_uuid(call), SWITCH_CAUSE_NORMAL_CLEARING);
+		response = iks_new_iq_result(node);
 	} else {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
+
 	return response;
 }
 
