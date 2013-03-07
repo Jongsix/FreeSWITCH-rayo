@@ -698,9 +698,6 @@ struct tts_context {
 	int frame_size;
 	/** done flag */
 	int done;
-	/** frames of silence to send before/after sending TTS */
-	int lead_in_out;
-	int lead;
 };
 
 /**
@@ -730,8 +727,6 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
 
 	memset(context, 0, sizeof(*context));
 	context->flags = SWITCH_SPEECH_FLAG_NONE;
-	context->lead_in_out = 10;
-	context->lead = context->lead_in_out;
 	if ((status = switch_core_speech_open(&context->sh, module, voice, handle->samplerate, handle->interval, &context->flags, NULL)) == SWITCH_STATUS_SUCCESS) {
 		if ((status = switch_core_speech_feed_tts(&context->sh, document, &context->flags)) == SWITCH_STATUS_SUCCESS) {
 			handle->channels = 1;
@@ -767,14 +762,10 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 	}
 	rlen = *len * 2; /* rlen (bytes) = len (samples) * 2 */
 
-	if (context->lead) {
-		memset(data, 255, *len);
-		context->lead--;
-	} else if (!context->done) {
+	if (!context->done) {
 		context->flags = SWITCH_SPEECH_FLAG_BLOCKING;
 		if ((status = switch_core_speech_read_tts(&context->sh, data, &rlen, &context->flags))) {
 			context->done = 1;
-			context->lead = context->lead_in_out;
 		}
 	} else {
 		switch_core_speech_flush_tts(&context->sh);
