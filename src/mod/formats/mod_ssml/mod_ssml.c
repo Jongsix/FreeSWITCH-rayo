@@ -501,6 +501,8 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 		case IKS_SINGLE:
 			if (!strcmp("break", name)) {
 				process_break(parsed_data, atts);
+			} else if (!strcmp("audio", name)) {
+				process_audio_open(parsed_data, atts);
 			}
 			break;
 	}
@@ -634,12 +636,18 @@ static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *
 	parsed_data->pool = handle->memory_pool;
 	parsed_data->sample_rate = handle->samplerate;
 
-	if (iks_parse(parser, path, 0, 1) == IKS_OK && parsed_data->num_files) {
-		context->files = parsed_data->files;
-		context->num_files = parsed_data->num_files;
-		context->index = -1;
-		handle->private_info = context;
-		status = next_file(handle);
+	if (iks_parse(parser, path, 0, 1) == IKS_OK) {
+		if (parsed_data->num_files) {
+			context->files = parsed_data->files;
+			context->num_files = parsed_data->num_files;
+			context->index = -1;
+			handle->private_info = context;
+			status = next_file(handle);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "No files to play: %s\n", path);
+		}
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Parse error: %s, num_files = %i\n", path, parsed_data->num_files);
 	}
 
 	iks_parser_delete(parser);
