@@ -258,6 +258,7 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	rayo_api_execute_async("conference", stream.data);
 	iks_free(document_str);
 	switch_safe_free(stream.data);
+	rayo_component_unlock(component);
 	return NULL;
 }
 
