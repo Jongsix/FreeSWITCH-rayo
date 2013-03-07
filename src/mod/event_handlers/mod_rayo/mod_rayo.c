@@ -43,10 +43,10 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 
 #define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
 
-#define RAYO_CAUSE_HANGUP "NORMAL_CLEARING"
-#define RAYO_CAUSE_DECLINE "CALL_REJECTED"
-#define RAYO_CAUSE_BUSY "USER_BUSY"
-#define RAYO_CAUSE_ERROR "TEMPORARY_FAILURE"
+#define RAYO_CAUSE_HANGUP SWITCH_CAUSE_NORMAL_CLEARING
+#define RAYO_CAUSE_DECLINE SWITCH_CAUSE_CALL_REJECTED
+#define RAYO_CAUSE_BUSY SWITCH_CAUSE_USER_BUSY
+#define RAYO_CAUSE_ERROR SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE
 
 struct rayo_session;
 struct rayo_call;
@@ -1203,13 +1203,9 @@ static int rayo_component_command_ok(struct rayo_session *rsession, struct rayo_
 static iks *on_rayo_accept(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
-	/* if we get this far, session has control of the call */
 	/* send ringing */
-	if (switch_core_session_execute_application_async(session, "ring_ready", "") == SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_result(node);
-	} else {
-		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-	}
+	switch_channel_pre_answer(switch_core_session_get_channel(session));
+	response = iks_new_iq_result(node);
 	return response;
 }
 
@@ -1224,11 +1220,8 @@ static iks *on_rayo_answer(struct rayo_call *call, switch_core_session_t *sessio
 	iks *response = NULL;
 	/* TODO set answer signaling headers */
 	/* send answer to call */
-	if (switch_core_session_execute_application_async(session, "answer", "") == SWITCH_STATUS_SUCCESS) {
-		response = iks_new_iq_result(node);
-	} else {
-		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-	}
+	switch_channel_answer(switch_core_session_get_channel(session));
+	response = iks_new_iq_result(node);
 	return response;
 }
 
@@ -1248,12 +1241,14 @@ static iks *on_rayo_redirect(struct rayo_call *call, switch_core_session_t *sess
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else {
 		/* TODO set redirect signaling headers */
-		/* send redirect to call */
-		if (switch_core_session_execute_application_async(session, "redirect", redirect_to) == SWITCH_STATUS_SUCCESS) {
-			response = iks_new_iq_result(node);
-		} else {
-			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-		}
+		switch_core_session_message_t msg = { 0 };
+
+		/* Tell the channel to deflect the call */
+		msg.from = __FILE__;
+		msg.string_arg = switch_core_session_strdup(session, redirect_to);
+		msg.message_id = SWITCH_MESSAGE_INDICATE_DEFLECT;
+		switch_core_session_receive_message(session, &msg);
+		response = iks_new_iq_result(node);
 	}
 	return response;
 }
@@ -1269,11 +1264,11 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 	iks *response = NULL;
 	iks *hangup = iks_child(node);
 	iks *reason = iks_child(hangup);
-	char *hangup_cause = NULL;
+	int hangup_cause = RAYO_CAUSE_HANGUP;
 
 	/* get hangup cause */
 	if (!reason && !strcmp("hangup", iks_name(hangup))) {
-		/* no reason required in <hangup> */
+		/* no reason in <hangup> */
 		hangup_cause = RAYO_CAUSE_HANGUP;
 	} else if (reason && !strcmp("reject", iks_name(hangup))) {
 		char *reason_name = iks_name(reason);
@@ -1284,16 +1279,18 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 			hangup_cause = RAYO_CAUSE_DECLINE;
 		} else if (!strcmp("error", reason_name)) {
 			hangup_cause = RAYO_CAUSE_ERROR;
+		} else {
+			response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		}
+	} else {
+		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	/* do hangup */
-	if (!zstr(hangup_cause)) {
+	if (!response) {
 		/* TODO set hangup signaling headers */
-		switch_ivr_kill_uuid(rayo_call_get_uuid(call), SWITCH_CAUSE_NORMAL_CLEARING);
+		switch_ivr_kill_uuid(rayo_call_get_uuid(call), hangup_cause);
 		response = iks_new_iq_result(node);
-	} else {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	return response;
@@ -2718,8 +2715,7 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 		case SWITCH_EVENT_CHANNEL_DESTROY:
 			on_call_end_event(rsession, event);
 			break;
-		//case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
-		case SWITCH_EVENT_CHANNEL_PROGRESS:
+		case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
 			on_call_ringing_event(rsession, event);
 			break;
 		case SWITCH_EVENT_CHANNEL_ANSWER:
@@ -3154,7 +3150,7 @@ static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, s
 		/* detect idle session (rayo-client has stopped controlling call) and terminate call */
 		if (idle_duration_ms > globals.max_idle_ms) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Ending abandoned call.  idle_duration_ms = %i ms\n", idle_duration_ms);
-			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_CLEARING);
+			switch_channel_hangup(channel, RAYO_CAUSE_HANGUP);
 		}
 	}
 	return SWITCH_STATUS_SUCCESS;
@@ -3242,7 +3238,7 @@ SWITCH_STANDARD_APP(rayo_app)
 		/* nobody to offer to */
 		if (!ok) {
 			rayo_call_destroy(call);
-			switch_channel_hangup(channel, SWITCH_CAUSE_CALL_REJECTED);
+			switch_channel_hangup(channel, RAYO_CAUSE_DECLINE);
 		}
 	}
 
@@ -3486,7 +3482,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ORIGINATE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
-	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ANSWER, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_DESTROY, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_BRIDGE, NULL, route_call_event, NULL);
