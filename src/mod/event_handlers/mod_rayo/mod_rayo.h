@@ -57,6 +57,7 @@ enum rayo_actor_type {
 extern const char *rayo_actor_get_id(struct rayo_actor *actor);
 extern const char *rayo_actor_get_jid(struct rayo_actor *actor);
 extern switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor);
+extern int rayo_actor_seq_next(struct rayo_actor *actor);
 
 extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
 #define rayo_call_get_jid(call) rayo_actor_get_jid(rayo_call_get_actor(call))
