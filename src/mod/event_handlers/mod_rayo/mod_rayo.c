@@ -559,7 +559,7 @@ static void _rayo_actor_unlock(struct rayo_actor *actor, const char *file, int l
 /**
  * Get next number in sequence
  */
-static int rayo_actor_seq_next(struct rayo_actor *actor)
+int rayo_actor_seq_next(struct rayo_actor *actor)
 {
 	int seq;
 	switch_mutex_lock(actor->mutex);
