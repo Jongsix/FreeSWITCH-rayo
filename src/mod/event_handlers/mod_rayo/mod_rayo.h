@@ -54,36 +54,38 @@ enum rayo_actor_type {
 	RAT_COMPONENT
 };
 
-extern const char *rayo_call_get_jid(struct rayo_call *call);
+extern const char *rayo_actor_get_id(struct rayo_actor *actor);
+extern const char *rayo_actor_get_jid(struct rayo_actor *actor);
+extern switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor);
+
+extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
+#define rayo_call_get_jid(call) rayo_actor_get_jid(rayo_call_get_actor(call))
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
-extern const char *rayo_call_get_uuid(struct rayo_call *call);
+#define rayo_call_get_uuid(call) rayo_actor_get_id(rayo_call_get_actor(call))
 extern int rayo_call_is_joined(struct rayo_call *call);
 extern int rayo_call_is_playing(struct rayo_call *call);
-extern int rayo_call_seq_next(struct rayo_call *call);
-extern switch_memory_pool_t *rayo_call_get_pool(struct rayo_call *call);
-extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
 
-extern const char *rayo_mixer_get_jid(struct rayo_mixer *mixer);
-extern const char *rayo_mixer_get_name(struct rayo_mixer *mixer);
-extern int rayo_mixer_seq_next(struct rayo_mixer *mixer);
-extern switch_memory_pool_t *rayo_mixer_get_pool(struct rayo_mixer *mixer);
 extern struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer);
+#define rayo_mixer_get_name(mixer) rayo_actor_get_id(rayo_mixer_get_actor(mixer))
+#define rayo_mixer_get_jid(mixer) rayo_actor_get_jid(rayo_mixer_get_actor(mixer))
+#define rayo_mixer_get_pool(mixer) rayo_actor_get_pool(rayo_mixer_get_actor(mixer))
 
+extern struct rayo_actor *rayo_component_get_actor(struct rayo_component *component);
 #define rayo_component_locate(id) _rayo_component_locate(id, __FILE__, __LINE__)
 extern struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line);
 #define rayo_component_unlock(component) _rayo_component_unlock(component, __FILE__, __LINE__)
 extern void _rayo_component_unlock(struct rayo_component *component, const char *file, int line);
-#define rayo_component_create(type, jid, id, ref, parent, client_jid) _rayo_component_create(type, jid, id, ref, parent, client_jid, __FILE__, __LINE__)
-extern struct rayo_component *_rayo_component_create(const char *type, const char *jid, const char *id, const char *ref, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
+#define rayo_component_create(type, id, parent, client_jid) _rayo_component_create(type, id, parent, client_jid, __FILE__, __LINE__)
+extern struct rayo_component *_rayo_component_create(const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
 #define rayo_component_destroy(component) _rayo_component_destroy(component, __FILE__, __LINE__)
 extern void _rayo_component_destroy(struct rayo_component *component, const char *file, int line);
-extern const char *rayo_component_get_id(struct rayo_component *component);
+#define rayo_component_get_id(component) rayo_actor_get_id(rayo_component_get_actor(component))
 extern const char *rayo_component_get_ref(struct rayo_component *component);
-extern const char *rayo_component_get_jid(struct rayo_component *component);
+#define rayo_component_get_jid(component) rayo_actor_get_jid(rayo_component_get_actor(component))
 extern const char *rayo_component_get_parent_id(struct rayo_component *component);
 extern enum rayo_actor_type rayo_component_get_parent_type(struct rayo_component *component);
 extern const char *rayo_component_get_client_jid(struct rayo_component *component);
-extern switch_memory_pool_t *rayo_component_get_pool(struct rayo_component *component);
+#define rayo_component_get_pool(component) rayo_actor_get_pool(rayo_component_get_actor(component))
 extern void *rayo_component_get_data(struct rayo_component *component);
 extern void rayo_component_set_data(struct rayo_component *component, void *data);
 

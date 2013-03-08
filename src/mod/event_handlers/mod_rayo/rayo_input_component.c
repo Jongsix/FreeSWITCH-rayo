@@ -273,15 +273,15 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	}
 
 	/* create component */
-	handler->component = rayo_call_component_create(NULL, call, "input", iks_find_attrib(iq, "from"));
+	handler->component = rayo_component_create("input", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
 	rayo_component_set_data(handler->component, handler);
 
 	/* acknowledge command */
 	rayo_component_send_start(handler->component, iq);
-	
+
 	/* start input detection */
 	switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
-	
+
 	return NULL;
 }
 
@@ -291,7 +291,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 static iks *stop_input_component(struct rayo_component *component, iks *iq)
 {
 	struct input_handler *handler = (struct input_handler *)rayo_component_get_data(component);
-	
+
 	if (handler && !handler->done && !handler->stop && handler->bug) {
 		switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 		if (session) {
