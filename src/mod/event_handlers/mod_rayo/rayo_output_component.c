@@ -36,6 +36,8 @@
 struct output_component {
 	/** document to play */
 	iks *document;
+	/** maximum time to play */
+	int max_time;
 	/** silence between repeats */
 	int repeat_interval;
 	/** number of times to repeat */
@@ -64,7 +66,30 @@ ELEMENT_END
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
 /**
- * Start execution of output component
+ * Create new output component
+ */
+static struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid)
+{
+	struct rayo_component *component = NULL;
+	struct output_component *output_component = NULL;
+
+	/* validate output attributes */
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
+		return NULL;
+	}
+
+	component = rayo_component_create("output", NULL, actor, client_jid);
+	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
+	output_component->document = iks_copy(output);
+	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
+	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
+	output_component->max_time = iks_find_int_attrib(output, "max-time");
+	rayo_component_set_data(component, output_component);
+	return component;
+}
+
+/**
+ * Start execution of call output component
  */
 static iks *start_call_output_component(struct rayo_call *call, switch_core_session_t *session,  iks *iq)
 {
@@ -72,21 +97,12 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	struct output_component *output_component = NULL;
 	iks *output = iks_find(iq, "output");
 	switch_stream_handle_t stream = { 0 };
-	int max_time;
 
-	/* validate output attributes */
-	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return NULL;
+	component = create_output_component(rayo_call_get_actor(call), output, iks_find_attrib(iq, "from"));
+	if (!component) {
+		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
-	max_time = iks_find_int_attrib(output, "max-time");
-
-	component = rayo_component_create("output", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
-	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
-	output_component->document = iks_copy(output);
-	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
-	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
-	rayo_component_set_data(component, output_component);
+	output_component = OUTPUT_COMPONENT(component);
 
 	/* acknowledge command */
 	rayo_component_send_start(component, iq);
@@ -94,8 +110,8 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	/* build playback command */
 	SWITCH_STANDARD_STREAM(stream);
 
-	if (max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i}", max_time * 1000);
+	if (output_component->max_time > 0) {
+		stream.write_function(&stream, "{timeout=%i}", output_component->max_time * 1000);
 	}
 
 	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
@@ -174,7 +190,7 @@ static void rayo_api_execute_async(const char *cmd, const char *args)
 }
 
 /**
- * Start execution of output component
+ * Start execution of mixer output component
  */
 static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 {
@@ -182,31 +198,20 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	struct rayo_component *component = NULL;
 	iks *output = iks_find(iq, "output");
 	switch_stream_handle_t stream = { 0 };
-	int max_time;
 
-	/* validate output attributes */
-	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return NULL;
+	component = create_output_component(rayo_mixer_get_actor(mixer), output, iks_find_attrib(iq, "from"));
+	if (!component) {
+		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
-	max_time = iks_find_int_attrib(output, "max-time");
-
-	/* acknowledge command */
-	component = rayo_component_create("output", NULL, rayo_mixer_get_actor(mixer), iks_find_attrib(iq, "from"));
-	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
-	output_component->document = iks_copy(output);
-	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
-	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
-	rayo_component_set_data(component, output_component);
-	rayo_component_send_start(component, iq);
+	output_component = OUTPUT_COMPONENT(component);
 
 	/* build conference command */
 	SWITCH_STANDARD_STREAM(stream);
 
 	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), rayo_component_get_id(component));
 
-	if (max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i}", max_time * 1000);
+	if (output_component->max_time > 0) {
+		stream.write_function(&stream, "{timeout=%i}", output_component->max_time * 1000);
 	}
 
 	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
@@ -377,6 +382,8 @@ struct rayo_file_context {
 	char *ssml;
 	/** The component */
 	struct rayo_component *component;
+	/** number of times played */
+	int play_count;
 };
 
 /**
@@ -417,9 +424,8 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 
 	/* done? */
 	if (!context->cur_doc) {
-		if (output->repeat_times > 1) {
+		if (++context->play_count < output->repeat_times) {
 			/* repeat all document(s) */
-			output->repeat_times--;
 			if (!output->repeat_interval) {
 				goto top;
 			}
@@ -478,6 +484,8 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	if (context->component) {
 		OUTPUT_COMPONENT(context->component)->fh = handle;
 		handle->private_info = context;
+		context->cur_doc = NULL;
+		context->play_count = 0;
 		status = next_file(handle);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "File error! %s\n", path);
@@ -550,6 +558,28 @@ static switch_status_t rayo_file_read(switch_file_handle_t *handle, void *data, 
 	return status;
 }
 
+/**
+ * Seek file
+ */
+static switch_status_t rayo_file_seek(switch_file_handle_t *handle, unsigned int *cur_sample, int64_t samples, int whence)
+{
+	struct rayo_file_context *context = handle->private_info;
+
+	if (samples == 0 && whence == SWITCH_SEEK_SET) {
+		/* restart from beginning */
+		context->cur_doc = NULL;
+		context->play_count = 0;
+		return next_file(handle);
+	}
+
+	if (!handle->seekable) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "File is not seekable\n");
+		return SWITCH_STATUS_NOTIMPL;
+	}
+
+	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
+}
+
 static char *rayo_supported_formats[] = { "rayo", NULL };
 
 /**
@@ -577,6 +607,7 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 	file_interface->file_open = rayo_file_open;
 	file_interface->file_close = rayo_file_close;
 	file_interface->file_read = rayo_file_read;
+	file_interface->file_seek = rayo_file_seek;
 
 	return SWITCH_STATUS_SUCCESS;
 }
