@@ -3054,7 +3054,7 @@ static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, s
 		switch_time_t idle_start = call->idle_start_time;
 		int idle_duration_ms = (now - idle_start) / 1000;
 		/* detect idle session (rayo-client has stopped controlling call) and terminate call */
-		if (idle_duration_ms > globals.max_idle_ms) {
+		if (!rayo_call_is_joined(call) && idle_duration_ms > globals.max_idle_ms) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Ending abandoned call.  idle_duration_ms = %i ms\n", idle_duration_ms);
 			switch_channel_hangup(channel, RAYO_CAUSE_HANGUP);
 		}
