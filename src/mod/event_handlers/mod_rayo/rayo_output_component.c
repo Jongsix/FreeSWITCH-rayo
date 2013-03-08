@@ -34,14 +34,14 @@
  * An output component
  */
 struct output_component {
-	/** stop flag */
-	int stop;
 	/** document to play */
 	iks *document;
 	/** silence between repeats */
 	int repeat_interval;
 	/** number of times to repeat */
 	int repeat_times;
+	/** component file handle */
+	switch_file_handle_t *fh;
 };
 
 #define OUTPUT_COMPONENT(x) ((struct output_component *)(rayo_component_get_data(x)))
@@ -83,7 +83,6 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 
 	component = rayo_component_create("output", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
 	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
-	output_component->stop = 0;
 	output_component->document = iks_copy(output);
 	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
 	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
@@ -195,7 +194,6 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	/* acknowledge command */
 	component = rayo_component_create("output", NULL, rayo_mixer_get_actor(mixer), iks_find_attrib(iq, "from"));
 	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
-	output_component->stop = 0;
 	output_component->document = iks_copy(output);
 	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
 	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
@@ -225,9 +223,146 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
  */
 static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
-	OUTPUT_COMPONENT(component)->stop = 1;
-	return iks_new_iq_result(iq);
+	if (OUTPUT_COMPONENT(component)->fh) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
+		switch_set_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_DONE);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Pause execution of output component
+ */
+static iks *pause_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s pausing\n", rayo_component_get_jid(component));
+		switch_set_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_PAUSE);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Resume execution of output component
+ */
+static iks *resume_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s resuming\n", rayo_component_get_jid(component));
+		switch_clear_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_PAUSE);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Speed up execution of output component
+ */
+static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		OUTPUT_COMPONENT(component)->fh->speed++;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s speeding up to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->speed);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Slow down execution of output component
+ */
+static iks *speed_down_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		OUTPUT_COMPONENT(component)->fh->speed--;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s slowing down to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->speed);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Increase volume of output component
+ */
+static iks *volume_up_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		OUTPUT_COMPONENT(component)->fh->vol++;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s increasing volume to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->vol);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+/**
+ * Lower volume of output component
+ */
+static iks *volume_down_output_component(struct rayo_component *component, iks *iq)
+{
+	if (OUTPUT_COMPONENT(component)->fh) {
+		OUTPUT_COMPONENT(component)->fh->vol--;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s lowering volume to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->vol);
+		return iks_new_iq_result(iq);
+	}
+	/* unlikely- got here before fh assigned */
+	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+}
+
+ATTRIB_RULE(seek_direction)
+{
+	return !strcmp("forward", value) || !strcmp("back", value);
+}
+
+ELEMENT(RAYO_OUTPUT_SEEK)
+	ATTRIB(direction,, seek_direction)
+	ATTRIB(amount,-1, positive)
+ELEMENT_END
+
+/**
+ * Seek output component
+ */
+static iks *seek_output_component(struct rayo_component *component, iks *iq)
+{
+	iks *seek = iks_find(iq, "seek");
+	iks *response = NULL;
+	if (!OUTPUT_COMPONENT(component)->fh) {
+		/* unlikely- got here before fh assigned */
+		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	} else if (!VALIDATE_RAYO_OUTPUT_SEEK(seek)) {
+		response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+	} else {
+		struct output_component *output = OUTPUT_COMPONENT(component);
+		int is_forward = !strcmp("forward", iks_find_attrib(seek, "direction"));
+		int amount_ms = iks_find_int_attrib(seek, "amount");
+		int samples_per_ms = 0;
+		int32_t target = 0;
+		unsigned int pos = 0;
+		if (rayo_component_get_parent_type(component) == RAT_MIXER) {
+			/* TODO get sample rate from mixer */
+			samples_per_ms = 16000 / 1000;
+		} else {
+			/* TODO get sample rate from call */
+			samples_per_ms = 8000 / 1000;
+		}
+		if (!is_forward) {
+			amount_ms *= -1;
+		}
+		target = (int32_t)output->fh->pos + (amount_ms * samples_per_ms);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s seeking %i ms\n",
+			rayo_component_get_jid(component), amount_ms);
+		switch_core_file_seek(output->fh, &pos, target, SWITCH_SEEK_SET);
+		return iks_new_iq_result(iq);
+	}
+
+	return response;
 }
 
 /**
@@ -255,11 +390,6 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 	char *file;
 
   top:
-
-	if (output->stop) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stop requested\n", rayo_component_get_jid(context->component));
-		return SWITCH_STATUS_FALSE;
-	}
 
 	if (switch_test_flag((&context->fh), SWITCH_FILE_OPEN)) {
 		switch_core_file_close(&context->fh);
@@ -345,8 +475,8 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 
 	context->component = rayo_component_locate(path);
 
-	/* parse rayo doc */
 	if (context->component) {
+		OUTPUT_COMPONENT(context->component)->fh = handle;
 		handle->private_info = context;
 		status = next_file(handle);
 	} else {
@@ -408,11 +538,6 @@ static switch_status_t rayo_file_read(switch_file_handle_t *handle, void *data, 
 	struct rayo_file_context *context = (struct rayo_file_context *)handle->private_info;
 	size_t llen = *len;
 
-	/* done? */
-	if (context->component && OUTPUT_COMPONENT(context->component)->stop) {
-		return SWITCH_STATUS_FALSE;
-	}
-
 	status = switch_core_file_read(&context->fh, data, len);
 	if (status != SWITCH_STATUS_SUCCESS) {
 		if ((status = next_file(handle)) != SWITCH_STATUS_SUCCESS) {
@@ -438,6 +563,13 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 	rayo_mixer_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_mixer_output_component);
 	rayo_component_command_handler_add("output", "set:"RAYO_NS":stop", stop_output_component); /* TODO remove when punchblock is updated */
 	rayo_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
+	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
 
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = "mod_rayo";
