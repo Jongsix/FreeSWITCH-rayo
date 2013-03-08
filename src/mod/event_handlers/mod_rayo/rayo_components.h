@@ -66,9 +66,6 @@ extern switch_status_t rayo_output_component_shutdown(void);
 extern switch_status_t rayo_prompt_component_shutdown(void);
 extern switch_status_t rayo_record_component_shutdown(void);
 
-extern struct rayo_component *rayo_call_component_create(const char *id, struct rayo_call *call, const char *type, const char *client_jid);
-extern struct rayo_component *rayo_mixer_component_create(const char *id, struct rayo_mixer *mixer, const char *type, const char *client_jid);
-
 extern void rayo_component_send_start(struct rayo_component *component, iks *iq);
 extern void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *error_type);
 extern void rayo_component_send_complete(struct rayo_component *component, const char *reason, const char *reason_namespace);
