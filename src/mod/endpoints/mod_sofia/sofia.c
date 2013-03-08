@@ -1758,18 +1758,18 @@ void sofia_event_callback(nua_event_t event,
 	case nua_i_info:
 	
 		if (sess_count >= sess_max || !sofia_test_pflag(profile, PFLAG_RUNNING) || !switch_core_ready_inbound()) {
-			nua_respond(nh, 503, "Maximum Calls In Progress", SIPTAG_RETRY_AFTER_STR("300"), TAG_END());
+			nua_respond(nh, 503, "Maximum Calls In Progress", SIPTAG_RETRY_AFTER_STR("300"), NUTAG_WITH_THIS(nua), TAG_END());
 			goto end;
 		}
 		
 
 		if (switch_queue_size(mod_sofia_globals.msg_queue) > critical) {
-			nua_respond(nh, 503, "System Busy", SIPTAG_RETRY_AFTER_STR("300"), TAG_END());
+			nua_respond(nh, 503, "System Busy", SIPTAG_RETRY_AFTER_STR("300"), NUTAG_WITH_THIS(nua), TAG_END());
 			goto end;
 		}
 		
 		if (sofia_test_pflag(profile, PFLAG_STANDBY)) {
-			nua_respond(nh, 503, "System Paused", TAG_END());
+			nua_respond(nh, 503, "System Paused", NUTAG_WITH_THIS(nua), TAG_END());
 			goto end;
 		}
 		break;
@@ -2499,6 +2499,7 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Activated db for %s\n", profile->name);
 
 	switch_mutex_init(&profile->ireg_mutex, SWITCH_MUTEX_NESTED, profile->pool);
+	switch_mutex_init(&profile->dbh_mutex, SWITCH_MUTEX_NESTED, profile->pool);
 	switch_mutex_init(&profile->gateway_mutex, SWITCH_MUTEX_NESTED, profile->pool);
 	switch_queue_create(&profile->event_queue, SOFIA_QUEUE_SIZE, profile->pool);
 
@@ -4872,7 +4873,7 @@ static void sofia_handle_sip_r_invite(switch_core_session_t *session, int status
 						switch_mprintf("select 'appearance-index=1' from sip_subscriptions where expires > -1 and hostname='%q' and event='call-info' and "
 									   "sub_to_user='%q' and sub_to_host='%q'", mod_sofia_globals.hostname, sip->sip_to->a_url->url_user,
 									   sip->sip_from->a_url->url_host);
-					sofia_glue_execute_sql2str(profile, profile->ireg_mutex, sql, buf, sizeof(buf));
+					sofia_glue_execute_sql2str(profile, profile->dbh_mutex, sql, buf, sizeof(buf));
 
 					if (mod_sofia_globals.debug_sla > 1) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "QUERY SQL %s [%s]\n", sql, buf);
@@ -5176,7 +5177,7 @@ static void sofia_handle_sip_r_invite(switch_core_session_t *session, int status
 					
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Passing %d %s to other leg\n", status, phrase);
 
-					if (status == 491 && sofia_test_flag(tech_pvt, TFLAG_T38_PASSTHRU)) {
+					if (status == 491 && (sofia_test_flag(tech_pvt, TFLAG_T38_PASSTHRU)||switch_channel_test_flag(channel, CF_PROXY_MODE))) {
 						nua_respond(other_tech_pvt->nh, SIP_491_REQUEST_PENDING, TAG_END());
 						switch_core_session_rwunlock(other_session);
 						goto end;
@@ -8059,7 +8060,7 @@ void sofia_handle_sip_i_invite(switch_core_session_t *session, nua_t *nua, sofia
 				switch_channel_hangup(tech_pvt->channel, SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER);
 			}
 
-			tmp = sofia_overcome_sip_uri_weakness(session, url, transport, SWITCH_TRUE, NULL);
+			tmp = sofia_overcome_sip_uri_weakness(session, url, transport, SWITCH_TRUE, NULL, NULL);
 
 			if ((at = strchr(tmp, '@'))) {
 				url = switch_core_session_sprintf(session, "sip:%s%s", user, at);
@@ -8241,7 +8242,7 @@ void sofia_handle_sip_i_invite(switch_core_session_t *session, nua_t *nua, sofia
 				switch_mprintf("select 'appearance-index=1' from sip_subscriptions where expires > -1 and hostname='%q' and event='call-info' and "
 							   "sub_to_user='%q' and sub_to_host='%q'", mod_sofia_globals.hostname, sip->sip_to->a_url->url_user,
 							   sip->sip_from->a_url->url_host);
-			sofia_glue_execute_sql2str(profile, profile->ireg_mutex, sql, buf, sizeof(buf));
+			sofia_glue_execute_sql2str(profile, profile->dbh_mutex, sql, buf, sizeof(buf));
 			
 			if (mod_sofia_globals.debug_sla > 1) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "QUERY SQL %s [%s]\n", sql, buf);
@@ -8378,7 +8379,7 @@ void sofia_handle_sip_i_invite(switch_core_session_t *session, nua_t *nua, sofia
 				 "and call_id is not null",
 				 switch_str_nil(p), user, host, user, host);
 
-			if ((str = sofia_glue_execute_sql2str(profile, profile->ireg_mutex, sql, cid, sizeof(cid)))) {
+			if ((str = sofia_glue_execute_sql2str(profile, profile->dbh_mutex, sql, cid, sizeof(cid)))) {
 				bnh = nua_handle_by_call_id(nua, str);
 			}
 

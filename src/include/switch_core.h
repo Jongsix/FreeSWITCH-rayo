@@ -203,6 +203,11 @@ SWITCH_DECLARE(void *) switch_core_media_bug_get_user_data(_In_ switch_media_bug
 */
 SWITCH_DECLARE(switch_frame_t *) switch_core_media_bug_get_write_replace_frame(_In_ switch_media_bug_t *bug);
 
+
+SWITCH_DECLARE(switch_frame_t *) switch_core_media_bug_get_native_read_frame(switch_media_bug_t *bug);
+SWITCH_DECLARE(switch_frame_t *) switch_core_media_bug_get_native_write_frame(switch_media_bug_t *bug);
+
+
 /*!
   \brief Set a return replace frame
   \param bug the bug to set the frame on
@@ -2391,6 +2396,7 @@ SWITCH_DECLARE(void) switch_cache_db_flush_handles(void);
 SWITCH_DECLARE(const char *) switch_core_banner(void);
 SWITCH_DECLARE(switch_bool_t) switch_core_session_in_thread(switch_core_session_t *session);
 SWITCH_DECLARE(uint32_t) switch_default_ptime(const char *name, uint32_t number);
+SWITCH_DECLARE(uint32_t) switch_default_rate(const char *name, uint32_t number);
 
 /*!
  \brief Add user registration

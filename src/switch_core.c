@@ -839,12 +839,10 @@ SWITCH_DECLARE(int32_t) set_auto_priority(void)
 
 	if (!runtime.cpu_count) runtime.cpu_count = 1;
 
-	/* If we have more than 1 cpu, we should use realtime priority so we can have priority threads */
-	if (runtime.cpu_count > 1) {
-		return set_realtime_priority();
-	}
+	return set_realtime_priority();
 
-	return 0;
+
+	// ERROR: code not reachable on Windows Visual Studio Express 2008 return 0;
 }
 
 SWITCH_DECLARE(int32_t) change_user_group(const char *user, const char *group)
@@ -1720,6 +1718,16 @@ SWITCH_DECLARE(uint32_t) switch_default_ptime(const char *name, uint32_t number)
 	}
 
 	return 20;
+}
+
+SWITCH_DECLARE(uint32_t) switch_default_rate(const char *name, uint32_t number)
+{
+
+	if (!strcasecmp(name, "opus")) {
+		return 48000;
+	}
+
+	return 8000;
 }
 
 static uint32_t d_30 = 30;

@@ -1447,11 +1447,12 @@ void sofia_glue_get_addr(msg_t *msg, char *buf, size_t buflen, int *port)
 }
 
 char *sofia_overcome_sip_uri_weakness(switch_core_session_t *session, const char *uri, const sofia_transport_t transport, switch_bool_t uri_only,
-									  const char *params)
+									  const char *params, const char *invite_tel_params)
 {
 	char *stripped = switch_core_session_strdup(session, uri);
 	char *new_uri = NULL;
 	char *p;
+
 
 	stripped = sofia_glue_get_url_from_contact(stripped, 0);
 
@@ -1496,6 +1497,18 @@ char *sofia_overcome_sip_uri_weakness(switch_core_session_t *session, const char
 		}
 	}
 
+
+
+	if (!zstr(invite_tel_params)) {
+		char *lhs, *rhs = strchr(new_uri, '@');
+
+		if (!zstr(rhs)) {
+			*rhs++ = '\0';
+			lhs = new_uri;
+			new_uri = switch_core_session_sprintf(session, "%s;%s@%s", lhs, invite_tel_params, rhs);
+		}
+	}
+	
 	return new_uri;
 }
 
@@ -2191,6 +2204,7 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 		const char *screen = "no";
 		const char *invite_params = switch_channel_get_variable(tech_pvt->channel, "sip_invite_params");
 		const char *invite_to_params = switch_channel_get_variable(tech_pvt->channel, "sip_invite_to_params");
+		const char *invite_tel_params = switch_channel_get_variable(switch_core_session_get_channel(session), "sip_invite_tel_params");
 		const char *invite_to_uri = switch_channel_get_variable(tech_pvt->channel, "sip_invite_to_uri");
 		const char *invite_from_uri = switch_channel_get_variable(tech_pvt->channel, "sip_invite_from_uri");
 		const char *invite_contact_params = switch_channel_get_variable(tech_pvt->channel, "sip_invite_contact_params");
@@ -2199,6 +2213,7 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 		const char *from_display = switch_channel_get_variable(tech_pvt->channel, "sip_from_display");
 		const char *invite_req_uri = switch_channel_get_variable(tech_pvt->channel, "sip_invite_req_uri");
 		const char *invite_domain = switch_channel_get_variable(tech_pvt->channel, "sip_invite_domain");
+		
 		const char *use_name, *use_number;
 
 		if (zstr(tech_pvt->dest)) {
@@ -2335,10 +2350,10 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 			}
 		}
 
-		url_str = sofia_overcome_sip_uri_weakness(session, url, tech_pvt->transport, SWITCH_TRUE, invite_params);
-		invite_contact = sofia_overcome_sip_uri_weakness(session, tech_pvt->invite_contact, tech_pvt->transport, SWITCH_FALSE, invite_contact_params);
-		from_str = sofia_overcome_sip_uri_weakness(session, invite_from_uri ? invite_from_uri : use_from_str, 0, SWITCH_TRUE, invite_from_params);
-		to_str = sofia_overcome_sip_uri_weakness(session, invite_to_uri ? invite_to_uri : tech_pvt->dest_to, 0, SWITCH_FALSE, invite_to_params);
+		url_str = sofia_overcome_sip_uri_weakness(session, url, tech_pvt->transport, SWITCH_TRUE, invite_params, invite_tel_params);
+		invite_contact = sofia_overcome_sip_uri_weakness(session, tech_pvt->invite_contact, tech_pvt->transport, SWITCH_FALSE, invite_contact_params, NULL);
+		from_str = sofia_overcome_sip_uri_weakness(session, invite_from_uri ? invite_from_uri : use_from_str, 0, SWITCH_TRUE, invite_from_params, NULL);
+		to_str = sofia_overcome_sip_uri_weakness(session, invite_to_uri ? invite_to_uri : tech_pvt->dest_to, 0, SWITCH_FALSE, invite_to_params, NULL);
 
 		switch_channel_set_variable(channel, "sip_outgoing_contact_uri", invite_contact);
 
@@ -2603,7 +2618,7 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 		dst = sofia_glue_get_destination(tech_pvt->dest);
 
 		if (dst->route_uri) {
-			route_uri = sofia_overcome_sip_uri_weakness(tech_pvt->session, dst->route_uri, tech_pvt->transport, SWITCH_TRUE, NULL);
+			route_uri = sofia_overcome_sip_uri_weakness(tech_pvt->session, dst->route_uri, tech_pvt->transport, SWITCH_TRUE, NULL, NULL);
 		}
 
 		if (dst->route) {
@@ -3109,6 +3124,7 @@ switch_status_t sofia_glue_tech_set_codec(private_object_t *tech_pvt, int force)
 
 	if (switch_rtp_ready(tech_pvt->rtp_session)) {
 		switch_rtp_set_default_payload(tech_pvt->rtp_session, tech_pvt->pt);
+		switch_rtp_set_recv_pt(tech_pvt->rtp_session, tech_pvt->agreed_pt);
 	}
 
  end:
@@ -6398,9 +6414,9 @@ void sofia_glue_execute_sql_now(sofia_profile_t *profile, char **sqlp, switch_bo
 	switch_assert(sqlp && *sqlp);
 	sql = *sqlp;	
 
-	switch_mutex_lock(profile->ireg_mutex);
+	switch_mutex_lock(profile->dbh_mutex);
 	switch_sql_queue_manager_push_confirm(profile->qm, sql, 0, !sql_already_dynamic);
-	switch_mutex_unlock(profile->ireg_mutex);
+	switch_mutex_unlock(profile->dbh_mutex);
 
 	if (sql_already_dynamic) {
 		*sqlp = NULL;
@@ -6444,13 +6460,15 @@ void sofia_glue_actually_execute_sql_trans(sofia_profile_t *profile, char *sql, 
 {
 	switch_cache_db_handle_t *dbh = NULL;
 
-	if (!(dbh = sofia_glue_get_db_handle(profile))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
-		return;
-	}
-
 	if (mutex) {
 		switch_mutex_lock(mutex);
+	}
+
+
+	if (!(dbh = sofia_glue_get_db_handle(profile))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
+
+		goto end;
 	}
 
 	switch_cache_db_persistant_execute_trans_full(dbh, sql, 1,
@@ -6462,6 +6480,8 @@ void sofia_glue_actually_execute_sql_trans(sofia_profile_t *profile, char *sql, 
 
 	switch_cache_db_release_db_handle(&dbh);
 
+ end:
+
 	if (mutex) {
 		switch_mutex_unlock(mutex);
 	}
@@ -6472,13 +6492,18 @@ void sofia_glue_actually_execute_sql(sofia_profile_t *profile, char *sql, switch
 	switch_cache_db_handle_t *dbh = NULL;
 	char *err = NULL;
 
-	if (!(dbh = sofia_glue_get_db_handle(profile))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
-		return;
-	}
-
 	if (mutex) {
 		switch_mutex_lock(mutex);
+	}
+
+	if (!(dbh = sofia_glue_get_db_handle(profile))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
+
+		if (mutex) {
+			switch_mutex_unlock(mutex);
+		}
+
+		return;
 	}
 
 	switch_cache_db_execute_sql(dbh, sql, &err);
@@ -6502,13 +6527,18 @@ switch_bool_t sofia_glue_execute_sql_callback(sofia_profile_t *profile,
 	char *errmsg = NULL;
 	switch_cache_db_handle_t *dbh = NULL;
 
-	if (!(dbh = sofia_glue_get_db_handle(profile))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
-		return ret;
-	}
-
 	if (mutex) {
 		switch_mutex_lock(mutex);
+	}
+
+	if (!(dbh = sofia_glue_get_db_handle(profile))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
+
+		if (mutex) {
+			switch_mutex_unlock(mutex);
+		}
+
+		return ret;
 	}
 
 	switch_cache_db_execute_sql_callback(dbh, sql, callback, pdata, &errmsg);
@@ -6536,13 +6566,18 @@ char *sofia_glue_execute_sql2str(sofia_profile_t *profile, switch_mutex_t *mutex
 	char *err = NULL;
 	switch_cache_db_handle_t *dbh = NULL;
 
-	if (!(dbh = sofia_glue_get_db_handle(profile))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
-		return NULL;
-	}
-
 	if (mutex) {
 		switch_mutex_lock(mutex);
+	}
+
+	if (!(dbh = sofia_glue_get_db_handle(profile))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Error Opening DB\n");
+
+		if (mutex) {
+			switch_mutex_unlock(mutex);
+		}
+		
+		return NULL;
 	}
 
 	ret = switch_cache_db_execute_sql2str(dbh, sql, resbuf, len, &err);
