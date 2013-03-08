@@ -48,52 +48,12 @@ void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *e
 }
 
 /**
- * Create new call component
- * @param id the internal ID
- * @param call the parent call
- * @param type the type of component
- * @param client_jid of requesting client
- * @return the component
- */
-struct rayo_component *rayo_call_component_create(const char *id, struct rayo_call *call, const char *type, const char *client_jid)
-{
-	const char *ref = switch_core_sprintf(rayo_call_get_pool(call), "%s-%d", type, rayo_call_seq_next(call));
-	const char *jid = switch_core_sprintf(rayo_call_get_pool(call), "%s/%s", rayo_call_get_jid(call), ref);
-	struct rayo_component *component;
-	if (zstr(id)) {
-		id = jid;
-	}
-	component = rayo_component_create(type, id, jid, ref, rayo_call_get_actor(call), client_jid);
-	return component;
-}
-
-/**
- * Create new mixer component
- * @param id the internal id
- * @param mixer the parent mixer
- * @param type the type of component
- * @param client_jid of requesting client
- * @return the component
- */
-struct rayo_component *rayo_mixer_component_create(const char *id, struct rayo_mixer *mixer, const char *type, const char *client_jid)
-{
-	const char *ref = switch_core_sprintf(rayo_mixer_get_pool(mixer), "%s-%d", type, rayo_mixer_seq_next(mixer));
-	const char *jid = switch_core_sprintf(rayo_mixer_get_pool(mixer), "%s/%s", rayo_mixer_get_name(mixer), ref);
-	struct rayo_component *component;
-	if (zstr(id)) {
-		id = jid;
-	}
-	component = rayo_component_create(type, id, jid, ref, rayo_mixer_get_actor(mixer), client_jid);
-	return component;
-}
-
-/**
  * Send component start reply
  * @param component the component
  * @param iq the start request
  */
 void rayo_component_send_start(struct rayo_component *component, iks *iq)
-{	
+{
 	iks *response = iks_new_iq_result(iq);
 	iks *ref = iks_insert(response, "ref");
 	iks_insert_attrib(ref, "xmlns", RAYO_NS);
@@ -120,7 +80,7 @@ iks *rayo_component_create_complete_event(struct rayo_component *component, cons
 	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
 	x = iks_insert(x, reason);
 	iks_insert_attrib(x, "xmlns", reason_namespace);
-	
+
 	return response;
 }
 

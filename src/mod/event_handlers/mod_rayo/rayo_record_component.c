@@ -31,6 +31,23 @@
 #include "iks_helpers.h"
 
 
+/**
+ * A record component
+ */
+struct record_component {
+	/** pause flag */
+	int pause;
+	int max_duration;
+	int initial_timeout;
+	int final_timeout;
+	const char *direction;
+	int mix;
+	int start_beep;
+	int end_beep;
+};
+
+#define RECORD_COMPONENT(x) ((struct record_component *)(rayo_component_get_data(x)))
+
 /* 1000 Hz beep for 250ms */
 #define RECORD_BEEP "tone_stream://%(250,0,1000)"
 
@@ -39,7 +56,7 @@
  */
 static ATTRIB_RULE(record_direction)
 {
-	return (!strcmp("duplex", value) || 
+	return (!strcmp("duplex", value) ||
 		!strcmp("send", value) ||
 		!strcmp("recv", value));
 }
@@ -98,37 +115,55 @@ static void on_record_stop_event(switch_event_t *event)
 }
 
 /**
- * Start execution of record component
+ * Create a record component
+ */
+static struct rayo_component *record_component_create(const char *id, struct rayo_actor *actor, const char *client_jid, iks *record)
+{
+	struct rayo_component *component = NULL;
+	struct record_component *record_component = NULL;
+
+	/* validate record attributes */
+	if (!VALIDATE_RAYO_RECORD(record)) {
+		return NULL;
+	}
+
+	component = rayo_component_create("record", id, actor, client_jid);
+	record_component = switch_core_alloc(rayo_actor_get_pool(actor), sizeof(*record_component));
+	record_component->max_duration = iks_find_int_attrib(record, "max-duration");
+	record_component->initial_timeout = iks_find_int_attrib(record, "initial-timeout");
+	record_component->final_timeout = iks_find_int_attrib(record, "final-timeout");
+	record_component->direction = switch_core_strdup(rayo_actor_get_pool(actor), iks_find_attrib_soft(record, "direction"));
+	record_component->mix = iks_find_bool_attrib(record, "mix");
+	record_component->start_beep = iks_find_bool_attrib(record, "start-beep");
+	record_component->end_beep = iks_find_bool_attrib(record, "end-beep");
+	rayo_component_set_data(component, record_component);
+
+	return component;
+}
+
+/**
+ * Start execution of call record component
  */
 static iks *start_call_record_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
+	struct rayo_component *component = NULL;
+	struct record_component *record_component = NULL;
 	iks *record = iks_child(iq);
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	char *file = NULL;
 	int max_duration_sec = 0;
-	int max_duration;
-	int initial_timeout;
-	int final_timeout;
-	const char *direction;
-	int mix;
-	int start_beep;
-
-	/* validate record attributes */
-	if (!VALIDATE_RAYO_RECORD(record)) {
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return NULL;
-	}
-	max_duration = iks_find_int_attrib(record, "max-duration");
-	initial_timeout = iks_find_int_attrib(record, "initial-timeout");
-	final_timeout = iks_find_int_attrib(record, "final-timeout");
-	direction = iks_find_attrib(record, "direction");
-	mix = iks_find_bool_attrib(record, "mix");
-	start_beep = iks_find_bool_attrib(record, "start-beep");
 
 	/* create record filename from session UUID and ref */
 	/* for example: 1234-1234-1234-1234/record-30.wav */
-	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, 
+	file = switch_core_session_sprintf(session, "%s%srecordings%s%s.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR,
 									   switch_core_session_get_uuid(session), iks_find_attrib(record, "format"));
+
+	component = record_component_create(file, rayo_call_get_actor(call), iks_find_attrib(iq, "from"), record);
+	if (!component) {
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return NULL;
+	}
+	record_component = RECORD_COMPONENT(component);
 
 	switch_channel_set_variable(channel, "RECORD_HANGUP_ON_ERROR", "false");
 	switch_channel_set_variable(channel, "RECORD_TOGGLE_ON_REPEAT", "");
@@ -146,33 +181,36 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 	//switch_channel_set_variable(channel, "enable_file_write_buffering", "");
 
 	/* max duration attribute is in milliseconds- convert to seconds */
-	if (max_duration > 0) {
-		max_duration_sec = ceil((double)max_duration / 1000.0);
+	if (record_component->max_duration > 0) {
+		max_duration_sec = ceil((double)record_component->max_duration / 1000.0);
 	}
 
-	if (!strcmp(direction, "duplex")) {
-		if (mix) {
+	if (!strcmp(record_component->direction, "duplex")) {
+		if (record_component->mix) {
 			/* STEREO */
 			switch_channel_set_variable(channel, "RECORD_STEREO", "true");
 		} /* else MONO (default) */
-	} else if (!strcmp(direction, "send")) {
+	} else if (!strcmp(record_component->direction, "send")) {
 		/* record audio sent from the caller */
 		switch_channel_set_variable(channel, "RECORD_READ_ONLY", "true");
-	} else if (!strcmp(direction, "recv")) {
+	} else if (!strcmp(record_component->direction, "recv")) {
 		/* record audio received by the caller */
 		switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "true");
 	};
 
-	if (start_beep) {
+/* TODO not in channel thread */
+#if 0
+	if (record_component->start_beep) {
 		switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL);
 	}
+#endif
 
 	if (switch_ivr_record_session(session, file, max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
-		struct rayo_component *component;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started: file = %s\n", file);
-		component = rayo_call_component_create(file, call, "record", iks_find_attrib(iq, "from"));
 		rayo_component_send_start(component, iq);
 	} else {
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
 		rayo_component_send_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 	return NULL;
@@ -192,6 +230,24 @@ static iks *stop_record_component(struct rayo_component *component, iks *iq)
 }
 
 /**
+ * Pause execution of record component
+ */
+static iks *pause_record_component(struct rayo_component *component, iks *iq)
+{
+	/* TODO implement <pause> */
+	return iks_new_iq_result(iq);
+}
+
+/**
+ * Resume execution of record component
+ */
+static iks *resume_record_component(struct rayo_component *component, iks *iq)
+{
+	/* TODO implement <resume> */
+	return iks_new_iq_result(iq);
+}
+
+/**
  * Initialize record component
  * @return SWITCH_STATUS_SUCCESS if successful
  */
@@ -199,6 +255,8 @@ switch_status_t rayo_record_component_load(void)
 {
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
 	rayo_call_command_handler_add("set:"RAYO_RECORD_NS":record", start_call_record_component);
+	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_record_component);
+	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_record_component);
 	rayo_component_command_handler_add("record", "set:"RAYO_NS":stop", stop_record_component); /* TODO remove after punchblock is updated */
 	rayo_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_record_component);
 	return SWITCH_STATUS_SUCCESS;

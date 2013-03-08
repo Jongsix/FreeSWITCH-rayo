@@ -81,7 +81,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	}
 	max_time = iks_find_int_attrib(output, "max-time");
 
-	component = rayo_call_component_create(NULL, call, "output", iks_find_attrib(iq, "from"));
+	component = rayo_component_create("output", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
 	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
 	output_component->stop = 0;
 	output_component->document = iks_copy(output);
@@ -193,7 +193,7 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	max_time = iks_find_int_attrib(output, "max-time");
 
 	/* acknowledge command */
-	component = rayo_mixer_component_create(NULL, mixer, "output", iks_find_attrib(iq, "from"));
+	component = rayo_component_create("output", NULL, rayo_mixer_get_actor(mixer), iks_find_attrib(iq, "from"));
 	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
 	output_component->stop = 0;
 	output_component->document = iks_copy(output);
