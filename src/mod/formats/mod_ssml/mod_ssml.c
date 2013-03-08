@@ -58,7 +58,7 @@ static struct {
 	switch_hash_t *language_map;
 } globals;
 
-/** 
+/**
  * A say language
  */
 struct language {
@@ -234,7 +234,7 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_
 	if (voice) {
 		switch_core_hash_insert(globals.voice_cache, lang_name_gender, voice);
 	}
-	
+
 done:
 	switch_safe_free(lang_name_gender);
 
@@ -282,7 +282,7 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		return SWITCH_STATUS_FALSE;
 	}
 
-	
+
 	file = context->files[context->index].name;
 	context->fh.prefix = context->files[context->index].prefix;
 
@@ -695,6 +695,27 @@ static switch_status_t ssml_file_read(switch_file_handle_t *handle, void *data, 
 }
 
 /**
+ * Seek file
+ */
+static switch_status_t ssml_file_seek(switch_file_handle_t *handle, unsigned int *cur_sample, int64_t samples, int whence)
+{
+	struct ssml_context *context = handle->private_info;
+
+	if (samples == 0 && whence == SWITCH_SEEK_SET) {
+		/* restart from beginning */
+		context->index = -1;
+		return next_file(handle);
+	}
+
+	if (!handle->seekable) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "File is not seekable\n");
+		return SWITCH_STATUS_NOTIMPL;
+	}
+
+	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
+}
+
+/**
  * TTS playback state
  */
 struct tts_context {
@@ -865,7 +886,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 			}
 		}
 	}
-	
+
 	/* get macros */
 	{
 		switch_xml_t macros = switch_xml_child(cfg, "macros");
@@ -906,6 +927,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	file_interface->file_open = ssml_file_open;
 	file_interface->file_close = ssml_file_close;
 	file_interface->file_read = ssml_file_read;
+	file_interface->file_seek = ssml_file_seek;
 
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = modname;
@@ -913,6 +935,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	file_interface->file_open = tts_file_open;
 	file_interface->file_close = tts_file_close;
 	file_interface->file_read = tts_file_read;
+	/* TODO allow skip ahead if TTS supports it
+	 * file_interface->file_seek = tts_file_seek;
+	 */
 
 	switch_core_hash_init(&globals.voice_cache, pool);
 	switch_core_hash_init(&globals.tts_voice_map, pool);
