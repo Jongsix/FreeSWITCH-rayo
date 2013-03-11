@@ -44,6 +44,7 @@ struct record_component {
 	int mix;
 	int start_beep;
 	int stop_beep;
+	switch_time_t start_time;
 };
 
 #define RECORD_COMPONENT(x) ((struct record_component *)(rayo_component_get_data(x)))
@@ -83,19 +84,27 @@ ELEMENT_END
 static void on_record_stop_event(switch_event_t *event)
 {
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
-	const char *file = switch_event_get_header(event, "Record-File-Path");
-	struct rayo_component *component = rayo_component_locate(file);
+	const char *file_path = switch_event_get_header(event, "Record-File-Path");
+	struct rayo_component *component = rayo_component_locate(file_path);
 
 	if (component) {
 		struct record_component *record = RECORD_COMPONENT(component);
 		switch_core_session_t *session;
-		const char *duration = switch_event_get_header(event, "Record-File-Duration");
-		const char *size = switch_event_get_header(event, "Record-File-Size");
-		char *uri = switch_mprintf("file://%s", file);
+		char *uri = switch_mprintf("file://%s", file_path);
 		iks *presence = NULL;
 		iks *x = NULL;
+		switch_size_t file_size = 0;
+		switch_file_t *file;
+		int duration_ms = (switch_micro_time_now() - record->start_time) / 1000;
 
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", file);
+		if (switch_file_open(&file, file_path, SWITCH_FOPEN_READ, SWITCH_FPROT_UREAD, rayo_component_get_pool(component)) == SWITCH_STATUS_SUCCESS) {
+			file_size = switch_file_get_size(file);
+			switch_file_close(file);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_INFO, "Failed to open %s.\n", file_path);
+		} 
+
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", file_path);
 
 		if (record->stop_beep && (session = switch_core_session_locate(uuid))) {
 			switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
@@ -109,12 +118,9 @@ static void on_record_stop_event(switch_event_t *event)
 		x = iks_insert(x, "recording");
 		iks_insert_attrib(x, "xmlns", RAYO_RECORD_COMPLETE_NS);
 		iks_insert_attrib(x, "uri", uri);
-		if (!zstr(duration)) {
-			iks_insert_attrib(x, "duration", duration);
-		}
-		if (!zstr(size)) {
-			iks_insert_attrib(x, "size", size);
-		}
+		iks_insert_attrib_printf(x, "duration", "%i", duration_ms);
+		iks_insert_attrib_printf(x, "size", "%"SWITCH_SIZE_T_FMT, file_size);
+
 		rayo_component_unlock(component);
 		rayo_component_send_complete_event(component, presence);
 
@@ -150,6 +156,7 @@ static struct rayo_component *record_component_create(struct rayo_actor *actor, 
 	record_component->mix = iks_find_bool_attrib(record, "mix");
 	record_component->start_beep = iks_find_bool_attrib(record, "start-beep");
 	record_component->stop_beep = iks_find_bool_attrib(record, "stop-beep");
+	record_component->start_time = switch_micro_time_now();
 	rayo_component_set_data(component, record_component);
 
 	switch_safe_free(file);

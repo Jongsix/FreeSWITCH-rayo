@@ -70,6 +70,7 @@ extern int iks_find_int_attrib(iks *xml, const char *attrib);
 extern double iks_find_decimal_attrib(iks *xml, const char *attrib);
 extern const char *iks_node_type_to_string(int type);
 extern const char *iks_net_error_to_string(int err);
+extern iks *iks_insert_attrib_printf(iks *xml, const char *name, const char *fmt, ...);
 
 /** A function to validate attribute value */
 typedef int (*iks_attrib_validation_function)(const char *);
