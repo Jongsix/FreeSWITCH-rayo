@@ -3143,6 +3143,7 @@ SWITCH_STANDARD_APP(rayo_app)
 
 		/* nobody to offer to */
 		if (!ok) {
+			rayo_call_unlock(call); /* decrement ref from creation */
 			rayo_call_destroy(call);
 			switch_channel_hangup(channel, RAYO_CAUSE_DECLINE);
 		}
