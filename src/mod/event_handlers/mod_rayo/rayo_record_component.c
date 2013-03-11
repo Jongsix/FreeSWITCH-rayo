@@ -185,15 +185,16 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 	switch_channel_set_variable(channel, "RECORD_APPEND", "");
 	switch_channel_set_variable(channel, "RECORD_WRITE_OVER", "true");
 	switch_channel_set_variable(channel, "RECORD_ANSWER_REQ", "");
+	switch_channel_set_variable(channel, "RECORD_SILENCE_THRESHOLD", "200");
 	if (record_component->initial_timeout > 0) {
-		switch_channel_set_variable_printf(channel, "RECORD_INITIAL_TIMEOUT_SEC", "%i", (int)ceil((double)record_component->initial_timeout / 1000.0));
+		switch_channel_set_variable_printf(channel, "RECORD_INITIAL_TIMEOUT_MS", "%i", record_component->initial_timeout);
 	} else {
-		switch_channel_set_variable(channel, "RECORD_INITIAL_TIMEOUT_SEC", "");
+		switch_channel_set_variable(channel, "RECORD_INITIAL_TIMEOUT_MS", "");
 	}
 	if (record_component->final_timeout > 0) {
-		switch_channel_set_variable_printf(channel, "RECORD_FINAL_TIMEOUT_SEC", "%i", (int)ceil((double)record_component->final_timeout / 1000.0));
+		switch_channel_set_variable_printf(channel, "RECORD_FINAL_TIMEOUT_MS", "%i", record_component->final_timeout);
 	} else {
-		switch_channel_set_variable(channel, "RECORD_FINAL_TIMEOUT_SEC", "");
+		switch_channel_set_variable(channel, "RECORD_FINAL_TIMEOUT_MS", "");
 	}
 	/* allow dialplan override for these variables */
 	//switch_channel_set_variable(channel, "RECORD_PRE_BUFFER_FRAMES", "");
