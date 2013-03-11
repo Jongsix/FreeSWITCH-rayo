@@ -277,7 +277,6 @@ switch_status_t rayo_record_component_load(void)
 	rayo_call_command_handler_add("set:"RAYO_RECORD_NS":record", start_call_record_component);
 	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_record_component);
 	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_record_component);
-	rayo_component_command_handler_add("record", "set:"RAYO_NS":stop", stop_record_component); /* TODO remove after punchblock is updated */
 	rayo_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_record_component);
 	return SWITCH_STATUS_SUCCESS;
 }
