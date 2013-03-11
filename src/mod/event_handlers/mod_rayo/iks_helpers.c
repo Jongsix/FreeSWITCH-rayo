@@ -178,6 +178,33 @@ const char *iks_net_error_to_string(int err)
 }
 
 /**
+ * Insert attribute using format string
+ * @param xml node to insert attribute into
+ * @param name of attribute
+ * @param fmt format string
+ * @param ... format string args
+ */
+iks *iks_insert_attrib_printf(iks *xml, const char *name, const char *fmt, ...)
+{
+	iks *node;
+	char *data;
+	va_list ap;
+	int ret;
+
+	va_start(ap, fmt);
+	ret = switch_vasprintf(&data, fmt, ap);
+	va_end(ap);
+
+	if (ret == -1) {
+		return NULL;
+	}
+	node = iks_insert_attrib(xml, name, data);
+	free(data);
+
+	return node;
+}
+
+/**
  * Validate boolean
  * @param value
  * @return SWTICH_TRUE if boolean
