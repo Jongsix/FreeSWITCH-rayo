@@ -1094,8 +1094,41 @@ struct record_helper {
 	int wready;
 	uint32_t packet_len;
 	int min_sec;
+	int final_timeout_ms;
+	int initial_timeout_ms;
+	int silence_threshold;
+	int silence_timeout_ms;
+	switch_time_t silence_time;
 	switch_bool_t hangup_on_error;
 };
+
+
+static switch_bool_t is_silence_frame(switch_frame_t *frame, int silence_threshold, switch_codec_implementation_t *codec_impl)
+{
+	int16_t *fdata = (int16_t *) frame->data;
+	uint32_t samples = frame->datalen / sizeof(*fdata);
+	switch_bool_t is_silence = SWITCH_TRUE;
+	uint32_t channel_num = 0;
+
+	int divisor = 0;
+	if (!(divisor = codec_impl->samples_per_second / 8000)) {
+		divisor = 1;
+	}
+
+	/* is silence only if every channel is silent */
+	for (channel_num = 0; channel_num < codec_impl->number_of_channels && is_silence; channel_num++) {
+		uint32_t count = 0, j = channel_num;
+		double energy = 0;
+		for (count = 0; count < samples; count++) {
+			energy += abs(fdata[j]);
+			j += codec_impl->number_of_channels;
+		}
+		is_silence &= (uint32_t) (energy / (samples / divisor)) < silence_threshold;
+	}
+
+	return is_silence;
+}
+
 
 static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
 {
@@ -1115,6 +1148,8 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			switch_channel_event_set_data(channel, event);
 			switch_event_fire(&event);
 		}
+		rh->silence_time = switch_micro_time_now();
+		rh->silence_timeout_ms = rh->initial_timeout_ms;
 
 		break;
 	case SWITCH_ABC_TYPE_TAP_NATIVE_READ:
@@ -1232,6 +1267,7 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			status = switch_core_media_bug_read(bug, &frame, SWITCH_FALSE);
 
 			if (status == SWITCH_STATUS_SUCCESS || status == SWITCH_STATUS_BREAK) {
+				
 				len = (switch_size_t) frame.datalen / 2;
 
 				if (len && switch_core_file_write(rh->fh, mask ? null_data : data, &len) != SWITCH_STATUS_SUCCESS && rh->hangup_on_error) {
@@ -1241,6 +1277,33 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 					return SWITCH_FALSE;
 				}
 			}
+
+			/* check for silence timeout */
+			if (rh->silence_threshold && status == SWITCH_STATUS_SUCCESS) {
+				switch_codec_implementation_t read_impl = { 0 };
+				switch_core_session_get_read_impl(session, &read_impl);
+				if (is_silence_frame(&frame, rh->silence_threshold, &read_impl)) {
+					if (!rh->silence_time) {
+						/* start of silence */
+						rh->silence_time = switch_micro_time_now();
+					} else {
+						/* continuing silence */
+						int duration_ms = (switch_micro_time_now() - rh->silence_time) / 1000;
+						if (rh->silence_timeout_ms > 0 && duration_ms >= rh->silence_timeout_ms) {
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording file %s timeout: %i >= %i\n", rh->file, duration_ms, rh->silence_timeout_ms);
+							switch_core_media_bug_set_flag(bug, SMBF_PRUNE);
+						}
+					}
+				} else { /* not silence */
+					if (rh->silence_time) {
+						/* end of silence */
+						rh->silence_time = 0;
+						/* switch from initial timeout to final timeout */
+						rh->silence_timeout_ms = rh->final_timeout_ms;
+					}
+				}
+			}
+
 		}
 		break;
 	case SWITCH_ABC_TYPE_WRITE:
@@ -2104,6 +2167,29 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_record_session(switch_core_session_t 
 		int tmp = atoi(p);
 		if (tmp >= 0) {
 			rh->min_sec = tmp;
+		}
+	}
+
+	if ((p = switch_channel_get_variable(channel, "RECORD_INITIAL_TIMEOUT_MS"))) {
+		int tmp = atoi(p);
+		if (tmp >= 0) {
+			rh->initial_timeout_ms = tmp;
+			rh->silence_threshold = 200;
+		}
+	}
+
+	if ((p = switch_channel_get_variable(channel, "RECORD_FINAL_TIMEOUT_MS"))) {
+		int tmp = atoi(p);
+		if (tmp >= 0) {
+			rh->final_timeout_ms = tmp;
+			rh->silence_threshold = 200;
+		}
+	}
+
+	if ((p = switch_channel_get_variable(channel, "RECORD_SILENCE_THRESHOLD"))) {
+		int tmp = atoi(p);
+		if (tmp >= 0) {
+			rh->silence_threshold = tmp;
 		}
 	}
 
