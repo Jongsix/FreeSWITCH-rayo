@@ -60,7 +60,6 @@ struct record_component {
 
 /* 1000 Hz beep for 250ms */
 #define RECORD_BEEP "tone_stream://%(250,0,1000)"
-#define RECORD_BEEP_DURATION_MS 250
 
 /**
  * Validate <record direction="">
