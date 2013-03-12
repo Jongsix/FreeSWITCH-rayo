@@ -2530,7 +2530,7 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 			/* get all variables prefixed with sip_r_ */
 			for (header = event->headers; header; header = header->next) {
 				if (!strncmp("variable_sip_r_", header->name, 15)) {
-					add_header(end, header->name + 7, header->value);
+					add_header(end, header->name + 15, header->value);
 				}
 			}
 		}
@@ -3148,8 +3148,8 @@ static iks *rayo_create_offer(struct rayo_call *call, switch_core_session_t *ses
 
 		/* get all variables prefixed with sip_r_ */
 		for (var = switch_channel_variable_first(channel); var; var = var->next) {
-			if (!strncmp("sip_r_", var->name, 7)) {
-				add_header(offer, var->name + 7, var->value);
+			if (!strncmp("sip_r_", var->name, 6)) {
+				add_header(offer, var->name + 6, var->value);
 			}
 		}
 		switch_channel_variable_last(channel);
