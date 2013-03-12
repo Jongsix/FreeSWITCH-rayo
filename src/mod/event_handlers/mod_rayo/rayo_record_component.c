@@ -87,9 +87,9 @@ ELEMENT(RAYO_RECORD)
 ELEMENT_END
 
 /**
- * Notify completion of call record component
+ * Notify completion of record component
  */
-static void complete_call_record(struct rayo_component *component)
+static void complete_record(struct rayo_component *component)
 {
 	switch_core_session_t *session = NULL;
 	const char *uuid = rayo_component_get_parent_id(component);
@@ -134,7 +134,7 @@ static void complete_call_record(struct rayo_component *component)
  * Handle RECORD_STOP event from FreeSWITCH.
  * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
  */
-static void on_record_stop_event(switch_event_t *event)
+static void on_call_record_stop_event(switch_event_t *event)
 {
 	const char *file_path = switch_event_get_header(event, "Record-File-Path");
 	struct rayo_component *component = rayo_component_locate(file_path);
@@ -146,7 +146,7 @@ static void on_record_stop_event(switch_event_t *event)
 		record->duration_ms += (switch_micro_time_now() - record->start_time) / 1000;
 
 		if (!record->pause) {
-			complete_call_record(component);
+			complete_record(component);
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s paused.\n", file_path);
 		}
@@ -302,7 +302,7 @@ static iks *stop_call_record_component(struct rayo_component *component, iks *iq
 	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 	if (session) {
 		if (RECORD_COMPONENT(component)->pause) {
-			complete_call_record(component);
+			complete_record(component);
 		} else {
 			switch_ivr_stop_record_session(session, rayo_component_get_id(component));
 		}
@@ -340,6 +340,31 @@ static iks *resume_call_record_component(struct rayo_component *component, iks *
 		switch_core_session_rwunlock(session);
 	}
 	return iks_new_iq_result(iq);
+}
+
+/**
+ * Handle conference events from FreeSWITCH.
+ * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
+ */
+static void on_mixer_record_event(switch_event_t *event)
+{
+	const char *file_path = switch_event_get_header(event, "Path");
+	const char *action = switch_event_get_header(event, "Action");
+	struct rayo_component *component = rayo_component_locate(file_path);
+
+	if (component) {
+		struct record_component *record = RECORD_COMPONENT(component);
+
+		record->duration_ms += (switch_micro_time_now() - record->start_time) / 1000;
+
+		if (!strcmp("pause-recording", action)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Recording %s paused.\n", file_path);
+		} else if (!strcmp("resume-recording", action)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Recording %s resumed.\n", file_path);
+		} else if (!strcmp("stop-recording", action)) {
+			complete_record(component);
+		}
+	}
 }
 
 /**
@@ -410,6 +435,7 @@ static iks *stop_mixer_record_component(struct rayo_component *component, iks *i
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
 
+	
 	args = switch_mprintf("%s recording stop %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
 	switch_api_execute("conference", args, NULL, &stream);
 	switch_safe_free(args);
@@ -457,13 +483,13 @@ static iks *resume_mixer_record_component(struct rayo_component *component, iks 
  */
 switch_status_t rayo_record_component_load(void)
 {
-	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
-
+	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_call_record_stop_event, NULL);
 	rayo_call_command_handler_add("set:"RAYO_RECORD_NS":record", start_call_record_component);
 	rayo_call_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_call_record_component);
 	rayo_call_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_call_record_component);
 	rayo_call_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_call_record_component);
 
+	switch_event_bind("rayo_record_component", SWITCH_EVENT_CUSTOM, "conference::maintenance", on_mixer_record_event, NULL);
 	rayo_mixer_command_handler_add("set:"RAYO_RECORD_NS":record", start_mixer_record_component);
 	rayo_mixer_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_mixer_record_component);
 	rayo_mixer_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_mixer_record_component);
@@ -478,6 +504,7 @@ switch_status_t rayo_record_component_load(void)
  */
 switch_status_t rayo_record_component_shutdown(void)
 {
-	switch_event_unbind_callback(on_record_stop_event);
+	switch_event_unbind_callback(on_call_record_stop_event);
+	switch_event_unbind_callback(on_mixer_record_event);
 	return SWITCH_STATUS_SUCCESS;
 }
