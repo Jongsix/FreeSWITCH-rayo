@@ -30,27 +30,37 @@
 #include "rayo_components.h"
 #include "iks_helpers.h"
 
-
 /**
  * A record component
  */
 struct record_component {
-	/** pause flag */
+	/** is recording paused */
 	int pause;
+	/** maximum duration allowed */
 	int max_duration;
+	/** timeout for total silence */
 	int initial_timeout;
+	/** timeout for silence after initial utterance */
 	int final_timeout;
+	/** duplex/send/recv */
 	const char *direction;
+	/** true if mixed (mono) */
 	int mix;
+	/** true if start beep to be played */
 	int start_beep;
+	/** true if stop beep to be played */
 	int stop_beep;
+	/** time recording started */
 	switch_time_t start_time;
+	/** duration of this recording */
+	int duration_ms;
 };
 
 #define RECORD_COMPONENT(x) ((struct record_component *)(rayo_component_get_data(x)))
 
 /* 1000 Hz beep for 250ms */
 #define RECORD_BEEP "tone_stream://%(250,0,1000)"
+#define RECORD_BEEP_DURATION_MS 250
 
 /**
  * Validate <record direction="">
@@ -78,53 +88,69 @@ ELEMENT(RAYO_RECORD)
 ELEMENT_END
 
 /**
+ * Notify completion of call record component
+ */
+static void complete_call_record(struct rayo_component *component)
+{
+	switch_core_session_t *session = NULL;
+	const char *uuid = rayo_component_get_parent_id(component);
+	const char *file_path = rayo_component_get_id(component);
+	struct record_component *record = RECORD_COMPONENT(component);
+	char *uri = switch_mprintf("file://%s", file_path);
+	iks *presence = NULL;
+	iks *x = NULL;
+	switch_size_t file_size = 0;
+	switch_file_t *file;
+
+	if (switch_file_open(&file, file_path, SWITCH_FOPEN_READ, SWITCH_FPROT_UREAD, rayo_component_get_pool(component)) == SWITCH_STATUS_SUCCESS) {
+		file_size = switch_file_get_size(file);
+		switch_file_close(file);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_INFO, "Failed to open %s.\n", file_path);
+	}
+
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", file_path);
+
+	if (!record->pause && record->stop_beep && (session = switch_core_session_locate(uuid))) {
+		switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
+		switch_core_session_rwunlock(session);
+	}
+
+	/* send complete event to client */
+	presence = rayo_component_create_complete_event(component, "recording", RAYO_RECORD_COMPLETE_NS);
+	x = iks_find(presence, "complete");
+	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
+	x = iks_find(x, "recording");
+	iks_insert_attrib(x, "uri", uri);
+	iks_insert_attrib_printf(x, "duration", "%i", record->duration_ms);
+	iks_insert_attrib_printf(x, "size", "%"SWITCH_SIZE_T_FMT, file_size);
+
+	rayo_component_unlock(component);
+	rayo_component_send_complete_event(component, presence);
+
+	switch_safe_free(uri);
+}
+
+/**
  * Handle RECORD_STOP event from FreeSWITCH.
  * @param event received from FreeSWITCH core.  It will be destroyed by the core after this function returns.
  */
 static void on_record_stop_event(switch_event_t *event)
 {
-	const char *uuid = switch_event_get_header(event, "Unique-ID");
 	const char *file_path = switch_event_get_header(event, "Record-File-Path");
 	struct rayo_component *component = rayo_component_locate(file_path);
 
 	if (component) {
+		const char *uuid = switch_event_get_header(event, "Unique-ID");
 		struct record_component *record = RECORD_COMPONENT(component);
-		switch_core_session_t *session;
-		char *uri = switch_mprintf("file://%s", file_path);
-		iks *presence = NULL;
-		iks *x = NULL;
-		switch_size_t file_size = 0;
-		switch_file_t *file;
-		int duration_ms = (switch_micro_time_now() - record->start_time) / 1000;
 
-		if (switch_file_open(&file, file_path, SWITCH_FOPEN_READ, SWITCH_FPROT_UREAD, rayo_component_get_pool(component)) == SWITCH_STATUS_SUCCESS) {
-			file_size = switch_file_get_size(file);
-			switch_file_close(file);
+		record->duration_ms += (switch_micro_time_now() - record->start_time) / 1000;
+
+		if (!record->pause) {
+			complete_call_record(component);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_INFO, "Failed to open %s.\n", file_path);
-		} 
-
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", file_path);
-
-		if (record->stop_beep && (session = switch_core_session_locate(uuid))) {
-			switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
-			switch_core_session_rwunlock(session);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s paused.\n", file_path);
 		}
-
-		/* send complete event to client */
-		presence = rayo_component_create_complete_event(component, "recording", RAYO_RECORD_COMPLETE_NS);
-		x = iks_find(presence, "complete");
-		iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
-		x = iks_insert(x, "recording");
-		iks_insert_attrib(x, "xmlns", RAYO_RECORD_COMPLETE_NS);
-		iks_insert_attrib(x, "uri", uri);
-		iks_insert_attrib_printf(x, "duration", "%i", duration_ms);
-		iks_insert_attrib_printf(x, "size", "%"SWITCH_SIZE_T_FMT, file_size);
-
-		rayo_component_unlock(component);
-		rayo_component_send_complete_event(component, presence);
-
-		switch_safe_free(uri);
 	}
 }
 
@@ -165,22 +191,15 @@ static struct rayo_component *record_component_create(struct rayo_actor *actor, 
 }
 
 /**
- * Start execution of call record component
+ * Start recording call
+ * @param session the session to record
+ * @param record the record component
  */
-static iks *start_call_record_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static int start_call_record(switch_core_session_t *session, struct rayo_component *component)
 {
-	struct rayo_component *component = NULL;
-	struct record_component *record_component = NULL;
-	iks *record = iks_child(iq);
+	struct record_component *record_component = RECORD_COMPONENT(component);
 	switch_channel_t *channel = switch_core_session_get_channel(session);
 	int max_duration_sec = 0;
-
-	component = record_component_create(rayo_call_get_actor(call), iks_find_attrib(iq, "from"), record);
-	if (!component) {
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-		return NULL;
-	}
-	record_component = RECORD_COMPONENT(component);
 
 	switch_channel_set_variable(channel, "RECORD_HANGUP_ON_ERROR", "false");
 	switch_channel_set_variable(channel, "RECORD_TOGGLE_ON_REPEAT", "");
@@ -189,14 +208,18 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 	switch_channel_set_variable(channel, "RECORD_STEREO", "");
 	switch_channel_set_variable(channel, "RECORD_READ_ONLY", "");
 	switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "");
-	switch_channel_set_variable(channel, "RECORD_APPEND", "");
-	switch_channel_set_variable(channel, "RECORD_WRITE_OVER", "true");
+	if (record_component->pause) {
+		switch_channel_set_variable(channel, "RECORD_APPEND", "true");
+		switch_channel_set_variable(channel, "RECORD_WRITE_OVER", "false");
+	} else {
+		switch_channel_set_variable(channel, "RECORD_APPEND", "");
+		switch_channel_set_variable(channel, "RECORD_WRITE_OVER", "true");
+	}
 	switch_channel_set_variable(channel, "RECORD_ANSWER_REQ", "");
 	switch_channel_set_variable(channel, "RECORD_SILENCE_THRESHOLD", "200");
-	if (record_component->initial_timeout > 0) {
+	switch_channel_set_variable(channel, "RECORD_INITIAL_TIMEOUT_MS", "");
+	if (!record_component->pause && record_component->initial_timeout > 0) {
 		switch_channel_set_variable_printf(channel, "RECORD_INITIAL_TIMEOUT_MS", "%i", record_component->initial_timeout);
-	} else {
-		switch_channel_set_variable(channel, "RECORD_INITIAL_TIMEOUT_MS", "");
 	}
 	if (record_component->final_timeout > 0) {
 		switch_channel_set_variable_printf(channel, "RECORD_FINAL_TIMEOUT_MS", "%i", record_component->final_timeout);
@@ -210,11 +233,11 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 
 	/* max duration attribute is in milliseconds- convert to seconds */
 	if (record_component->max_duration > 0) {
-		max_duration_sec = ceil((double)record_component->max_duration / 1000.0);
+		max_duration_sec = ceil((double)(record_component->max_duration - record_component->duration_ms) / 1000.0);
 	}
 
 	if (!strcmp(record_component->direction, "duplex")) {
-		if (record_component->mix) {
+		if (!record_component->mix) {
 			/* STEREO */
 			switch_channel_set_variable(channel, "RECORD_STEREO", "true");
 		} /* else MONO (default) */
@@ -226,23 +249,53 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 		switch_channel_set_variable(channel, "RECORD_WRITE_ONLY", "true");
 	};
 
-/* TODO not in channel thread */
-#if 0
-	if (record_component->start_beep) {
-		switch_ivr_play_file(session, NULL, RECORD_BEEP, NULL);
+	if (!record_component->pause && record_component->start_beep) {
+		switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
+		record_component->start_time = switch_micro_time_now();
 	}
-#endif
 
 	if (switch_ivr_record_session(session, (char *)rayo_component_get_id(component), max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started: file = %s\n", rayo_component_get_id(component));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording %s: file = %s\n", 
+			record_component->pause ? "resumed" : "started", rayo_component_get_id(component));
+		record_component->pause = 0;
+		return 1;
+	}
+
+	return 0;
+}
+
+/**
+ * Start execution of call record component
+ */
+static iks *start_call_record_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+{
+	struct rayo_component *component = NULL;
+	iks *record = iks_child(iq);
+
+	component = record_component_create(rayo_call_get_actor(call), iks_find_attrib(iq, "from"), record);
+	if (!component) {
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return NULL;
+	}
+
+	if (iks_find_bool_attrib(record, "start-paused")) {
+		RECORD_COMPONENT(component)->pause = 1;
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording started paused: file = %s\n", rayo_component_get_id(component));
 		rayo_component_send_start(component, iq);
 	} else {
-		rayo_component_unlock(component);
-		rayo_component_destroy(component);
-		rayo_component_send_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		if (start_call_record(session, component)) {
+			rayo_component_send_start(component, iq);
+		} else {
+			rayo_component_unlock(component);
+			rayo_component_destroy(component);
+			rayo_component_send_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		}
 	}
+
 	return NULL;
 }
+
+/* TODO send complete on hangup if paused */
 
 /**
  * Stop execution of record component
@@ -251,7 +304,11 @@ static iks *stop_record_component(struct rayo_component *component, iks *iq)
 {
 	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 	if (session) {
-		switch_ivr_stop_record_session(session, rayo_component_get_id(component));
+		if (RECORD_COMPONENT(component)->pause) {
+			complete_call_record(component);
+		} else {
+			switch_ivr_stop_record_session(session, rayo_component_get_id(component));
+		}
 		switch_core_session_rwunlock(session);
 	}
 	return iks_new_iq_result(iq);
@@ -262,7 +319,14 @@ static iks *stop_record_component(struct rayo_component *component, iks *iq)
  */
 static iks *pause_record_component(struct rayo_component *component, iks *iq)
 {
-	/* TODO implement <pause> */
+	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
+	if (session) {
+		if (!RECORD_COMPONENT(component)->pause) {
+			RECORD_COMPONENT(component)->pause = 1;
+			switch_ivr_stop_record_session(session, rayo_component_get_id(component));
+		}
+		switch_core_session_rwunlock(session);
+	}
 	return iks_new_iq_result(iq);
 }
 
@@ -271,7 +335,13 @@ static iks *pause_record_component(struct rayo_component *component, iks *iq)
  */
 static iks *resume_record_component(struct rayo_component *component, iks *iq)
 {
-	/* TODO implement <resume> */
+	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
+	if (session) {
+		if (RECORD_COMPONENT(component)->pause) {
+			start_call_record(session, component);
+		}
+		switch_core_session_rwunlock(session);
+	}
 	return iks_new_iq_result(iq);
 }
 
