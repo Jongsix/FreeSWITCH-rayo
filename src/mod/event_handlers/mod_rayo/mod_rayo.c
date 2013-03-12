@@ -48,6 +48,11 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 #define RAYO_CAUSE_BUSY SWITCH_CAUSE_USER_BUSY
 #define RAYO_CAUSE_ERROR SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE
 
+#define RAYO_SIP_REQUEST_HEADER "sip_r_"
+#define RAYO_SIP_RESPONSE_HEADER "sip_rh_"
+#define RAYO_SIP_PROVISIONAL_RESPONSE_HEADER "sip_ph_"
+#define RAYO_SIP_BYE_RESPONSE_HEADER "sip_bye_h_"
+
 struct rayo_session;
 struct rayo_call;
 
@@ -1130,6 +1135,29 @@ static int rayo_component_command_ok(struct rayo_session *rsession, struct rayo_
 }
 
 /**
+ * Add signaling headers to channel -- only works on SIP
+ * @param session the channel
+ * @param iq_cmd the request containing <header>
+ * @param type header type
+ */
+static void add_signaling_headers(switch_core_session_t *session, iks *iq_cmd, const char *type)
+{
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+	iks *header = NULL;
+	for (header = iks_find(iq_cmd, "header"); header; header = iks_next_tag(header)) {
+		if (!strcmp("header", iks_name(header))) {
+			const char *name = iks_find_attrib_soft(header, "name");
+			const char *value = iks_find_attrib_soft(header, "value");
+			if (!zstr(name) && !zstr(value)) {
+				char *var_name = switch_core_session_sprintf(session, "%s%s", type, name);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Adding header: %s: %s\n", name, value);
+				switch_channel_set_variable(channel, var_name, value);
+			}
+		}
+	}
+}
+
+/**
  * Handle <iq><accept> request
  * @param call the Rayo call
  * @param session the session
@@ -1138,7 +1166,9 @@ static int rayo_component_command_ok(struct rayo_session *rsession, struct rayo_
 static iks *on_rayo_accept(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
+
 	/* send ringing */
+	add_signaling_headers(session, iks_find(node, "accept"), RAYO_SIP_RESPONSE_HEADER);
 	switch_channel_pre_answer(switch_core_session_get_channel(session));
 	response = iks_new_iq_result(node);
 	return response;
@@ -1153,8 +1183,9 @@ static iks *on_rayo_accept(struct rayo_call *call, switch_core_session_t *sessio
 static iks *on_rayo_answer(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
-	/* TODO set answer signaling headers */
+
 	/* send answer to call */
+	add_signaling_headers(session, iks_find(node, "answer"), RAYO_SIP_RESPONSE_HEADER);
 	switch_channel_answer(switch_core_session_get_channel(session));
 	response = iks_new_iq_result(node);
 	return response;
@@ -1175,8 +1206,8 @@ static iks *on_rayo_redirect(struct rayo_call *call, switch_core_session_t *sess
 	if (zstr(redirect_to)) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else {
-		/* TODO set redirect signaling headers */
 		switch_core_session_message_t msg = { 0 };
+		add_signaling_headers(session, redirect, RAYO_SIP_RESPONSE_HEADER);
 
 		/* Tell the channel to deflect the call */
 		msg.from = __FILE__;
@@ -1223,7 +1254,8 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 
 	/* do hangup */
 	if (!response) {
-		/* TODO set hangup signaling headers */
+		add_signaling_headers(session, hangup, RAYO_SIP_REQUEST_HEADER);
+		add_signaling_headers(session, hangup, RAYO_SIP_RESPONSE_HEADER);
 		switch_ivr_kill_uuid(rayo_call_get_uuid(call), hangup_cause);
 		response = iks_new_iq_result(node);
 	}
@@ -1484,6 +1516,8 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
 
+	/* TODO pick UUID now for logging */
+
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
 	/* set rayo channel variables so channel originate event can be identified as coming from Rayo */
@@ -1504,7 +1538,20 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 		stream.write_function(&stream, ",originate_timeout=%i", dial_timeout_sec);
 	}
 
-	/* TODO set outbound signaling headers */
+	/* set outbound signaling headers - only works on SIP */
+	{
+		iks *header = NULL;
+		for (header = iks_find(dial, "header"); header; header = iks_next_tag(header)) {
+			if (!strcmp("header", iks_name(header))) {
+				const char *name = iks_find_attrib_soft(header, "name");
+				const char *value = iks_find_attrib_soft(header, "value");
+				if (!zstr(name) && !zstr(value)) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding header: %s: %s\n", name, value);
+					stream.write_function(&stream, ",%s%s=%s", RAYO_SIP_REQUEST_HEADER, name, value);
+				}
+			}
+		}
+	}
 
 	stream.write_function(&stream, "}");
 
