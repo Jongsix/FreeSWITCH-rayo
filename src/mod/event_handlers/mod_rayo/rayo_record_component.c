@@ -294,12 +294,10 @@ static iks *start_call_record_component(struct rayo_call *call, switch_core_sess
 	return NULL;
 }
 
-/* TODO send complete on hangup if paused */
-
 /**
  * Stop execution of record component
  */
-static iks *stop_record_component(struct rayo_component *component, iks *iq)
+static iks *stop_call_record_component(struct rayo_component *component, iks *iq)
 {
 	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 	if (session) {
@@ -316,7 +314,7 @@ static iks *stop_record_component(struct rayo_component *component, iks *iq)
 /**
  * Pause execution of record component
  */
-static iks *pause_record_component(struct rayo_component *component, iks *iq)
+static iks *pause_call_record_component(struct rayo_component *component, iks *iq)
 {
 	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 	if (session) {
@@ -332,7 +330,7 @@ static iks *pause_record_component(struct rayo_component *component, iks *iq)
 /**
  * Resume execution of record component
  */
-static iks *resume_record_component(struct rayo_component *component, iks *iq)
+static iks *resume_call_record_component(struct rayo_component *component, iks *iq)
 {
 	switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 	if (session) {
@@ -345,16 +343,132 @@ static iks *resume_record_component(struct rayo_component *component, iks *iq)
 }
 
 /**
+ * Start recording mixer
+ * @param record the record component
+ */
+static int start_mixer_record(struct rayo_component *component)
+{
+	switch_stream_handle_t stream = { 0 };
+	char *args;
+	SWITCH_STANDARD_STREAM(stream);
+
+	args = switch_mprintf("%s recording start %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
+	switch_api_execute("conference", args, NULL, &stream);
+	switch_safe_free(args);
+	switch_safe_free(stream.data);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Recording started: file = %s\n", rayo_component_get_id(component));
+	return 1;
+}
+
+/**
+ * Start execution of mixer record component
+ */
+static iks *start_mixer_record_component(struct rayo_mixer *mixer, iks *iq)
+{
+	struct rayo_component *component = NULL;
+	iks *record = iks_child(iq);
+
+	component = record_component_create(rayo_mixer_get_actor(mixer), iks_find_attrib(iq, "from"), record);
+	if (!component) {
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return NULL;
+	}
+	
+	/* mixer doesn't allow "send" */
+	if (!strcmp("send", iks_find_attrib_soft(record, "direction"))) {
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
+		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return NULL;
+	}
+
+	if (iks_find_bool_attrib(record, "start-paused")) {
+		RECORD_COMPONENT(component)->pause = 1;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Recording started paused: file = %s\n", rayo_component_get_id(component));
+		rayo_component_send_start(component, iq);
+	} else {
+		if (start_mixer_record(component)) {
+			rayo_component_send_start(component, iq);
+		} else {
+			rayo_component_unlock(component);
+			rayo_component_destroy(component);
+			rayo_component_send_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		}
+	}
+
+	return NULL;
+}
+
+/* TODO send complete on hangup if paused */
+
+/**
+ * Stop execution of record component
+ */
+static iks *stop_mixer_record_component(struct rayo_component *component, iks *iq)
+{
+	char *args;
+	switch_stream_handle_t stream = { 0 };
+	SWITCH_STANDARD_STREAM(stream);
+
+	args = switch_mprintf("%s recording stop %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
+	switch_api_execute("conference", args, NULL, &stream);
+	switch_safe_free(args);
+	switch_safe_free(stream.data);
+	
+	return iks_new_iq_result(iq);
+}
+
+/**
+ * Pause execution of record component
+ */
+static iks *pause_mixer_record_component(struct rayo_component *component, iks *iq)
+{
+	char *args;
+	switch_stream_handle_t stream = { 0 };
+	SWITCH_STANDARD_STREAM(stream);
+
+	args = switch_mprintf("%s recording pause %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
+	switch_api_execute("conference", args, NULL, &stream);
+	switch_safe_free(args);
+	switch_safe_free(stream.data);
+
+	return iks_new_iq_result(iq);
+}
+
+/**
+ * Resume execution of record component
+ */
+static iks *resume_mixer_record_component(struct rayo_component *component, iks *iq)
+{
+	char *args;
+	switch_stream_handle_t stream = { 0 };
+	SWITCH_STANDARD_STREAM(stream);
+
+	args = switch_mprintf("%s recording resume %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
+	switch_api_execute("conference", args, NULL, &stream);
+	switch_safe_free(args);
+	switch_safe_free(stream.data);
+	return iks_new_iq_result(iq);
+}
+
+/**
  * Initialize record component
  * @return SWITCH_STATUS_SUCCESS if successful
  */
 switch_status_t rayo_record_component_load(void)
 {
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_record_stop_event, NULL);
+
 	rayo_call_command_handler_add("set:"RAYO_RECORD_NS":record", start_call_record_component);
-	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_record_component);
-	rayo_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_record_component);
-	rayo_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_record_component);
+	rayo_call_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_call_record_component);
+	rayo_call_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_call_record_component);
+	rayo_call_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_call_record_component);
+
+	rayo_mixer_command_handler_add("set:"RAYO_RECORD_NS":record", start_mixer_record_component);
+	rayo_mixer_component_command_handler_add("record", "set:"RAYO_RECORD_NS":pause", pause_mixer_record_component);
+	rayo_mixer_component_command_handler_add("record", "set:"RAYO_RECORD_NS":resume", resume_mixer_record_component);
+	rayo_mixer_component_command_handler_add("record", "set:"RAYO_EXT_NS":stop", stop_mixer_record_component);
+
 	return SWITCH_STATUS_SUCCESS;
 }
 

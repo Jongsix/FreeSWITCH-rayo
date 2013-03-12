@@ -589,16 +589,26 @@ static char *rayo_supported_formats[] = { "rayo", NULL };
 switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool)
 {
 	switch_file_interface_t *file_interface;
+
 	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
+	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
+
 	rayo_mixer_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_mixer_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
-	rayo_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
+	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
 
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = "mod_rayo";
