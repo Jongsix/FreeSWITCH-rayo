@@ -310,7 +310,7 @@ static iks *stop_input_component(struct rayo_component *component, iks *iq)
 switch_status_t rayo_input_component_load(void)
 {
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
-	rayo_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
+	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
 	return SWITCH_STATUS_SUCCESS;
 }
 

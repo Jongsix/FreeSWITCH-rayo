@@ -51,7 +51,8 @@ enum rayo_actor_type {
 	RAT_SERVER,
 	RAT_CALL,
 	RAT_MIXER,
-	RAT_COMPONENT
+	RAT_CALL_COMPONENT,
+	RAT_MIXER_COMPONENT
 };
 
 extern const char *rayo_actor_get_id(struct rayo_actor *actor);
@@ -97,7 +98,8 @@ typedef iks *(*rayo_mixer_command_handler)(struct rayo_mixer *, iks *);
 extern void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler fn);
 
 typedef iks *(*rayo_component_command_handler)(struct rayo_component *, iks *);
-extern void rayo_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
+extern void rayo_call_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
+extern void rayo_mixer_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
 
 extern void rayo_iks_send(iks *msg);
 
