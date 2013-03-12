@@ -14,6 +14,7 @@
 	<!-- default gateways per URI -->
 	<dial-gateways>
 		<dial-gateway uriprefix="default" dialprefix="sofia/gateway/outbound/" strip="0"/>
+		<dial-gateway uriprefix="sip:" dialprefix="sofia/external/" strip="0"/>
 		<dial-gateway uriprefix="tel:" dialprefix="sofia/gateway/outbound/" strip="4"/>
 		<!-- pass through user and sofia unaltered -->
 		<dial-gateway uriprefix="user" dialprefix="" strip=""/>
