@@ -1149,9 +1149,8 @@ static void add_signaling_headers(switch_core_session_t *session, iks *iq_cmd, c
 			const char *name = iks_find_attrib_soft(header, "name");
 			const char *value = iks_find_attrib_soft(header, "value");
 			if (!zstr(name) && !zstr(value)) {
-				char *var_name = switch_core_session_sprintf(session, "%s%s", type, name);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Adding header: %s: %s\n", name, value);
-				switch_channel_set_variable(channel, var_name, value);
+				switch_channel_set_variable_name_printf(channel, value, "%s%s", type, name);
 			}
 		}
 	}
@@ -2492,6 +2491,21 @@ static void on_call_originate_event(struct rayo_session *rsession, switch_event_
 }
 
 /**
+ * Add <header> to node
+ * @param node to add <header> to
+ * @param name of header
+ * @param value of header
+ */
+static void add_header(iks *node, const char *name, const char *value)
+{
+	if (!zstr(name) && !zstr(value)) {
+		iks *header = iks_insert(node, "header");
+		iks_insert_attrib(header, "name", name);
+		iks_insert_attrib(header, "value", value);
+	}
+}
+
+/**
  * Handle call end event
  * @param rsession the Rayo session
  * @param event the hangup event
@@ -2509,6 +2523,17 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 			rayo_call_get_dcp_jid(call));
 		iks *end = iks_find(revent, "end");
 		iks_insert(end, "hangup");
+
+		/* add signaling headers */
+		{
+			switch_event_header_t *header;
+			/* get all variables prefixed with sip_r_ */
+			for (header = event->headers; header; header = header->next) {
+				if (!strncmp("variable_sip_r_", header->name, 15)) {
+					add_header(end, header->name + 7, header->value);
+				}
+			}
+		}
 
 		for (hi = switch_hash_first(NULL, call->pcps); hi; hi = switch_hash_next(hi)) {
 			const void *key;
@@ -3114,7 +3139,21 @@ static iks *rayo_create_offer(struct rayo_call *call, switch_core_session_t *ses
 	iks_insert_attrib(offer, "to", profile->destination_number);
 	iks_insert_attrib(offer, "xmlns", RAYO_NS);
 
-	/* TODO add signaling headers */
+	/* add signaling headers */
+	{
+		switch_event_header_t *var;
+		add_header(offer, "from", switch_channel_get_variable(channel, "sip_full_from"));
+		add_header(offer, "to", switch_channel_get_variable(channel, "sip_full_to"));
+		add_header(offer, "via", switch_channel_get_variable(channel, "sip_full_via"));
+
+		/* get all variables prefixed with sip_r_ */
+		for (var = switch_channel_variable_first(channel); var; var = var->next) {
+			if (!strncmp("sip_r_", var->name, 7)) {
+				add_header(offer, var->name + 7, var->value);
+			}
+		}
+		switch_channel_variable_last(channel);
+	}
 
 	return presence;
 }
