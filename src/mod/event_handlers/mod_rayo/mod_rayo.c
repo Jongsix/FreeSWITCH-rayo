@@ -516,17 +516,19 @@ static struct rayo_actor *_rayo_actor_locate(const char *jid, const char *file, 
 static struct rayo_actor *_rayo_actor_locate_by_id(const char *id, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
-	switch_mutex_lock(globals.actors_mutex);
-	actor = (struct rayo_actor *)switch_core_hash_find(globals.actors_by_id, id);
-	if (actor) {
-		if (!actor->destroy) {
-			actor->ref_count++;
-			switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Locate %s: ref count = %i\n", actor->jid, actor->ref_count);
-		} else {
-			actor = NULL;
+	if (!zstr(id)) {
+		switch_mutex_lock(globals.actors_mutex);
+		actor = (struct rayo_actor *)switch_core_hash_find(globals.actors_by_id, id);
+		if (actor) {
+			if (!actor->destroy) {
+				actor->ref_count++;
+				switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Locate %s: ref count = %i\n", actor->jid, actor->ref_count);
+			} else {
+				actor = NULL;
+			}
 		}
+		switch_mutex_unlock(globals.actors_mutex);
 	}
-	switch_mutex_unlock(globals.actors_mutex);
 	return actor;
 }
 
