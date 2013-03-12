@@ -305,8 +305,9 @@ static const char *rayo_actor_type_to_string(enum rayo_actor_type type)
 {
 	switch(type) {
 		case RAT_CALL: return "CALL";
-		case RAT_COMPONENT: return "COMPONENT";
+		case RAT_CALL_COMPONENT: return "CALL_COMPONENT";
 		case RAT_MIXER: return "MIXER";
+		case RAT_MIXER_COMPONENT: return "MIXER_COMPONENT";
 		case RAT_SERVER: return "SERVER";
 	}
 	return "UNKNOWN";
@@ -435,13 +436,29 @@ void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler
  * @param name the command name
  * @param fn the command callback function
  */
-void rayo_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn)
+void rayo_call_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn)
 {
 	struct rayo_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
-	handler->type = RAT_COMPONENT;
+	handler->type = RAT_CALL_COMPONENT;
 	handler->subtype = switch_core_strdup(globals.pool, subtype);
 	handler->fn.component = fn;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s component command: %s\n", subtype, name);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding call %s component command: %s\n", subtype, name);
+	rayo_command_handler_add(name, handler);
+}
+
+/**
+ * Add Rayo command handler function
+ * @param subtype the command subtype
+ * @param name the command name
+ * @param fn the command callback function
+ */
+void rayo_mixer_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn)
+{
+	struct rayo_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
+	handler->type = RAT_MIXER_COMPONENT;
+	handler->subtype = switch_core_strdup(globals.pool, subtype);
+	handler->fn.component = fn;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding mixer %s component command: %s\n", subtype, name);
 	rayo_command_handler_add(name, handler);
 }
 
@@ -817,6 +834,7 @@ static struct rayo_mixer *_rayo_mixer_create(const char *name, const char *file,
  */
 struct rayo_component *_rayo_component_create(const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line)
 {
+	enum rayo_actor_type actor_type;
 	struct rayo_component *component = NULL;
 	char *ref = switch_mprintf("%s-%d", type, rayo_actor_seq_next(parent));
 	char *jid = switch_mprintf("%s/%s", rayo_actor_get_jid(parent), ref);
@@ -824,7 +842,16 @@ struct rayo_component *_rayo_component_create(const char *type, const char *id, 
 	if (zstr(id)) {
 		id = jid;
 	}
-	actor = _rayo_actor_create(RAT_COMPONENT, type, id, jid, (void **)&component, sizeof(*component), file, line);
+	if (parent->type == RAT_CALL) {
+		actor_type = RAT_CALL_COMPONENT;
+	} else if (parent->type == RAT_MIXER) {
+		actor_type = RAT_MIXER_COMPONENT;
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Not allowed to create component with parent %s, type (%s)\n", 
+			rayo_actor_get_jid(parent), rayo_actor_type_to_string(parent->type));
+		return NULL;
+	}
+	actor = _rayo_actor_create(actor_type, type, id, jid, (void **)&component, sizeof(*component), file, line);
 	component->actor = actor;
 	component->client_jid = switch_core_strdup(actor->pool, client_jid);
 	component->parent_type = parent->type;
@@ -910,7 +937,7 @@ struct rayo_actor *rayo_component_get_actor(struct rayo_component *component)
 struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line)
 {
 	struct rayo_actor *actor = _rayo_actor_locate_by_id(id, file, line);
-	if (actor && actor->type == RAT_COMPONENT) {
+	if (actor && (actor->type == RAT_MIXER_COMPONENT || actor->type == RAT_CALL_COMPONENT)) {
 		return (struct rayo_component *)actor->data;
 	} else if (actor) {
 		rayo_actor_unlock(actor);
@@ -2027,7 +2054,8 @@ static int on_iq(void *user_data, ikspak *pak)
 			switch_core_session_rwunlock(session);
 			break;
 		}
-		case RAT_COMPONENT: {
+		case RAT_CALL_COMPONENT:
+		case RAT_MIXER_COMPONENT: {
 			struct rayo_component *component = (struct rayo_component *)actor->data;
 			if (rayo_component_command_ok(rsession, component, iq)) {
 				iks *response;
