@@ -227,6 +227,8 @@ struct rayo_call {
 	int joined;
 	/** true if playing in channel thread */
 	int playing;
+	/** set if response needs to be sent to IQ request */
+	const char *dial_id;
 };
 
 /**
@@ -784,18 +786,26 @@ switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor)
 	return actor->pool;
 }
 
-#define rayo_call_create(session) _rayo_call_create(session, __FILE__, __LINE__)
+#define rayo_call_create(uuid) _rayo_call_create(uuid, __FILE__, __LINE__)
 /**
  * Create Rayo call
- * @param session
+ * @param uuid uuid to assign call, if NULL one is picked
+ * @param file file that called this function
+ * @param line number of file that called this function
  * @return the call
  */
-static struct rayo_call *_rayo_call_create(switch_core_session_t *session, const char *file, int line)
+static struct rayo_call *_rayo_call_create(const char *uuid, const char *file, int line)
 {
-	const char *uuid = switch_core_session_get_uuid(session);
-	const char *call_jid = switch_core_session_sprintf(session, "%s@%s", uuid, globals.domain);
+	char *call_jid;
 	struct rayo_actor *actor = NULL;
 	struct rayo_call *call = NULL;
+	char uuid_id_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
+
+	if (zstr(uuid)) {
+		switch_uuid_str(uuid_id_buf, sizeof(uuid_id_buf));
+		uuid = uuid_id_buf;
+	}
+	call_jid = switch_mprintf("%s@%s", uuid, globals.domain);
 
 	actor = _rayo_actor_create(RAT_CALL, "", uuid, call_jid, (void **)&call, sizeof(*call), file, line);
 
@@ -805,8 +815,7 @@ static struct rayo_call *_rayo_call_create(switch_core_session_t *session, const
 	call->joined = 0;
 	call->actor = actor;
 	switch_core_hash_init(&call->pcps, actor->pool);
-	switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_call_jid", call_jid);
-	switch_channel_set_private(switch_core_session_get_channel(session), "rayo_call_private", call);
+	switch_safe_free(call_jid);
 	return call;
 }
 
@@ -1508,19 +1517,26 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	iks *iq = (iks *)node;
 	iks *dial = iks_find(iq, "dial");
 	iks *response = NULL;
+	const char *dcp_jid = iks_find_attrib(iq, "from");
 	const char *dial_to = iks_find_attrib(dial, "to");
 	const char *dial_from = iks_find_attrib(dial, "from");
 	const char *dial_timeout_ms = iks_find_attrib(dial, "timeout");
 	struct dial_gateway *gateway = NULL;
+	struct rayo_call *call = NULL;
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
 
-	/* TODO pick UUID now for logging */
-
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
+	/* create call and link to DCP */
+	call = rayo_call_create(NULL);
+	call->dcp_jid = switch_core_strdup(rayo_call_get_pool(call), dcp_jid);
+	call->dial_id = iks_find_attrib(iq, "id");
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_INFO, "%s has control of call\n", dcp_jid);
+
 	/* set rayo channel variables so channel originate event can be identified as coming from Rayo */
-	stream.write_function(&stream, "{rayo_dcp_jid=%s,rayo_dial_id=%s", iks_find_attrib(iq, "from"), iks_find_attrib(iq, "id"));
+	stream.write_function(&stream, "{origination_uuid=%s,rayo_dcp_jid=%s,rayo_call_jid=%s", 
+		rayo_call_get_uuid(call), dcp_jid, rayo_call_get_jid(call));
 
 	/* set originate channel variables */
 	if (!zstr(dial_from)) {
@@ -1542,7 +1558,7 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 				const char *name = iks_find_attrib_soft(header, "name");
 				const char *value = iks_find_attrib_soft(header, "value");
 				if (!zstr(name) && !zstr(value)) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding header: %s: %s\n", name, value);
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Adding header: %s: %s\n", name, value);
 					stream.write_function(&stream, ",%s%s=%s", RAYO_SIP_REQUEST_HEADER, name, value);
 				}
 			}
@@ -1591,32 +1607,34 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 				stream.write_function(&stream, "%s%s &rayo(conference %s@%s)", gateway->dial_prefix, dial_to_stripped, mixer_name, globals.mixer_conf_profile);
 			}
 		} else {
-			stream.write_function(&stream, "%s%s &rayo(dial)", gateway->dial_prefix, dial_to_stripped);
+			stream.write_function(&stream, "%s%s &rayo", gateway->dial_prefix, dial_to_stripped);
 		}
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Using dialstring: %s\n", (char *)stream.data);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Using dialstring: %s\n", (char *)stream.data);
 
 		/* <iq><ref> response will be sent when originate event is received- otherwise error is returned */
 		if (switch_api_execute("originate", stream.data, NULL, &api_stream) == SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Got originate result: %s\n", (char *)api_stream.data);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "Got originate result: %s\n", (char *)api_stream.data);
 
 			/* check for failure */
 			if (strncmp("+OK", api_stream.data, strlen("+OK"))) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to originate call\n");
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_INFO, "Failed to originate call\n");
 
-				/* map failure reason to iq error */
-				if (!strncmp("-ERR INVALID_GATEWAY", api_stream.data, strlen("-ERR INVALID_GATEWAY"))) {
-					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-				} else if (!strncmp("-ERR SUBSCRIBER_ABSENT", api_stream.data, strlen("-ERR SUBSCRIBER_ABSENT"))) {
-					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-				} else if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
-					/* this -ERR is received when out of sessions */
-					response = iks_new_iq_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
-				} else {
-					response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+				if (call->dial_id) {
+					/* map failure reason to iq error */
+					if (!strncmp("-ERR INVALID_GATEWAY", api_stream.data, strlen("-ERR INVALID_GATEWAY"))) {
+						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					} else if (!strncmp("-ERR SUBSCRIBER_ABSENT", api_stream.data, strlen("-ERR SUBSCRIBER_ABSENT"))) {
+						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					} else if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
+						/* this -ERR is received when out of sessions */
+						response = iks_new_iq_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
+					} else {
+						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+					}
 				}
 			}
-		} else {
+		} else if (call->dial_id) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to exec originate API\n");
 			response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		}
@@ -1624,17 +1642,24 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 		switch_safe_free(api_stream.data);
 	} else {
 		/* will only happen if misconfigured */
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "No dial gateway found for %s!\n", dial_to);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_CRIT, "No dial gateway found for %s!\n", dial_to);
 		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 		goto done;
 	}
 
 done:
 
+	/* response when error */
 	if (response) {
 		/* send response to client */
 		rayo_iks_send(response);
 		iks_delete(response);
+		
+		/* destroy call */
+		if (call) {
+			rayo_call_unlock(call);
+			rayo_call_destroy(call);
+		}
 	}
 
 	iks_delete(dial);
@@ -2461,30 +2486,28 @@ static void on_call_originate_event(struct rayo_session *rsession, switch_event_
 {
 	switch_core_session_t *session = NULL;
 	const char *uuid = switch_event_get_header(event, "Unique-ID");
-	const char *dial_id = switch_event_get_header(event, "variable_rayo_dial_id");
-	const char *dcp_jid = switch_event_get_header(event, "variable_rayo_dcp_jid");
+	struct rayo_call *call = rayo_call_locate(uuid);
 
-	if (!zstr(dial_id) && !zstr(dcp_jid) && (session = switch_core_session_locate(uuid))) {
+	if (call && (session = switch_core_session_locate(uuid))) {
 		iks *response, *ref;
 
-		/* create call and link to DCP */
-		struct rayo_call *call = rayo_call_create(session);
-		call->dcp_jid = switch_core_strdup(call->actor->pool, dcp_jid);
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s has control of call\n", dcp_jid);
+		switch_channel_set_private(switch_core_session_get_channel(session), "rayo_call_private", call);
 		switch_core_session_rwunlock(session);
 
 		/* send response to DCP */
 		response = iks_new("iq");
 		iks_insert_attrib(response, "from", rsession->server_jid);
-		iks_insert_attrib(response, "to", dcp_jid);
-		iks_insert_attrib(response, "id", dial_id);
+		iks_insert_attrib(response, "to", rayo_call_get_dcp_jid(call));
+		iks_insert_attrib(response, "id", call->dial_id);
 		iks_insert_attrib(response, "type", "result");
 		ref = iks_insert(response, "ref");
 		iks_insert_attrib(ref, "xmlns", RAYO_NS);
 		iks_insert_attrib(ref, "id", uuid);
 		iks_send(rsession->parser, response);
 		iks_delete(response);
+		call->dial_id = NULL;
 	}
+	rayo_call_unlock(call);
 }
 
 /**
@@ -2503,6 +2526,114 @@ static void add_header(iks *node, const char *name, const char *value)
 }
 
 /**
+ * Get rayo cause code from FS hangup cause
+ * @param cause FS hangup cause
+ * @return rayo end cause
+ */
+static const char *switch_cause_to_rayo_cause(switch_call_cause_t cause)
+{
+	switch (cause) {
+		case SWITCH_CAUSE_NONE:
+		case SWITCH_CAUSE_NORMAL_CLEARING:
+			return "hungup";
+
+		case SWITCH_CAUSE_UNALLOCATED_NUMBER:
+		case SWITCH_CAUSE_NO_ROUTE_TRANSIT_NET:
+		case SWITCH_CAUSE_NO_ROUTE_DESTINATION:
+		case SWITCH_CAUSE_CHANNEL_UNACCEPTABLE:
+			return "error";
+
+		case SWITCH_CAUSE_CALL_AWARDED_DELIVERED:
+			return "hungup";
+			
+		case SWITCH_CAUSE_USER_BUSY:
+			return "busy";
+			
+		case SWITCH_CAUSE_NO_USER_RESPONSE:
+		case SWITCH_CAUSE_NO_ANSWER:
+			return "timeout";
+			
+		case SWITCH_CAUSE_SUBSCRIBER_ABSENT:
+			return "error";
+
+		case SWITCH_CAUSE_CALL_REJECTED:
+			return "rejected";
+
+		case SWITCH_CAUSE_NUMBER_CHANGED:
+		case SWITCH_CAUSE_REDIRECTION_TO_NEW_DESTINATION:
+		case SWITCH_CAUSE_EXCHANGE_ROUTING_ERROR:
+		case SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER:
+		case SWITCH_CAUSE_INVALID_NUMBER_FORMAT:
+			return "error";
+
+		case SWITCH_CAUSE_FACILITY_REJECTED:
+			return "rejected";
+
+		case SWITCH_CAUSE_RESPONSE_TO_STATUS_ENQUIRY:
+		case SWITCH_CAUSE_NORMAL_UNSPECIFIED:
+			return "hungup";
+
+		case SWITCH_CAUSE_NORMAL_CIRCUIT_CONGESTION:
+		case SWITCH_CAUSE_NETWORK_OUT_OF_ORDER:
+		case SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE:
+		case SWITCH_CAUSE_SWITCH_CONGESTION:
+		case SWITCH_CAUSE_ACCESS_INFO_DISCARDED:
+		case SWITCH_CAUSE_REQUESTED_CHAN_UNAVAIL:
+		case SWITCH_CAUSE_PRE_EMPTED:
+		case SWITCH_CAUSE_FACILITY_NOT_SUBSCRIBED:
+		case SWITCH_CAUSE_OUTGOING_CALL_BARRED:
+		case SWITCH_CAUSE_INCOMING_CALL_BARRED:
+		case SWITCH_CAUSE_BEARERCAPABILITY_NOTAUTH:
+		case SWITCH_CAUSE_BEARERCAPABILITY_NOTAVAIL:
+		case SWITCH_CAUSE_SERVICE_UNAVAILABLE:
+		case SWITCH_CAUSE_BEARERCAPABILITY_NOTIMPL:
+		case SWITCH_CAUSE_CHAN_NOT_IMPLEMENTED:
+		case SWITCH_CAUSE_FACILITY_NOT_IMPLEMENTED:
+		case SWITCH_CAUSE_SERVICE_NOT_IMPLEMENTED:
+		case SWITCH_CAUSE_INVALID_CALL_REFERENCE:
+		case SWITCH_CAUSE_INCOMPATIBLE_DESTINATION:
+		case SWITCH_CAUSE_INVALID_MSG_UNSPECIFIED:
+		case SWITCH_CAUSE_MANDATORY_IE_MISSING:
+			return "error";
+
+		case SWITCH_CAUSE_MESSAGE_TYPE_NONEXIST:
+		case SWITCH_CAUSE_WRONG_MESSAGE:
+		case SWITCH_CAUSE_IE_NONEXIST:
+		case SWITCH_CAUSE_INVALID_IE_CONTENTS:
+		case SWITCH_CAUSE_WRONG_CALL_STATE:
+		case SWITCH_CAUSE_RECOVERY_ON_TIMER_EXPIRE:
+		case SWITCH_CAUSE_MANDATORY_IE_LENGTH_ERROR:
+		case SWITCH_CAUSE_PROTOCOL_ERROR:
+			return "error";
+
+		case SWITCH_CAUSE_INTERWORKING:
+		case SWITCH_CAUSE_SUCCESS:
+		case SWITCH_CAUSE_ORIGINATOR_CANCEL:
+			return "hungup";
+
+		case SWITCH_CAUSE_CRASH:
+		case SWITCH_CAUSE_SYSTEM_SHUTDOWN:
+		case SWITCH_CAUSE_LOSE_RACE:
+		case SWITCH_CAUSE_MANAGER_REQUEST:
+		case SWITCH_CAUSE_BLIND_TRANSFER:
+		case SWITCH_CAUSE_ATTENDED_TRANSFER:
+		case SWITCH_CAUSE_ALLOTTED_TIMEOUT:
+		case SWITCH_CAUSE_USER_CHALLENGE:
+		case SWITCH_CAUSE_MEDIA_TIMEOUT:
+		case SWITCH_CAUSE_PICKED_OFF:
+		case SWITCH_CAUSE_USER_NOT_REGISTERED:
+		case SWITCH_CAUSE_PROGRESS_TIMEOUT:
+		case SWITCH_CAUSE_INVALID_GATEWAY:
+		case SWITCH_CAUSE_GATEWAY_DOWN:
+		case SWITCH_CAUSE_INVALID_URL:
+		case SWITCH_CAUSE_INVALID_PROFILE:
+		case SWITCH_CAUSE_NO_PICKUP:
+			return "error";
+	}
+	return "hungup";
+}
+
+/**
  * Handle call end event
  * @param rsession the Rayo session
  * @param event the hangup event
@@ -2513,13 +2644,29 @@ static void on_call_end_event(struct rayo_session *rsession, switch_event_t *eve
 
 	/* forward event to each offered client */
 	if (call) {
+		char *cause_str = switch_event_get_header(event, "variable_hangup_cause");
+		switch_call_cause_t cause = SWITCH_CAUSE_NONE;
 		int no_offered_clients = 1;
 		switch_hash_index_t *hi = NULL;
 		iks *revent = create_rayo_event("end", RAYO_NS,
 			rayo_call_get_jid(call),
 			rayo_call_get_dcp_jid(call));
 		iks *end = iks_find(revent, "end");
-		iks_insert(end, "hangup");
+
+		if (cause_str) {
+			cause = switch_channel_str2cause(cause_str);
+		}
+		iks_insert(end, switch_cause_to_rayo_cause(cause));
+
+		#if 0
+		{
+			char *event_str;
+			if (switch_event_serialize(event, &event_str, SWITCH_FALSE) == SWITCH_STATUS_SUCCESS) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "%s\n", event_str);
+				switch_safe_free(event_str);
+			}
+		}
+		#endif
 
 		/* add signaling headers */
 		{
@@ -3175,7 +3322,7 @@ static switch_status_t rayo_call_on_read_frame(switch_core_session_t *session, s
 	return SWITCH_STATUS_SUCCESS;
 }
 
-#define RAYO_USAGE "[dial|bridge <uuid>|conference <name>]"
+#define RAYO_USAGE "[bridge <uuid>|conference <name>]"
 /**
  * Offer call and park channel
  */
@@ -3187,32 +3334,25 @@ SWITCH_STANDARD_APP(rayo_app)
 	const char *app = ""; /* optional app to execute */
 	const char *app_args = ""; /* app args */
 
-	/* check origination args */
-	if (!zstr(data)) {
-		char *argv[2] = { 0 };
-		char *args = switch_core_session_strdup(session, data);
-		int argc = switch_separate_string(args, ' ', argv, sizeof(argv) / sizeof(argv[0]));
-		if (argc) {
-			if (!strcmp("conference", argv[0])) {
-				app = "conference";
-				app_args = argv[1];
-			} else if (!strcmp("bridge", argv[0])) {
-				app = "intercept";
-				app_args = argv[1];
-			} else if (strcmp("dial", argv[0])) {
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Invalid rayo args: %s\n", data);
-				goto done;
+	/* is outbound call already under control? */
+	if (switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_OUTBOUND) {
+		/* check origination args */
+		if (!zstr(data)) {
+			char *argv[2] = { 0 };
+			char *args = switch_core_session_strdup(session, data);
+			int argc = switch_separate_string(args, ' ', argv, sizeof(argv) / sizeof(argv[0]));
+			if (argc) {
+				if (!strcmp("conference", argv[0])) {
+					app = "conference";
+					app_args = argv[1];
+				} else if (!strcmp("bridge", argv[0])) {
+					app = "intercept";
+					app_args = argv[1];
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Invalid rayo args: %s\n", data);
+					goto done;
+				}
 			}
-		}
-		if (!call) {
-			int i;
-			/* wait for call to be created from ORIGINATION event */
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Don't have rayo call yet\n");
-			for (i = 0; i < 50 && !call; i++) {
-				call = (struct rayo_call *)switch_channel_get_private(channel, "rayo_call_private");
-				switch_yield(20000);
-			}
-			switch_channel_audio_sync(channel);
 		}
 		if (!call) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Missing rayo call!!\n");
@@ -3220,16 +3360,18 @@ SWITCH_STANDARD_APP(rayo_app)
 		}
 		ok = 1;
 	} else {
-		/* offer control of call */
+		/* inbound call - offer control */
 		switch_hash_index_t *hi = NULL;
 		iks *offer = NULL;
 		if (call) {
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call is already under Rayo 3PCC!\n");
 			goto done;
 		}
-		call = rayo_call_create(session);
-		offer = rayo_create_offer(call, session);
+		call = rayo_call_create(switch_core_session_get_uuid(session));
+		switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_call_jid", rayo_call_get_jid(call));
+		switch_channel_set_private(switch_core_session_get_channel(session), "rayo_call_private", call);
 
+		offer = rayo_create_offer(call, session);
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Offering call for Rayo 3PCC\n");
 
 		/* Offer call to all ONLINE clients */
