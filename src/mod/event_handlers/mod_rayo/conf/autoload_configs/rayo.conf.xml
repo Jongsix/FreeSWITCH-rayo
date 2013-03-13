@@ -8,7 +8,7 @@
 
 	<!-- Listeners for new Rayo client connections -->
 	<listeners>
-		<listener>$${local_ip_v4}</listener>
+		<listener>$${domain}</listener>
 	</listeners>
 
 	<!-- default gateways per URI -->
