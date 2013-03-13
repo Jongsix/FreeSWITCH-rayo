@@ -1212,7 +1212,7 @@ static iks *on_rayo_redirect(struct rayo_call *call, switch_core_session_t *sess
 	char *redirect_to = iks_find_attrib(redirect, "to");
 
 	if (zstr(redirect_to)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing redirect to attrib");
 	} else {
 		switch_core_session_message_t msg = { 0 };
 		add_signaling_headers(session, redirect, RAYO_SIP_RESPONSE_HEADER);
@@ -1254,7 +1254,7 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 		} else if (!strcmp("error", reason_name)) {
 			hangup_cause = RAYO_CAUSE_ERROR;
 		} else {
-			response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+			response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "invalid reject reason");
 		}
 	} else {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
@@ -1312,10 +1312,10 @@ static iks *join_call(struct rayo_call *call, switch_core_session_t *session, ik
 	struct rayo_call *b_call = rayo_call_locate(call_id);
 	if (!b_call) {
 		/* not a rayo call */
-		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg is not a rayo call");
 	} else if (b_call->joined) {
 		/* don't support multiple joined calls */
-		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_CONFLICT, "multiple joined calls not supported");
 		rayo_call_unlock(b_call);
 	} else {
 		rayo_call_unlock(b_call);
@@ -1325,7 +1325,7 @@ static iks *join_call(struct rayo_call *call, switch_core_session_t *session, ik
 		if (switch_ivr_uuid_bridge(rayo_call_get_uuid(call), call_id) == SWITCH_STATUS_SUCCESS) {
 			response = iks_new_iq_result(node);
 		} else {
-			response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed to bridge call");
 		}
 	}
 	return response;
@@ -1345,7 +1345,7 @@ static iks *join_mixer(struct rayo_call *call, switch_core_session_t *session, i
 	if (switch_core_session_execute_application_async(session, "conference", conf_args) == SWITCH_STATUS_SUCCESS) {
 		response = iks_new_iq_result(node);
 	} else {
-		response = iks_new_iq_error(node, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed execute conference app");
 	}
 	switch_safe_free(conf_args);
 	return response;
@@ -1375,19 +1375,19 @@ static iks *on_rayo_join(struct rayo_call *call, switch_core_session_t *session,
 
 	/* can't join both mixer and call */
 	if (!zstr(mixer_name) && !zstr(call_id)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name and call-id are mutually exclusive");
 		goto done;
 	}
 
 	/* need to join *something* */
 	if (zstr(mixer_name) && zstr(call_id)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name or call-id is required");
 		goto done;
 	}
 
 	if (call->joined) {
 		/* already joined */
-		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_CONFLICT, "call is already joined");
 		goto done;
 	}
 
@@ -1452,11 +1452,11 @@ static iks *unjoin_mixer(struct rayo_call *call, switch_core_session_t *session,
 
 	/* not conferenced, or wrong conference */
 	if (zstr(conf_name) || strcmp(mixer_name, conf_name)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		response = iks_new_iq_error_detailed_printf(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "not joined to %s", mixer_name);
 		goto done;
 	} else if (zstr(conf_member_id)) {
 		/* shouldn't happen */
-		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		response = iks_new_iq_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "channel doesn't have conference member ID");
 		goto done;
 	}
 
@@ -1593,10 +1593,10 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 				struct rayo_call *b_call = rayo_call_locate(call_id);
 				/* is b-leg available? */
 				if (!b_call) {
-					response = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+					response = iks_new_iq_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg not found");
 					goto done;
 				} else if (b_call->joined) {
-					response = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+					response = iks_new_iq_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg already joined to another call");
 					rayo_call_unlock(b_call);
 					goto done;
 				}
@@ -1677,7 +1677,7 @@ static void on_rayo_dial(struct rayo_session *rsession, iks *node)
 	iks *dial = iks_find(node, "dial");
 
 	if (rsession->state != SS_ONLINE) {
-		iks *response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+		iks *response = iks_new_iq_error_detailed(node, STANZA_ERROR_UNEXPECTED_REQUEST, "rayo client is not online");
 		iks_send(rsession->parser, response);
 		iks_delete(response);
 	} else if (!zstr(iks_find_attrib(dial, "to"))) {
@@ -1690,7 +1690,7 @@ static void on_rayo_dial(struct rayo_session *rsession, iks *node)
 		switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 		switch_thread_create(&thread, thd_attr, rayo_dial_thread, node_dup, rsession->pool);
 	} else {
-		iks *response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		iks *response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "missing dial to attribute");
 		iks_send(rsession->parser, response);
 		iks_delete(response);
 	}
