@@ -62,6 +62,8 @@
 #define STANZA_ERROR_UNEXPECTED_REQUEST "unexpected-request", "wait"
 
 extern iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type);
+extern iks *iks_new_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail_text);
+extern iks *iks_new_iq_error_detailed_printf(iks *iq, const char *error_name, const char *error_type, const char *detail_text_format, ...);
 extern iks *iks_new_iq_result(iks *iq);
 extern const char *iks_find_attrib_soft(iks *xml, const char *attrib);
 extern const char *iks_find_attrib_default(iks *xml, const char *attrib, const char *def);
