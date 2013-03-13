@@ -854,7 +854,7 @@ struct rayo_component *_rayo_component_create(const char *type, const char *id, 
 	} else if (parent->type == RAT_MIXER) {
 		actor_type = RAT_MIXER_COMPONENT;
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Not allowed to create component with parent %s, type (%s)\n", 
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Not allowed to create component with parent %s, type (%s)\n",
 			rayo_actor_get_jid(parent), rayo_actor_type_to_string(parent->type));
 		return NULL;
 	}
@@ -1525,11 +1525,8 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	/* set originate channel variables */
 	if (!zstr(dial_from)) {
 		/* caller ID */
-		char *dial_from_without_tel = strstr(dial_from, "tel:");
-		if (dial_from_without_tel) {
-			dial_from_without_tel += strlen("tel:");
-		}
-		stream.write_function(&stream, ",origination_caller_id_number=%s,origination_caller_id_name", dial_from_without_tel, dial_from_without_tel);
+		/* TODO parse caller ID name and number from URI */
+		stream.write_function(&stream, ",origination_caller_id_number=%s,origination_caller_id_name=%s", dial_from, dial_from);
 	}
 	if (!zstr(dial_timeout_ms) && switch_is_number(dial_timeout_ms)) {
 		/* timeout */
