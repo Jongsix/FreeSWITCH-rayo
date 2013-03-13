@@ -66,6 +66,7 @@ extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 #define rayo_call_get_uuid(call) rayo_actor_get_id(rayo_call_get_actor(call))
 extern int rayo_call_is_joined(struct rayo_call *call);
 extern int rayo_call_is_playing(struct rayo_call *call);
+#define rayo_call_get_pool(call) rayo_actor_get_pool(rayo_call_get_actor(call))
 
 extern struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer);
 #define rayo_mixer_get_name(mixer) rayo_actor_get_id(rayo_mixer_get_actor(mixer))
