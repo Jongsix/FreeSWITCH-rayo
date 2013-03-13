@@ -61,6 +61,59 @@ iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type)
 }
 
 /**
+ * Create <iq> error response from <iq> request
+ * @param iq the <iq> get/set request
+ * @param from
+ * @param to
+ * @param error_name the XMPP stanza error
+ * @param error_type
+ * @param detail_text optional text to include in message
+ * @return the <iq> error response
+ */
+iks *iks_new_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail_text)
+{
+	iks *reply = iks_new_iq_error(iq, error_name, error_type);
+	if (!zstr(detail_text)) {
+		iks *error = iks_find(reply, "error");
+		iks *text = iks_insert(error, "text");
+		iks_insert_attrib(text, "xml:lang", "en");
+		iks_insert_attrib(text, "xmlns", IKS_NS_XMPP_STANZAS);
+		iks_insert_cdata(text, detail_text, strlen(detail_text));
+	}
+	return reply;
+}
+
+/**
+ * Create <iq> error response from <iq> request
+ * @param iq the <iq> get/set request
+ * @param from
+ * @param to
+ * @param error_name the XMPP stanza error
+ * @param error_type
+ * @param detail_text_format format string
+ * @param ...
+ * @return the <iq> error response
+ */
+iks *iks_new_iq_error_detailed_printf(iks *iq, const char *error_name, const char *error_type, const char *detail_text_format, ...)
+{
+	iks *reply = NULL;
+	char *data;
+	va_list ap;
+	int ret;
+
+	va_start(ap, detail_text_format);
+	ret = switch_vasprintf(&data, detail_text_format, ap);
+	va_end(ap);
+
+	if (ret == -1) {
+		return NULL;
+	}
+	reply = iks_new_iq_error_detailed(iq, error_name, error_type, data);
+	free(data);
+	return reply;
+}
+
+/**
  * Create <iq> result response from request
  * @param iq the request
  * @return the result response

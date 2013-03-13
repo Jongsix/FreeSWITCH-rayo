@@ -1622,28 +1622,24 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 
 				if (call->dial_id) {
 					/* map failure reason to iq error */
-					if (!strncmp("-ERR INVALID_GATEWAY", api_stream.data, strlen("-ERR INVALID_GATEWAY"))) {
-						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-					} else if (!strncmp("-ERR SUBSCRIBER_ABSENT", api_stream.data, strlen("-ERR SUBSCRIBER_ABSENT"))) {
-						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-					} else if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
+					if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
 						/* this -ERR is received when out of sessions */
 						response = iks_new_iq_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
 					} else {
-						response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+						response = iks_new_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, api_stream.data);
 					}
 				}
 			}
 		} else if (call->dial_id) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to exec originate API\n");
-			response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+			response = iks_new_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to execute originate API");
 		}
 
 		switch_safe_free(api_stream.data);
 	} else {
 		/* will only happen if misconfigured */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_CRIT, "No dial gateway found for %s!\n", dial_to);
-		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		response = iks_new_iq_error_detailed_printf(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "No dial gateway found for %s!\n", dial_to);
 		goto done;
 	}
 
