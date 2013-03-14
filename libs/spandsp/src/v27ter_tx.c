@@ -121,7 +121,7 @@ static __inline__ int scramble(v27ter_tx_state_t *s, int in_bit)
 static __inline__ int get_scrambled_bit(v27ter_tx_state_t *s)
 {
     int bit;
-    
+
     if ((bit = s->current_get_bit(s->get_bit_user_data)) == SIG_STATUS_END_OF_DATA)
     {
         /* End of real data. Switch to the fake get_bit routine, until we
@@ -171,7 +171,7 @@ static complexf_t getbaud(v27ter_tx_state_t *s)
 
     if (s->in_training)
     {
-       	/* Send the training sequence */
+        /* Send the training sequence */
         if (++s->training_step <= V27TER_TRAINING_SEG_5)
         {
             if (s->training_step <= V27TER_TRAINING_SEG_4)
