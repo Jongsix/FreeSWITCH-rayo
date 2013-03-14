@@ -1331,6 +1331,9 @@ static iks *join_call(struct rayo_call *call, switch_core_session_t *session, ik
 
 		/* bridge this call to call-id */
 		switch_channel_set_variable(switch_core_session_get_channel(session), "bypass_media", bypass);
+		if (switch_false(bypass)) {
+			switch_channel_pre_answer(switch_core_session_get_channel(session));
+		}
 		if (switch_ivr_uuid_bridge(rayo_call_get_uuid(call), call_id) == SWITCH_STATUS_SUCCESS) {
 			response = iks_new_iq_result(node);
 		} else {
