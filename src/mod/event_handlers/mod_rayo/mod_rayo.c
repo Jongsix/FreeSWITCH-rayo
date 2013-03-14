@@ -990,8 +990,11 @@ void rayo_iks_send(iks *msg) {
 		char *msg_str = iks_string(NULL, msg);
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "variable_rayo_dcp_jid", dcp_jid);
 		switch_event_add_body(event, "%s", msg_str);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending XMPP event %s\n", msg_str);
 		switch_event_fire(&event);
 		iks_free(msg_str);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Failed to create XMPP event to %s\n", dcp_jid);
 	}
 }
 
@@ -2040,6 +2043,9 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", rsession->id, rayo_session_state_to_string(rsession->state), authzid, authcid);
 			rayo_send_auth_success(rsession);
 			rsession->client_jid = switch_core_strdup(rsession->pool, authzid);
+			if (!strchr(rsession->client_jid, '@')) {
+				rsession->client_jid = switch_core_sprintf(rsession->pool, "%s@%s", rsession->client_jid, rsession->server_jid);
+			}
 			rsession->client_jid_full = rsession->client_jid;
 			rsession->state = SS_AUTHENTICATED;
 		} else {
@@ -2114,9 +2120,11 @@ static int on_iq(void *user_data, ikspak *pak)
 			}
 			if (rayo_call_command_ok(rsession, call, session, iq)) {
 				iks *response;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Executing call handler: %s\n", to);
 				switch_mutex_lock(actor->mutex);
 				response = handler->fn.call(call, session, iq);
 				switch_mutex_unlock(actor->mutex);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Done executing call handler: %s\n", to);
 				call->idle_start_time = switch_micro_time_now();
 				if (response) {
 					iks_send(rsession->parser, response);
