@@ -24,7 +24,7 @@
  * Contributor(s):
  * Chris Rienzo <chris.rienzo@grasshopper.com>
  *
- * srgs.c -- Parses SRGS "dtmf" mode grammar and performs matches against digit strings
+ * srgs.c -- Parses / converts / matches SRGS grammars
  *
  */
 #include <switch.h>
@@ -53,8 +53,8 @@ enum srgs_node_type {
 	SNT_UNRESOLVED_REF,
 	/** <ruleref> resolved reference to node */
 	SNT_REF,
-	/** <item> digit */
-	SNT_DIGIT
+	/** <item> string */
+	SNT_STRING
 };
 
 /**
@@ -100,7 +100,7 @@ struct srgs_node {
 	/** Node value */
 	union {
 		struct root_value root;
-		char digit;
+		const char *string;
 		union ref_value ref;
 		struct rule_value rule;
 		struct item_value item;
@@ -133,6 +133,8 @@ struct srgs_parser {
 	const char *uuid;
 	/** compiled grammar regex */
 	pcre *compiled_regex;
+	/** true if digit grammar */
+	int digit_mode;
 };
 
 /**
@@ -174,7 +176,7 @@ static const char *node_type_to_string(enum srgs_node_type type)
 		case SNT_ITEM: return "item";
 		case SNT_UNRESOLVED_REF:
 		case SNT_REF: return "ruleref";
-		case SNT_DIGIT: return "digit";
+		case SNT_STRING: return "string";
 		case SNT_UNKNOWN: return "UNKOWN";
 	}
 	return "UNKNOWN";
@@ -204,8 +206,8 @@ static void sn_log_node_open(struct srgs_node *node)
 		case SNT_REF:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
 			return;
-		case SNT_DIGIT:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%c\n", node->value.digit);
+		case SNT_STRING:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%s\n", node->value.string);
 			return;
 		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<unknown>\n");
@@ -237,7 +239,7 @@ static void sn_log_node_close(struct srgs_node *node)
 		case SNT_REF:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref>\n");
 			return;
-		case SNT_DIGIT:
+		case SNT_STRING:
 			return;
 		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</unknown>\n");
@@ -295,15 +297,16 @@ static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node 
 }
 
 /**
- * Add digit child node
+ * Add string child node
  * @param pool to use
- * @param parent node to add digit to
- * @return the digit child node
+ * @param parent node to add string to
+ * @param string to add - this function does not copy the string
+ * @return the string child node
  */
-static struct srgs_node *sn_insert_digit(switch_memory_pool_t *pool, struct srgs_node *parent, char digit)
+static struct srgs_node *sn_insert_string(switch_memory_pool_t *pool, struct srgs_node *parent, char *string)
 {
-	struct srgs_node *child = sn_insert(pool, parent, SNT_DIGIT);
-	child->value.digit = digit;
+	struct srgs_node *child = sn_insert(pool, parent, SNT_STRING);
+	child->value.string = string;
 	return child;
 }
 
@@ -438,6 +441,31 @@ static int process_item(struct srgs_parser *parser, char **atts)
 }
 
 /**
+ * Process <grammar> attributes
+ * @param parser the parser state
+ * @param atts the attributes
+ * @return IKS_OK if ok
+ */
+static int process_root(struct srgs_parser *parser, char **atts)
+{
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("mode", atts[i])) {
+				char *mode = atts[i + 1];
+				if (zstr(mode)) {
+					return IKS_BADXML;
+				}
+				parser->digit_mode = !strcasecmp(mode, "dtmf");
+				return IKS_OK;
+			}
+			i += 2;
+		}
+	}
+	return IKS_OK;
+}
+
+/**
  * Process a tag
  * @param user_data the parser
  * @param name the tag name
@@ -455,7 +483,7 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 		if (parser->cur->type != SNT_ROOT) {
 			return IKS_BADXML;
 		}
-		return IKS_OK;
+		return process_root(parser, atts);
 	}
 	if (ntype == SNT_UNKNOWN) {
 		return IKS_BADXML;
@@ -507,12 +535,34 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
 	if (len) {
 		if (parser->cur->type == SNT_ITEM) {
-			struct srgs_node *digit = parser->cur;
+			struct srgs_node *string = parser->cur;
 			int i;
 			for (i = 0; i < len; i++) {
-				if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-					digit = sn_insert_digit(parser->pool, digit, data[i]);
-					sn_log_node_open(digit);
+				if (parser->digit_mode) {
+					if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
+						char *digit = switch_core_alloc(parser->pool, sizeof(char) * 2);
+						digit[0] = data[i];
+						digit[1] = '\0';
+						string = sn_insert_string(parser->pool, string, digit);
+						sn_log_node_open(string);
+					}
+				} else {
+					char *data_dup = switch_core_alloc(parser->pool, sizeof(char) * (len + 1));
+					char *start = data_dup;
+					char *end = start + len - 1;
+					memcpy(data_dup, data, len);
+					/* remove start whitespace */
+					for (; start && !isgraph(*start); start++) {
+					}
+					if (!zstr(start)) {
+						/* remove end whitespace */
+						for (; end != start && !isgraph(*end); end--) {
+							*end = '\0';
+						}
+						if (!zstr(start)) {
+							string = sn_insert_string(parser->pool, string, start);
+						}
+					}
 				}
 			}
 		}
@@ -645,11 +695,14 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				switch_safe_free(new_stream.data);
 			}
 			break;
-		case SNT_DIGIT:
-			if (node->value.digit == '*') {
-				stream->write_function(stream, "\\*");
-			} else {
-				stream->write_function(stream, "%c", node->value.digit);
+		case SNT_STRING: {
+			int i;
+			for (i = 0; i < strlen(node->value.string); i++) {
+				if (node->value.string[i] == '*') {
+					stream->write_function(stream, "\\*");
+				} else {
+					stream->write_function(stream, "%c", node->value.string[i]);
+				}
 			}
 			if (node->child) {
 				if (!create_regexes(parser, node->child, stream)) {
@@ -657,6 +710,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				}
 			}
 			break;
+		}
 		case SNT_ITEM:
 			if (node->child) {
 				struct srgs_node *item = node->child;
