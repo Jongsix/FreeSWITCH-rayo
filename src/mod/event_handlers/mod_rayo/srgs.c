@@ -58,13 +58,6 @@ enum srgs_node_type {
 };
 
 /**
- * <grammar> value
- */
-struct root_value {
-	char *regex;
-};
-
-/**
  * <rule> value
  */
 struct rule_value {
@@ -99,7 +92,6 @@ struct srgs_node {
 	char visited;
 	/** Node value */
 	union {
-		struct root_value root;
 		const char *string;
 		union ref_value ref;
 		struct rule_value rule;
@@ -116,13 +108,29 @@ struct srgs_node {
 };
 
 /**
+ * A parsed grammar
+ */
+struct srgs_grammar {
+	/** true if digit grammar */
+	int digit_mode;
+	/** grammar parse tree */
+	struct srgs_node *root;
+	/** compiled grammar regex */
+	pcre *compiled_regex;
+	/** grammar in regex format */
+	char *regex;
+	/** grammar in JSGF format */
+	char *jsgf;
+};
+
+/**
  * The SRGS SAX parser
  */
 struct srgs_parser {
 	/** parser memory pool */
 	switch_memory_pool_t *pool;
-	/** The document root */
-	struct srgs_node *root;
+	/** The current parsed grammar */
+	struct srgs_grammar *grammar;
 	/** current node being parsed */
 	struct srgs_node *cur;
 	/** grammar cache */
@@ -131,10 +139,6 @@ struct srgs_parser {
 	switch_hash_t *rules;
 	/** optional uuid for logging */
 	const char *uuid;
-	/** compiled grammar regex */
-	pcre *compiled_regex;
-	/** true if digit grammar */
-	int digit_mode;
 };
 
 /**
@@ -456,7 +460,7 @@ static int process_root(struct srgs_parser *parser, char **atts)
 				if (zstr(mode)) {
 					return IKS_BADXML;
 				}
-				parser->digit_mode = !strcasecmp(mode, "dtmf");
+				parser->grammar->digit_mode = !strcasecmp(mode, "dtmf");
 				return IKS_OK;
 			}
 			i += 2;
@@ -538,7 +542,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 			struct srgs_node *string = parser->cur;
 			int i;
 			for (i = 0; i < len; i++) {
-				if (parser->digit_mode) {
+				if (parser->grammar->digit_mode) {
 					if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
 						char *digit = switch_core_alloc(parser->pool, sizeof(char) * 2);
 						digit[0] = data[i];
@@ -601,34 +605,17 @@ void srgs_parser_destroy(struct srgs_parser *parser)
 
 	/* clean up all cached grammars */
 	for (hi = switch_core_hash_first(parser->cache); hi; hi = switch_core_hash_next(hi)) {
-		pcre *compiled_regex = NULL;
+		struct srgs_grammar *grammar = NULL;
 		const void *key;
 		void *val;
 		switch_core_hash_this(hi, &key, NULL, &val);
-		compiled_regex = (pcre *)val;
-		switch_assert(compiled_regex);
-		pcre_free(compiled_regex);
+		grammar = (struct srgs_grammar *)val;
+		switch_assert(grammar);
+		if (grammar->compiled_regex) {
+			pcre_free(grammar->compiled_regex);
+		}
 	}
 	switch_core_destroy_memory_pool(&pool);
-}
-
-/**
- * Compile regex
- */
-static int compile_regex(struct srgs_parser *parser)
-{
-	int erroffset = 0;
-	const char *errptr = "";
-	int options = 0;
-	const char *regex = parser->root->value.root.regex;
-
-	/* compile regex */
-	parser->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL);
-	if (!parser->compiled_regex) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
-		return 0;
-	}
-	return 1;
 }
 
 /**
@@ -671,9 +658,9 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				} else {
 					new_stream.write_function(&new_stream, "%s", "$");
 				}
-				node->value.root.regex = switch_core_strdup(parser->pool, new_stream.data);
+				parser->grammar->regex = switch_core_strdup(parser->pool, new_stream.data);
 				switch_safe_free(new_stream.data);
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", node->value.root.regex);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", parser->grammar->regex);
 			}
 			break;
 		case SNT_RULE:
@@ -783,6 +770,32 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 }
 
 /**
+ * Compile regex
+ */
+static int compile_regex(struct srgs_parser *parser)
+{
+	int erroffset = 0;
+	const char *errptr = "";
+	int options = 0;
+
+	/* already compiled? */
+	if (parser->grammar->compiled_regex) {
+		return 1;
+	}
+
+	/* compile regex */
+	if (!parser->grammar->regex && !create_regexes(parser, parser->grammar->root, NULL)) {
+		return 0;
+	}
+	parser->grammar->compiled_regex = pcre_compile(parser->grammar->regex, options, &errptr, &erroffset, NULL);
+	if (!parser->grammar->compiled_regex) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", parser->grammar->regex);
+		return 0;
+	}
+	return 1;
+}
+
+/**
  * Resolve all unresolved references and detect loops.
  * @param parser the parser
  * @param node the current node
@@ -845,7 +858,7 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
  */
 int srgs_parse(struct srgs_parser *parser, const char *document)
 {
-	pcre *compiled_regex = NULL;
+	struct srgs_grammar *grammar = NULL;
 	if (!parser) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "NULL parser!!\n");
 		return 0;
@@ -857,36 +870,32 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
 	}
 
 	/* check for cached grammar */
-	compiled_regex = (pcre *)switch_core_hash_find(parser->cache, document);
-	if (!compiled_regex) {
+	grammar = (struct srgs_grammar *)switch_core_hash_find(parser->cache, document);
+	if (!grammar) {
 		int result = 0;
 		iksparser *p = iks_sax_new(parser, tag_hook, cdata_hook);
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
-		parser->root = sn_new(parser->pool, SNT_ROOT);
-		parser->cur = parser->root;
+		grammar = switch_core_alloc(parser->pool, sizeof (*grammar));
+		parser->grammar = grammar;
+		parser->grammar->root = sn_new(parser->pool, SNT_ROOT);
+		parser->cur = parser->grammar->root;
 		switch_core_hash_delete_multi(parser->rules, NULL, NULL);
 		if (iks_parse(p, document, 0, 1) == IKS_OK) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Resolving references\n");
-			if (resolve_refs(parser, parser->root, 0)) {
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Creating rule regexes\n");
-				if (create_regexes(parser, parser->root, NULL)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Compile regex\n");
-					if (compile_regex(parser)) {
-						result = 1;
-					}
-				}
+			if (resolve_refs(parser, parser->grammar->root, 0)) {
+				result = 1;
 			}
 		}
 		iks_parser_delete(p);
 		if (result) {
-			switch_core_hash_insert(parser->cache, document, parser->compiled_regex);
+			switch_core_hash_insert(parser->cache, document, parser->grammar);
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to parse grammar\n");
 			return 0;
 		}
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
-		parser->compiled_regex = compiled_regex;
+		parser->grammar = grammar;
 	}
 	return 1;
 }
@@ -902,7 +911,10 @@ enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
 	int result = 0;
 	int ovector[30];
 	int workspace[1024];
-	result = pcre_dfa_exec(parser->compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
+	if (!compile_regex(parser)) {
+		return SMT_NO_MATCH;
+	}
+	result = pcre_dfa_exec(parser->grammar->compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
 		ovector, sizeof(ovector) / sizeof(ovector[0]),
 		workspace, sizeof(workspace) / sizeof(workspace[0]));
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "match = %i\n", result);
