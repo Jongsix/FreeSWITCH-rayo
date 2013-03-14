@@ -1768,7 +1768,7 @@ static int on_presence(void *user_data, ikspak *pak)
  * @param rsession the Rayo session
  * @param node the <iq> node
  */
-static void on_iq_set_xmpp_ping(struct rayo_session *rsession, iks *node)
+static void on_iq_xmpp_ping(struct rayo_session *rsession, iks *node)
 {
 	iks *pong = iks_new("iq");
 	char *from = iks_find_attrib(node, "from");
@@ -3625,7 +3625,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	/* server commands */
 	rayo_server_command_handler_add("set:"IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
 	rayo_server_command_handler_add("set:"IKS_NS_XMPP_SESSION":session", on_iq_set_xmpp_session);
-	rayo_server_command_handler_add("set:"IKS_NS_XMPP_PING":ping", on_iq_set_xmpp_ping);
+	rayo_server_command_handler_add("get:"IKS_NS_XMPP_PING":ping", on_iq_xmpp_ping);
 	rayo_server_command_handler_add("get:"IKS_NS_XMPP_DISCO":query", on_iq_get_xmpp_disco);
 	rayo_server_command_handler_add("set:"RAYO_NS":dial", on_rayo_dial);
 
