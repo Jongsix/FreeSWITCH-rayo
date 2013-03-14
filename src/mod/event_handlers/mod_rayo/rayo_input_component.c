@@ -66,8 +66,8 @@ static void send_input_component_dtmf_match(struct rayo_component *component, co
 static ATTRIB_RULE(input_mode)
 {
 	/* for now, only allow dtmf;
-	return !strcmp("any", value) || !strcmp("dtmf", value) || !strcmp("speech", value); */
-	return !strcmp("dtmf", value);
+	return !strcasecmp("any", value) || !strcasecmp("dtmf", value) || !strcasecmp("speech", value); */
+	return !strcasecmp("dtmf", value);
 }
 
 /**
