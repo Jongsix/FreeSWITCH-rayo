@@ -685,10 +685,24 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 		case SNT_STRING: {
 			int i;
 			for (i = 0; i < strlen(node->value.string); i++) {
-				if (node->value.string[i] == '*') {
-					stream->write_function(stream, "\\*");
-				} else {
-					stream->write_function(stream, "%c", node->value.string[i]);
+				switch (node->value.string[i]) {
+					case '[':
+					case '\\':
+					case '^':
+					case '$':
+					case '.':
+					case '|':
+					case '?':
+					case '*':
+					case '+':
+					case '(':
+					case ')':
+						/* escape special PCRE regex characters */
+						stream->write_function(stream, "\\%c", node->value.string[i]);
+						break;
+					default:
+						stream->write_function(stream, "%c", node->value.string[i]);
+						break;
 				}
 			}
 			if (node->child) {
