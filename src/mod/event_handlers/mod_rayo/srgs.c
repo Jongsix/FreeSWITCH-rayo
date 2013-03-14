@@ -772,27 +772,24 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 /**
  * Compile regex
  */
-static int compile_regex(struct srgs_parser *parser)
+static pcre *get_compiled_regex(struct srgs_parser *parser)
 {
 	int erroffset = 0;
 	const char *errptr = "";
 	int options = 0;
+	const char *regex;
 
-	/* already compiled? */
-	if (parser->grammar->compiled_regex) {
-		return 1;
+	if (!parser || !parser->grammar) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "parser or grammar is NULL!\n");
+		return NULL;
 	}
 
-	/* compile regex */
-	if (!parser->grammar->regex && !create_regexes(parser, parser->grammar->root, NULL)) {
-		return 0;
+	if (!parser->grammar->compiled_regex && (regex = srgs_to_regex(parser))) {
+		if (!(parser->grammar->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL))) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
+		}
 	}
-	parser->grammar->compiled_regex = pcre_compile(parser->grammar->regex, options, &errptr, &erroffset, NULL);
-	if (!parser->grammar->compiled_regex) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", parser->grammar->regex);
-		return 0;
-	}
-	return 1;
+	return parser->grammar->compiled_regex;
 }
 
 /**
@@ -911,10 +908,11 @@ enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
 	int result = 0;
 	int ovector[30];
 	int workspace[1024];
-	if (!compile_regex(parser)) {
+	pcre *compiled_regex = get_compiled_regex(parser);
+	if (!compiled_regex) {
 		return SMT_NO_MATCH;
 	}
-	result = pcre_dfa_exec(parser->grammar->compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
+	result = pcre_dfa_exec(compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
 		ovector, sizeof(ovector) / sizeof(ovector[0]),
 		workspace, sizeof(workspace) / sizeof(workspace[0]));
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "match = %i\n", result);
@@ -925,6 +923,34 @@ enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
 		return SMT_MATCH_PARTIAL;
 	}
 	return SMT_NO_MATCH;
+}
+
+/**
+ * Generate regex from SRGS document.  Call this after parsing SRGS document.
+ * @param parser the parser
+ * @return the regex or NULL
+ */
+const char *srgs_to_regex(struct srgs_parser *parser)
+{
+	if (!parser || !parser->grammar) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "parser or grammar is NULL!\n");
+		return NULL;
+	}
+	if (!parser->grammar->regex && !create_regexes(parser, parser->grammar->root, NULL)) {
+		return NULL;
+	}
+	return parser->grammar->regex;
+}
+
+/**
+ * Generate JSGF from SRGS document.  Call this after parsing SRGS document.
+ * @param parser the parser
+ * @return the JSGF document or NULL
+ */
+const char *srgs_to_jsgf(struct srgs_parser *parser)
+{
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Not implemented!\n");
+	return NULL;
 }
 
 /* For Emacs:
