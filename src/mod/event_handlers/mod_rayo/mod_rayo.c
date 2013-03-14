@@ -48,6 +48,12 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 #define RAYO_CAUSE_BUSY SWITCH_CAUSE_USER_BUSY
 #define RAYO_CAUSE_ERROR SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE
 
+#define RAYO_END_REASON_HANGUP "hangup"
+#define RAYO_END_REASON_ERROR "error"
+#define RAYO_END_REASON_BUSY "busy"
+#define RAYO_END_REASON_REJECT "reject"
+#define RAYO_END_REASON_TIMEOUT "timeout"
+
 #define RAYO_SIP_REQUEST_HEADER "sip_r_"
 #define RAYO_SIP_RESPONSE_HEADER "sip_rh_"
 #define RAYO_SIP_PROVISIONAL_RESPONSE_HEADER "sip_ph_"
@@ -1535,7 +1541,7 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_INFO, "%s has control of call\n", dcp_jid);
 
 	/* set rayo channel variables so channel originate event can be identified as coming from Rayo */
-	stream.write_function(&stream, "{origination_uuid=%s,rayo_dcp_jid=%s,rayo_call_jid=%s", 
+	stream.write_function(&stream, "{origination_uuid=%s,rayo_dcp_jid=%s,rayo_call_jid=%s",
 		rayo_call_get_uuid(call), dcp_jid, rayo_call_get_jid(call));
 
 	/* set originate channel variables */
@@ -1650,7 +1656,7 @@ done:
 		/* send response to client */
 		rayo_iks_send(response);
 		iks_delete(response);
-		
+
 		/* destroy call */
 		if (call) {
 			rayo_call_unlock(call);
@@ -2531,43 +2537,43 @@ static const char *switch_cause_to_rayo_cause(switch_call_cause_t cause)
 	switch (cause) {
 		case SWITCH_CAUSE_NONE:
 		case SWITCH_CAUSE_NORMAL_CLEARING:
-			return "hungup";
+			return RAYO_END_REASON_HANGUP;
 
 		case SWITCH_CAUSE_UNALLOCATED_NUMBER:
 		case SWITCH_CAUSE_NO_ROUTE_TRANSIT_NET:
 		case SWITCH_CAUSE_NO_ROUTE_DESTINATION:
 		case SWITCH_CAUSE_CHANNEL_UNACCEPTABLE:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 
 		case SWITCH_CAUSE_CALL_AWARDED_DELIVERED:
-			return "hungup";
-			
+			return RAYO_END_REASON_HANGUP;
+
 		case SWITCH_CAUSE_USER_BUSY:
-			return "busy";
-			
+			return RAYO_END_REASON_BUSY;
+
 		case SWITCH_CAUSE_NO_USER_RESPONSE:
 		case SWITCH_CAUSE_NO_ANSWER:
-			return "timeout";
-			
+			return RAYO_END_REASON_TIMEOUT;
+
 		case SWITCH_CAUSE_SUBSCRIBER_ABSENT:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 
 		case SWITCH_CAUSE_CALL_REJECTED:
-			return "rejected";
+			return RAYO_END_REASON_REJECT;
 
 		case SWITCH_CAUSE_NUMBER_CHANGED:
 		case SWITCH_CAUSE_REDIRECTION_TO_NEW_DESTINATION:
 		case SWITCH_CAUSE_EXCHANGE_ROUTING_ERROR:
 		case SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER:
 		case SWITCH_CAUSE_INVALID_NUMBER_FORMAT:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 
 		case SWITCH_CAUSE_FACILITY_REJECTED:
-			return "rejected";
+			return RAYO_END_REASON_REJECT;
 
 		case SWITCH_CAUSE_RESPONSE_TO_STATUS_ENQUIRY:
 		case SWITCH_CAUSE_NORMAL_UNSPECIFIED:
-			return "hungup";
+			return RAYO_END_REASON_HANGUP;
 
 		case SWITCH_CAUSE_NORMAL_CIRCUIT_CONGESTION:
 		case SWITCH_CAUSE_NETWORK_OUT_OF_ORDER:
@@ -2590,7 +2596,7 @@ static const char *switch_cause_to_rayo_cause(switch_call_cause_t cause)
 		case SWITCH_CAUSE_INCOMPATIBLE_DESTINATION:
 		case SWITCH_CAUSE_INVALID_MSG_UNSPECIFIED:
 		case SWITCH_CAUSE_MANDATORY_IE_MISSING:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 
 		case SWITCH_CAUSE_MESSAGE_TYPE_NONEXIST:
 		case SWITCH_CAUSE_WRONG_MESSAGE:
@@ -2600,12 +2606,12 @@ static const char *switch_cause_to_rayo_cause(switch_call_cause_t cause)
 		case SWITCH_CAUSE_RECOVERY_ON_TIMER_EXPIRE:
 		case SWITCH_CAUSE_MANDATORY_IE_LENGTH_ERROR:
 		case SWITCH_CAUSE_PROTOCOL_ERROR:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 
 		case SWITCH_CAUSE_INTERWORKING:
 		case SWITCH_CAUSE_SUCCESS:
 		case SWITCH_CAUSE_ORIGINATOR_CANCEL:
-			return "hungup";
+			return RAYO_END_REASON_HANGUP;
 
 		case SWITCH_CAUSE_CRASH:
 		case SWITCH_CAUSE_SYSTEM_SHUTDOWN:
@@ -2624,17 +2630,16 @@ static const char *switch_cause_to_rayo_cause(switch_call_cause_t cause)
 		case SWITCH_CAUSE_INVALID_URL:
 		case SWITCH_CAUSE_INVALID_PROFILE:
 		case SWITCH_CAUSE_NO_PICKUP:
-			return "error";
+			return RAYO_END_REASON_ERROR;
 	}
-	return "hungup";
+	return RAYO_END_REASON_HANGUP;
 }
 
 /**
  * Handle call end event
- * @param rsession the Rayo session
  * @param event the hangup event
  */
-static void on_call_end_event(struct rayo_session *rsession, switch_event_t *event)
+static void on_call_end_event(switch_event_t *event)
 {
 	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
 
@@ -2861,7 +2866,7 @@ static void rayo_session_handle_event(struct rayo_session *rsession, switch_even
 			on_call_originate_event(rsession, event);
 			break;
 		case SWITCH_EVENT_CHANNEL_DESTROY:
-			on_call_end_event(rsession, event);
+			on_call_end_event(event);
 			break;
 		case SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA:
 			on_call_ringing_event(rsession, event);
@@ -3641,7 +3646,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ORIGINATE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_ANSWER, NULL, route_call_event, NULL);
-	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_DESTROY, NULL, route_call_event, NULL);
+	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_DESTROY, NULL, on_call_end_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_BRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_UNBRIDGE, NULL, route_call_event, NULL);
 	switch_event_bind(modname, SWITCH_EVENT_CHANNEL_EXECUTE, NULL, route_call_event, NULL);
@@ -3681,6 +3686,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 
 	/* cleanup module */
 	switch_event_unbind_callback(route_call_event);
+	switch_event_unbind_callback(on_call_end_event);
 	switch_event_unbind_callback(route_mixer_event);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Module shutdown\n");
