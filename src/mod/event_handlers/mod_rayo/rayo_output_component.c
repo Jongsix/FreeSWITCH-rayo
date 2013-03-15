@@ -409,6 +409,12 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 	if (!context->cur_doc) {
 		context->cur_doc = iks_find(output->document, "document");
 		if (!context->cur_doc) {
+			iks *speak = iks_find(output->document, "speak");
+			if (speak) {
+				context->cur_doc = output->document;
+			}
+		}
+		if (!context->cur_doc) {
 			iks_delete(output->document);
 			output->document = NULL;
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing <document>\n");
