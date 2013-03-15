@@ -270,7 +270,6 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	rayo_component_set_data(handler->component, handler);
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
-	handler->component = NULL;
 	handler->stop = 0;
 	handler->done = 0;
 	handler->speech_mode = 0;
