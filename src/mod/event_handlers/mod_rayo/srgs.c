@@ -1192,11 +1192,25 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 		case SNT_STRING: {
 			int len = strlen(node->value.string);
 			int i;
-			stream->write_function(stream, " \"");
+			//stream->write_function(stream, " \"");
+			stream->write_function(stream, " ");
 			for (i = 0; i < len; i++) {
 				switch (node->value.string[i]) {
 					case '\\':
-					case '"':
+					case '*':
+					case '+':
+					case '/':
+					case '(':
+					case ')':
+					case '[':
+					case ']':
+					case '{':
+					case '}':
+					case '=':
+					case '<':
+					case '>':
+					case ';':
+					case '|':
 						stream->write_function(stream, "\\");
 						break;
 					default:
@@ -1204,7 +1218,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 				}
 				stream->write_function(stream, "%c", node->value.string[i]);
 			}
-			stream->write_function(stream, "\"");
+			//stream->write_function(stream, "\"");
 			if (node->child) {
 				if (!create_jsgf(parser, node->child, stream)) {
 					return 0;

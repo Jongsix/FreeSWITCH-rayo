@@ -394,7 +394,6 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 {
 	struct rayo_file_context *context = handle->private_info;
 	struct output_component *output = context->component ? OUTPUT_COMPONENT(context->component) : NULL;
-	char *file;
 
   top:
 
@@ -408,18 +407,15 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 	}
 
 	if (!context->cur_doc) {
-		iks *doc = iks_find(output->document, "document");
-		if (!doc) {
-			doc = iks_find(output->document, "speak");
-		}
-		if (!doc) {
+		context->cur_doc = iks_find(output->document, "document");
+		if (!context->cur_doc) {
 			iks_delete(output->document);
 			output->document = NULL;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing <document>\n");
 			return SWITCH_STATUS_FALSE;
 		}
-		context->cur_doc = doc;
 	} else {
-		context->cur_doc = iks_next(context->cur_doc);
+		context->cur_doc = iks_next_tag(context->cur_doc);
 	}
 
 	/* done? */
@@ -431,6 +427,7 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 			}
 		} else {
 			/* no more files to play */
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Done playing\n");
 			return SWITCH_STATUS_FALSE;
 		}
 	}
@@ -441,12 +438,29 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		context->ssml = switch_mprintf("silence_stream://%i", output->repeat_interval);
 	} else {
 		/* play next document */
+		iks *speak = NULL;
+
 		switch_safe_free(context->ssml);
-		file = iks_string(NULL, context->cur_doc);
-		context->ssml = switch_mprintf("ssml://%s", file);
-		iks_free(file);
+		context->ssml = NULL;
+ 		speak = iks_find(context->cur_doc, "speak");
+		if (speak) {
+			char *ssml_str = iks_string(NULL, speak);
+			context->ssml = switch_mprintf("ssml://%s", ssml_str);
+			iks_free(ssml_str);
+		} else if (iks_has_children(context->cur_doc)) {
+			const char *ssml_str = iks_cdata(iks_child(context->cur_doc));
+			if (zstr(ssml_str)) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Empty <speak> CDATA\n");
+				return SWITCH_STATUS_FALSE;
+			}
+			context->ssml = switch_mprintf("ssml://%s", ssml_str);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing <speak>\n");
+			return SWITCH_STATUS_FALSE;
+		}
 	}
 	if (switch_core_file_open(&context->fh, context->ssml, handle->channels, handle->samplerate, handle->flags, NULL) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to open %s\n", context->ssml);
 		goto top;
 	}
 
