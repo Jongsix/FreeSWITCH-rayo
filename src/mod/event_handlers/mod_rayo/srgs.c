@@ -64,7 +64,6 @@ struct rule_value {
 	char is_public;
 	char *id;
 	char *regex;
-	char *jsgf;
 };
 
 /**
@@ -1018,7 +1017,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					";\ngrammar org.freeswitch.srgs_to_jsgf;\n"
 					"public ");
 				if (num_rules > 1) {
-					new_stream.write_function(&new_stream, "<root> = ");
+					new_stream.write_function(&new_stream, "<root> =");
 					for (child = node->child; child; child = child->next) {
 						if (child->type == SNT_RULE && child->value.rule.is_public) {
 							if (!first) {
@@ -1057,7 +1056,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 		case SNT_RULE:
 			if (node->child) {
 				struct srgs_node *item = node->child;
-				stream->write_function(stream, "<%s> = ", node->value.rule.id);
+				stream->write_function(stream, "<%s> =", node->value.rule.id);
 				for (; item; item = item->next) {
 					if (!create_jsgf(parser, item, stream)) {
 						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s jsgf rule failed\n", node->value.rule.id);
