@@ -408,6 +408,7 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 
 	if (!context->cur_doc) {
 		context->cur_doc = iks_find(output->document, "document");
+		/* TODO remove this IF block once adhearsion is fixed to use <document> */
 		if (!context->cur_doc) {
 			iks *speak = iks_find(output->document, "speak");
 			if (speak) {
