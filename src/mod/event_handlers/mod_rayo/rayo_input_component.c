@@ -38,6 +38,7 @@
 //#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
 //#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
 //#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
+#define INPUT_MATCH "match", RAYO_INPUT_COMPLETE_NS
 #define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
 
 /* this is not part of rayo spec */
@@ -202,11 +203,17 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 	return SWITCH_TRUE;
 }
 
+char *create_input_component_id(const char *uuid)
+{
+	return switch_mprintf("%s-input", uuid);
+}
+
 /**
  * Start execution of input component
  */
 static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
+	char *component_id = NULL;
 	iks *input = iks_child(iq);
 	iks *grammar = NULL;
 	char *content_type = NULL;
@@ -262,7 +269,9 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	}
 
 	/* create component */
-	handler->component = rayo_component_create("input", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
+	component_id = create_input_component_id(switch_core_session_get_uuid(session));
+	handler->component = rayo_component_create("input", component_id, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
+	switch_safe_free(component_id);
 	if (!handler->component) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create input component!\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create input component!");
@@ -301,7 +310,6 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
 
 		/* start speech detection */
-		switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_input_jid", rayo_component_get_jid(handler->component));
 		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
 		switch_ivr_detect_speech(session, "pocketsphinx", jsgf_path, "mod_rayo_grammar", "", NULL);
 	}
@@ -344,11 +352,39 @@ static void on_detected_speech_event(switch_event_t *event)
 	switch_event_serialize(event, &event_str, SWITCH_FALSE);
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", event_str);
 	if (speech_type && !strcasecmp("detected-speech", speech_type)) {
-		struct rayo_component *component = rayo_component_locate(switch_event_get_header(event, "variable_rayo_input_jid"));
+		const char *uuid = switch_event_get_header(event, "Unique-ID");
+		char *component_id = create_input_component_id(uuid);
+		struct rayo_component *component = rayo_component_locate(component_id);
+		switch_safe_free(component_id);
 		if (component) {
+			const char *result = switch_event_get_body(event);
+			if (zstr(result)) {
+				rayo_component_send_complete(component, INPUT_NOMATCH);
+			} else {
+				iks *result_xml = NULL;
+				iksparser *parser = iks_dom_new(&result_xml);
+				if (iks_parse(parser, result, strlen(result), 1) == IKS_OK) {
+					if (!strcmp("result", iks_name(result_xml))) {
+					//iks *x = iks_find(result_xml, "result");
+					iks *x = result_xml;
+					//if (x) {
+						iks *presence = rayo_component_create_complete_event(component, INPUT_MATCH);
+						iks *match = iks_find(presence, "complete");
+						match = iks_find(match, "match");
+						iks_insert_node(match, x);
+						rayo_component_send_complete_event(component, presence);
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find speech result: %s!\n", result);
+						rayo_component_send_complete(component, INPUT_NOMATCH);
+					}
+					iks_delete(result_xml);
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to parse speech result: %s!\n", result);
+					rayo_component_send_complete(component, INPUT_NOMATCH);
+				}
+				iks_parser_delete(parser);
+			}
 			rayo_component_unlock(component);
-			/* TODO handle matches */
-			rayo_component_send_complete(component, INPUT_NOMATCH);
 		}
 	}
 	switch_safe_free(event_str);
