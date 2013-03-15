@@ -4,7 +4,7 @@
 #include "srgs.h"
 
 
-static void assert_equals(char *test, char *expected_str, int expected, int actual, const char *file, int line)
+static void assert_equals(const char *test, const char *expected_str, int expected, int actual, const char *file, int line)
 {
 	if (expected != actual) {
 		printf("TEST\t%s\tFAIL\t%s\t%i\t!=\t%i\t%s:%i\n", test, expected_str, expected, actual, file, line);
@@ -14,7 +14,40 @@ static void assert_equals(char *test, char *expected_str, int expected, int actu
 	}
 }
 
+static void assert_string_equals(const char *test, const char *expected, const char *actual, const char *file, int line)
+{
+	if (!actual || strcmp(expected, actual)) {
+		printf("TEST\t%s\tFAIL\t\t%s\t!=\t%s\t%s:%i\n", test, expected, actual, file, line);
+		exit(1);
+	} else {
+		printf("TEST\t%s\tPASS\n", test);
+	}
+}
+
+static void assert_not_null(const char *test, const void *actual, const char *file, int line)
+{
+	if (!actual) {
+		printf("TEST\t%s\tFAIL\t\t\t\t\t%s:%i\n", test, file, line);
+		exit(1);
+	} else {
+		printf("TEST\t%s\tPASS\n", test);
+	}
+}
+
+static void assert_null(const char *test, const void *actual, const char *file, int line)
+{
+	if (actual) {
+		printf("TEST\t%s\tFAIL\t\t\t\t\t%s:%i\n", test, file, line);
+		exit(1);
+	} else {
+		printf("TEST\t%s\tPASS\n", test);
+	}
+}
+
 #define ASSERT_EQUALS(expected, actual) assert_equals(#actual, #expected, expected, actual, __FILE__, __LINE__)
+#define ASSERT_STRING_EQUALS(expected, actual) assert_string_equals(#actual, expected, actual, __FILE__, __LINE__)
+#define ASSERT_NOT_NULL(actual) assert_not_null(#actual " not null", actual, __FILE__, __LINE__)
+#define ASSERT_NULL(actual) assert_null(#actual " is null", actual, __FILE__, __LINE__)
 
 #define SKIP_ASSERT_EQUALS(expected, actual) if (0) { ASSERT_EQUALS(expected, actual); }
 
@@ -659,6 +692,55 @@ static void test_repeat_item_grammar(void)
 	srgs_parser_destroy(parser);
 }
 
+/*
+<polite> = please | kindly | oh mighty computer;
+public <command> = [ <polite> ] don't crash;
+*/
+static const char *voice_srgs1 =
+	"<grammar mode=\"voice\" version=\"1.0\"\n"
+	"    xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
+	"    xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                        http://www.w3.org/TR/speech-grammar/grammar.xsd\"\n"
+	"    language\"en-US\"\n"
+	"    xmlns=\"http://www.w3.org/2001/06/grammar\">\n"
+	"\n"
+	"    <rule id=\"polite\">\n"
+	"    <one-of>\n"
+	"      <item>please</item>\n"
+	"      <item>kindly</item>\n"
+	"      <item> oh mighty computer</item>\n"
+	"    </one-of>\n"
+	"    </rule>\n"
+	"\n"
+	"    <rule id=\"command\" scope=\"public\">\n"
+	"       <item repeat=\"0-1\"><ruleref uri=\"#polite\"/></item>\n"
+	"       <item>don't crash</item>\n"
+	"    </rule>\n"
+	"</grammar>\n";
+
+static const char *voice_jsgf =
+	"#JSGF V1.0;\n"
+	"grammar org.freeswitch.srgs_to_jsgf;\n"
+	"public <command> =  [ <polite> ] don't crash;\n"
+	"<polite> =  ( please | kindly | oh mighty computer );\n";
+
+static void test_jsgf(void)
+{
+	struct srgs_parser *parser;
+	const char *jsgf;
+	parser = srgs_parser_new("1234");
+
+	ASSERT_EQUALS(1, srgs_parse(parser, adhearsion_ask_grammar));
+	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
+	ASSERT_EQUALS(1, srgs_parse(parser, voice_srgs1));
+	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
+	ASSERT_STRING_EQUALS(voice_jsgf, jsgf);
+	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar));
+	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
+	ASSERT_NULL(srgs_to_jsgf(NULL));
+	srgs_parser_destroy(parser);
+}
+
 /**
  * main program
  */
@@ -672,5 +754,6 @@ int main(int argc, char **argv)
 	TEST(test_match_multi_rule_grammar);
 	TEST(test_match_rayo_example_grammar);
 	TEST(test_repeat_item_grammar);
+	TEST(test_jsgf);
 	return 0;
 }
