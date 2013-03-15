@@ -54,7 +54,17 @@ enum srgs_node_type {
 	/** <ruleref> resolved reference to node */
 	SNT_REF,
 	/** <item> string */
-	SNT_STRING
+	SNT_STRING,
+	/** <tag> */
+	SNT_TAG,
+	/** <lexicon> */
+	SNT_LEXICON,
+	/** <example> */
+	SNT_EXAMPLE,
+	/** <token> */
+	SNT_TOKEN,
+	/** <meta> */
+	SNT_META
 };
 
 /**
@@ -93,6 +103,7 @@ struct srgs_node {
 	char visited;
 	/** Node value */
 	union {
+		char *root;
 		const char *string;
 		union ref_value ref;
 		struct rule_value rule;
@@ -118,8 +129,10 @@ struct srgs_grammar {
 	char *language;
 	/** true if digit grammar */
 	int digit_mode;
-	/** grammar parse tree */
+	/** grammar parse tree root */
 	struct srgs_node *root;
+	/** root rule */
+	struct srgs_node *root_rule;
 	/** compiled grammar regex */
 	pcre *compiled_regex;
 	/** grammar in regex format */
@@ -168,6 +181,21 @@ static enum srgs_node_type string_to_node_type(char *name)
 	if (!strcmp("rule", name)) {
 		return SNT_RULE;
 	}
+	if (!strcmp("tag", name)) {
+		return SNT_TAG;
+	}
+	if (!strcmp("lexicon", name)) {
+		return SNT_LEXICON;
+	}
+	if (!strcmp("example", name)) {
+		return SNT_EXAMPLE;
+	}
+	if (!strcmp("token", name)) {
+		return SNT_TOKEN;
+	}
+	if (!strcmp("meta", name)) {
+		return SNT_META;
+	}
 	return SNT_UNKNOWN;
 }
 
@@ -186,7 +214,12 @@ static const char *node_type_to_string(enum srgs_node_type type)
 		case SNT_UNRESOLVED_REF:
 		case SNT_REF: return "ruleref";
 		case SNT_STRING: return "string";
-		case SNT_UNKNOWN: return "UNKOWN";
+		case SNT_TAG: return "tag";
+		case SNT_LEXICON: return "lexicon";
+		case SNT_EXAMPLE: return "example";
+		case SNT_TOKEN: return "token";
+		case SNT_META: return "meta";
+		case SNT_UNKNOWN: return "UNKNOWN";
 	}
 	return "UNKNOWN";
 }
@@ -217,6 +250,21 @@ static void sn_log_node_open(struct srgs_node *node)
 			return;
 		case SNT_STRING:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%s\n", node->value.string);
+			return;
+		case SNT_TAG:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<tag>\n");
+			return;
+		case SNT_LEXICON:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<lexicon>\n");
+			return;
+		case SNT_EXAMPLE:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<example>\n");
+			return;
+		case SNT_TOKEN:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<token>\n");
+			return;
+		case SNT_META:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<meta>\n");
 			return;
 		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<unknown>\n");
@@ -249,6 +297,21 @@ static void sn_log_node_close(struct srgs_node *node)
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref>\n");
 			return;
 		case SNT_STRING:
+			return;
+		case SNT_TAG:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</tag>\n");
+			return;
+		case SNT_LEXICON:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</lexicon>\n");
+			return;
+		case SNT_EXAMPLE:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</example>\n");
+			return;
+		case SNT_TOKEN:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</token>\n");
+			return;
+		case SNT_META:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</meta>\n");
 			return;
 		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</unknown>\n");
@@ -373,10 +436,12 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 			if (!strcmp("uri", atts[i])) {
 				char *uri = atts[i + 1];
 				if (zstr(uri)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Empty <ruleref> uri\n");
 					return IKS_BADXML;
 				}
 				/* only allow local reference */
 				if (uri[0] != '#' || strlen(uri) < 2) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Only local rule refs allowed\n");
 					return IKS_BADXML;
 				}
 				ruleref->value.ref.uri = switch_core_strdup(parser->pool, uri);
@@ -407,12 +472,14 @@ static int process_item(struct srgs_parser *parser, char **atts)
 				/* repeats of 0 are not supported by this code */
 				char *repeat = atts[i + 1];
 				if (zstr(repeat)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Empty <item> repeat atribute\n");
 					return IKS_BADXML;
 				}
 				if (switch_is_number(repeat)) {
 					/* single number */
 					int repeat_val = atoi(repeat);
 					if (repeat_val < 1) {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat must be >= 0\n");
 						return IKS_BADXML;
 					}
 					item->value.item.repeat_min = repeat_val;
@@ -425,6 +492,7 @@ static int process_item(struct srgs_parser *parser, char **atts)
 						*max = '\0';
 						max++;
 					} else {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat must be a number or range\n");
 						return IKS_BADXML;
 					}
 					if (switch_is_number(min) && (switch_is_number(max) || zstr(max))) {
@@ -433,17 +501,20 @@ static int process_item(struct srgs_parser *parser, char **atts)
 						/* max must be >= min and > 0
 						   min must be >= 0 */
 						if ((max_val <= 0) || (max_val < min_val) || (min_val < 0)) {
+							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat range invalid\n");
 							return IKS_BADXML;
 						}
 						item->value.item.repeat_min = min_val;
 						item->value.item.repeat_max = max_val;
 					} else {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat range is not a number\n");
 						return IKS_BADXML;
 					}
 				}
 			} else if (!strcmp("weight", atts[i])) {
 				const char *weight = atts[i + 1];
 				if (zstr(weight) || !switch_is_number(weight) || atof(weight) < 0) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> weight is not a number >= 0\n");
 					return IKS_BADXML;
 				}
 				item->value.item.weight = switch_core_strdup(parser->pool, weight);
@@ -474,15 +545,24 @@ static int process_root(struct srgs_parser *parser, char **atts)
 			} else if(!strcmp("encoding", atts[i])) {
 				char *encoding = atts[i + 1];
 				if (zstr(encoding)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> encoding is empty\n");
 					return IKS_BADXML;
 				}
 				parser->grammar->encoding = switch_core_strdup(parser->pool, encoding);
 			} else if (!strcmp("language", atts[i])) {
 				char *language = atts[i + 1];
 				if (zstr(language)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> language is empty\n");
 					return IKS_BADXML;
 				}
 				parser->grammar->language = switch_core_strdup(parser->pool, language);
+			} else if (!strcmp("root", atts[i])) {
+				char *root = atts[i + 1];
+				if (zstr(root)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> root is empty\n");
+					return IKS_BADXML;
+				}
+				parser->cur->value.root = switch_core_strdup(parser->pool, root);
 			}
 			i += 2;
 		}
@@ -503,15 +583,20 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
 	enum srgs_node_type ntype = string_to_node_type(name);
 
-	/* grammar only allowed at root */
-	if (ntype == SNT_ROOT) {
+	switch (ntype) {
+	case SNT_ROOT:
+		/* grammar only allowed at root */
 		if (parser->cur->type != SNT_ROOT) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> must be root of document\n");
 			return IKS_BADXML;
 		}
 		return process_root(parser, atts);
-	}
-	if (ntype == SNT_UNKNOWN) {
+	case SNT_UNKNOWN:
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "unknown type\n");
 		return IKS_BADXML;
+	default:
+		/* proceed and add to parse tree */
+		break;
 	}
 
 	switch (type) {
@@ -559,7 +644,7 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 {
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
 	if (len) {
-		if (parser->cur->type == SNT_ITEM) {
+		if (parser->cur->type == SNT_ITEM /* TODO || parser->cur->type == SNT_RULE || parser->cur->type == SNT_TOKEN */) {
 			struct srgs_node *string = parser->cur;
 			int i;
 			if (parser->grammar->digit_mode) {
@@ -578,11 +663,11 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 				char *end = start + len - 1;
 				memcpy(data_dup, data, len);
 				/* remove start whitespace */
-				for (; start && !isgraph(*start); start++) {
+				for (; start && *start && !isgraph(*start); start++) {
 				}
 				if (!zstr(start)) {
 					/* remove end whitespace */
-					for (; end != start && !isgraph(*end); end--) {
+					for (; end != start && *end && !isgraph(*end); end--) {
 						*end = '\0';
 					}
 					if (!zstr(start)) {
@@ -654,33 +739,40 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 			if (node->child) {
 				int num_rules = 0;
 				struct srgs_node *child = node->child;
-				switch_stream_handle_t new_stream = { 0 };
-				SWITCH_STANDARD_STREAM(new_stream);
-				if (node->num_children > 1) {
-					new_stream.write_function(&new_stream, "%s", "^(?:");
-				} else {
-					new_stream.write_function(&new_stream, "%s", "^");
-				}
-				for (; child; child = child->next) {
-					if (!create_regexes(parser, child, &new_stream)) {
-						switch_safe_free(new_stream.data);
+				if (parser->grammar->root_rule) {
+					if (!create_regexes(parser, parser->grammar->root_rule, NULL)) {
 						return 0;
 					}
-					if (child->type == SNT_RULE && child->value.rule.is_public) {
-						if (num_rules > 0) {
-							new_stream.write_function(&new_stream, "%s", "|");
-						}
-						new_stream.write_function(&new_stream, "%s", child->value.rule.regex);
-						num_rules++;
-					}
-				}
-				if (node->num_children > 1) {
-					new_stream.write_function(&new_stream, "%s", ")$");
+					parser->grammar->regex = switch_core_sprintf(parser->pool, "^%s$", parser->grammar->root_rule->value.rule.regex);
 				} else {
-					new_stream.write_function(&new_stream, "%s", "$");
+					switch_stream_handle_t new_stream = { 0 };
+					SWITCH_STANDARD_STREAM(new_stream);
+					if (node->num_children > 1) {
+						new_stream.write_function(&new_stream, "%s", "^(?:");
+					} else {
+						new_stream.write_function(&new_stream, "%s", "^");
+					}
+					for (; child; child = child->next) {
+						if (!create_regexes(parser, child, &new_stream)) {
+							switch_safe_free(new_stream.data);
+							return 0;
+						}
+						if (child->type == SNT_RULE && child->value.rule.is_public) {
+							if (num_rules > 0) {
+								new_stream.write_function(&new_stream, "%s", "|");
+							}
+							new_stream.write_function(&new_stream, "%s", child->value.rule.regex);
+							num_rules++;
+						}
+					}
+					if (node->num_children > 1) {
+						new_stream.write_function(&new_stream, "%s", ")$");
+					} else {
+						new_stream.write_function(&new_stream, "%s", "$");
+					}
+					parser->grammar->regex = switch_core_strdup(parser->pool, new_stream.data);
+					switch_safe_free(new_stream.data);
 				}
-				parser->grammar->regex = switch_core_strdup(parser->pool, new_stream.data);
-				switch_safe_free(new_stream.data);
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", parser->grammar->regex);
 			}
 			break;
@@ -796,9 +888,12 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 			stream->write_function(stream, "%s", rule->value.rule.regex);
 			break;
 		}
-		default:
+		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "create_regexes() bad type = %s\n", node_type_to_string(node->type));
 			return 0;
+		default:
+			/* ignore */
+			return 1;
 	}
 	sn_log_node_close(node);
 	return 1;
@@ -849,6 +944,15 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
 	if (level > MAX_RECURSION) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Recursion too deep.\n");
 		return 0;
+	}
+
+	if (node->type == SNT_ROOT && node->value.root) {
+		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(parser->rules, node->value.root);
+		if (!rule) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Root rule not found: %s\n", node->value.root);
+			return 0;
+		}
+		parser->grammar->root_rule = rule;
 	}
 
 	if (node->type == SNT_UNRESOLVED_REF) {
@@ -994,11 +1098,10 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 	switch (node->type) {
 		case SNT_ROOT:
 			if (node->child) {
-				int num_rules = 0;
-				int first = 1;
-				struct srgs_node *child = node->child;
+				struct srgs_node *child;
 				switch_stream_handle_t new_stream = { 0 };
 				SWITCH_STANDARD_STREAM(new_stream);
+
 				new_stream.write_function(&new_stream, "#JSGF V1.0");
 				if (!zstr(parser->grammar->encoding)) {
 					new_stream.write_function(&new_stream, " %s", parser->grammar->encoding);
@@ -1007,41 +1110,56 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					}
 				}
 
-				for (child = node->child; child; child = child->next) {
-					if (child->type == SNT_RULE && child->value.rule.is_public) {
-						num_rules++;
-					}
-				}
-
 				new_stream.write_function(&new_stream,
 					";\ngrammar org.freeswitch.srgs_to_jsgf;\n"
 					"public ");
-				if (num_rules > 1) {
-					new_stream.write_function(&new_stream, "<root> =");
+
+				/* output root rule */
+				if (parser->grammar->root_rule) {
+					if (!create_jsgf(parser, parser->grammar->root_rule, &new_stream)) {
+						switch_safe_free(new_stream.data);
+						return 0;
+					}
+				} else {
+					int num_rules = 0;
+					int first = 1;
+
 					for (child = node->child; child; child = child->next) {
 						if (child->type == SNT_RULE && child->value.rule.is_public) {
-							if (!first) {
-								new_stream.write_function(&new_stream, "%s", " |");
-							}
-							first = 0;
-							new_stream.write_function(&new_stream, " <%s>", child->value.rule.id);
+							num_rules++;
 						}
 					}
-					new_stream.write_function(&new_stream, ";\n");
-				} else {
-					for (child = node->child; child; child = child->next) {
-						if (child->type == SNT_RULE && child->value.rule.is_public) {
-							if (!create_jsgf(parser, child, &new_stream)) {
-								switch_safe_free(new_stream.data);
-								return 0;
-							} else {
-								break;
+
+					if (num_rules > 1) {
+						new_stream.write_function(&new_stream, "<root> =");
+						for (child = node->child; child; child = child->next) {
+							if (child->type == SNT_RULE && child->value.rule.is_public) {
+								if (!first) {
+									new_stream.write_function(&new_stream, "%s", " |");
+								}
+								first = 0;
+								new_stream.write_function(&new_stream, " <%s>", child->value.rule.id);
+							}
+						}
+						new_stream.write_function(&new_stream, ";\n");
+					} else {
+						for (child = node->child; child; child = child->next) {
+							if (child->type == SNT_RULE && child->value.rule.is_public) {
+								parser->grammar->root_rule = child;
+								if (!create_jsgf(parser, child, &new_stream)) {
+									switch_safe_free(new_stream.data);
+									return 0;
+								} else {
+									break;
+								}
 							}
 						}
 					}
 				}
+
+				/* output all rule definitions */
 				for (child = node->child; child; child = child->next) {
-					if (child->type == SNT_RULE && (num_rules > 1 || !child->value.rule.is_public)) {
+					if (child->type == SNT_RULE && child != parser->grammar->root_rule) {
 						if (!create_jsgf(parser, child, &new_stream)) {
 							switch_safe_free(new_stream.data);
 							return 0;
@@ -1143,9 +1261,12 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 			stream->write_function(stream, " <%s>", rule->value.rule.id);
 			break;
 		}
-		default:
+		case SNT_UNKNOWN:
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "create_jsgf() bad type = %s\n", node_type_to_string(node->type));
 			return 0;
+		default:
+			/* ignore */
+			return 1;
 	}
 	sn_log_node_close(node);
 	return 1;

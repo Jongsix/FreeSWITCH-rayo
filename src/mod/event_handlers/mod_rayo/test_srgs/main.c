@@ -106,7 +106,7 @@ static void test_match_adhearsion_ask_grammar(void)
 }
 
 static const char *multi_digit_grammar =
-	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"inputdigits\">"
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"misc\">"
 	"  <rule id=\"misc\" scope=\"public\">\n"
 	"    <one-of>\n"
 	"      <item>01</item>\n"
@@ -157,7 +157,7 @@ static void test_match_multi_digit_grammar(void)
 }
 
 static const char *multi_rule_grammar =
-	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"inputdigits\">"
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\">"
 	"  <rule id=\"misc\" scope=\"public\">\n"
 	"    <one-of>\n"
 	"      <item>01</item>\n"
@@ -724,6 +724,30 @@ static const char *voice_jsgf =
 	"public <command> = [ <polite> ] don't crash;\n"
 	"<polite> = ( please | kindly | oh mighty computer );\n";
 
+static const char *rayo_test_srgs =
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" root=\"MAINRULE\">\n"
+	"  <rule id=\"MAINRULE\">\n"
+	"    <one-of>\n"
+	"      <item>\n"
+	"        <item repeat=\"0-1\"> need a</item>\n"
+	"        <item repeat=\"0-1\"> i need a</item>\n"
+	"        <one-of>\n"
+	"          <item> clue </item>\n"
+	"        </one-of>\n"
+	"        <tag> out.concept = \"clue\";</tag>\n"
+	"      </item>\n"
+	"      <item>\n"
+	"        <item repeat=\"0-1\"> have an</item>\n"
+	"        <item repeat=\"0-1\"> i have an</item>\n"
+	"        <one-of>\n"
+	"          <item> answer </item>\n"
+	"        </one-of>\n"
+	"        <tag> out.concept = \"answer\";</tag>\n"
+	"      </item>\n"
+	"    </one-of>\n"
+	"  </rule>\n"
+	"</grammar>";
+
 static void test_jsgf(void)
 {
 	struct srgs_parser *parser;
@@ -736,6 +760,8 @@ static void test_jsgf(void)
 	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
 	ASSERT_STRING_EQUALS(voice_jsgf, jsgf);
 	ASSERT_EQUALS(1, srgs_parse(parser, multi_rule_grammar));
+	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
+	ASSERT_EQUALS(1, srgs_parse(parser, rayo_test_srgs));
 	ASSERT_NOT_NULL((jsgf = srgs_to_jsgf(parser)));
 	ASSERT_NULL(srgs_to_jsgf(NULL));
 	srgs_parser_destroy(parser);

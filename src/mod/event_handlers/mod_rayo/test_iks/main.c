@@ -122,6 +122,39 @@ static void test_empty_cdata(void)
 	iks_delete(iq);
 }
 
+static const char *rayo_test_srgs =
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" root=\"MAINRULE\">\n"
+	"  <rule id=\"MAINRULE\">\n"
+	"    <one-of>\n"
+	"      <item>\n"
+	"        <item repeat=\"0-1\"> need a</item>\n"
+	"        <item repeat=\"0-1\"> i need a</item>\n"
+	"        <one-of>\n"
+	"          <item> clue </item>\n"
+	"        </one-of>\n"
+	"        <tag> out.concept = \"clue\";</tag>\n"
+	"      </item>\n"
+	"      <item>\n"
+	"        <item repeat=\"0-1\"> have an</item>\n"
+	"        <item repeat=\"0-1\"> i have an</item>\n"
+	"        <one-of>\n"
+	"          <item> answer </item>\n"
+	"        </one-of>\n"
+	"        <tag> out.concept = \"answer\";</tag>\n"
+	"      </item>\n"
+	"    </one-of>\n"
+	"  </rule>\n"
+	"</grammar>";
+
+static void test_rayo_test_srgs(void)
+{
+	iks *grammar = NULL;
+	iksparser *p = iks_dom_new(&grammar);
+	ASSERT_EQUALS(IKS_OK, iks_parse(p, rayo_test_srgs, 0, 1));
+	iks_parser_delete(p);
+	iks_delete(grammar);
+}
+
 /**
  * main program
  */
@@ -133,5 +166,6 @@ int main(int argc, char **argv)
 	TEST(test_repeating_bracket);
 	TEST(test_normal_cdata);
 	TEST(test_empty_cdata);
+	TEST(test_rayo_test_srgs);
 	return 0;
 }
