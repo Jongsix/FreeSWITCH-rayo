@@ -721,8 +721,8 @@ static const char *voice_srgs1 =
 static const char *voice_jsgf =
 	"#JSGF V1.0;\n"
 	"grammar org.freeswitch.srgs_to_jsgf;\n"
-	"public <command> = [ <polite> ] \"don't crash\";\n"
-	"<polite> = ( ( \"please\" ) | ( \"kindly\" ) | ( \"oh mighty computer\" ) );\n";
+	"public <command> = [ <polite> ] don't crash;\n"
+	"<polite> = ( ( please ) | ( kindly ) | ( oh mighty computer ) );\n";
 
 static const char *rayo_test_srgs =
 	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" root=\"MAINRULE\">\n"
