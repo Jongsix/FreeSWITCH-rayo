@@ -169,7 +169,7 @@ static struct rayo_component *record_component_create(struct rayo_actor *actor, 
 
 	/* create record filename from session UUID and ref */
 	/* for example: 1234-1234-1234-1234/record-30.wav */
-	file = switch_mprintf("%s%srecordings%s%s-%i.%s", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR,
+	file = switch_mprintf("%s%s%s-%i.%s", SWITCH_GLOBAL_dirs.recordings_dir, SWITCH_PATH_SEPARATOR,
 		rayo_actor_get_id(actor), rayo_actor_seq_next(actor), iks_find_attrib(record, "format"));
 
 	component = rayo_component_create("record", file, actor, client_jid);
@@ -254,7 +254,7 @@ static int start_call_record(switch_core_session_t *session, struct rayo_compone
 	}
 
 	if (switch_ivr_record_session(session, (char *)rayo_component_get_id(component), max_duration_sec, NULL) == SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording %s: file = %s\n", 
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Recording %s: file = %s\n",
 			record_component->pause ? "resumed" : "started", rayo_component_get_id(component));
 		record_component->pause = 0;
 		return 1;
@@ -398,7 +398,7 @@ static iks *start_mixer_record_component(struct rayo_mixer *mixer, iks *iq)
 		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 		return NULL;
 	}
-	
+
 	/* mixer doesn't allow "send" */
 	if (!strcmp("send", iks_find_attrib_soft(record, "direction"))) {
 		rayo_component_unlock(component);
@@ -435,12 +435,12 @@ static iks *stop_mixer_record_component(struct rayo_component *component, iks *i
 	switch_stream_handle_t stream = { 0 };
 	SWITCH_STANDARD_STREAM(stream);
 
-	
+
 	args = switch_mprintf("%s recording stop %s", rayo_component_get_parent_id(component), rayo_component_get_id(component));
 	switch_api_execute("conference", args, NULL, &stream);
 	switch_safe_free(args);
 	switch_safe_free(stream.data);
-	
+
 	return iks_new_iq_result(iq);
 }
 

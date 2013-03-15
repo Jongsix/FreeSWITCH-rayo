@@ -139,6 +139,8 @@ struct srgs_grammar {
 	char *regex;
 	/** grammar in JSGF format */
 	char *jsgf;
+	/** grammar as JSGF file */
+	char *jsgf_file_name;
 };
 
 /**
@@ -720,6 +722,9 @@ void srgs_parser_destroy(struct srgs_parser *parser)
 		if (grammar->compiled_regex) {
 			pcre_free(grammar->compiled_regex);
 		}
+		if (grammar->jsgf_file_name) {
+			switch_file_remove(grammar->jsgf_file_name, pool);
+		}
 	}
 	switch_core_destroy_memory_pool(&pool);
 }
@@ -1291,6 +1296,44 @@ const char *srgs_to_jsgf(struct srgs_parser *parser)
 		return NULL;
 	}
 	return parser->grammar->jsgf;
+}
+
+/**
+ * Generate JSGF file from SRGS document.  Call this after parsing SRGS document.
+ * @param parser the parser
+ * @param basedir the base path to use if file does not already exist
+ * @return the path or NULL
+ */
+const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir)
+{
+	if (!parser) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "parser is NULL!\n");
+		return NULL;
+	}
+	if (!parser->grammar) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
+		return NULL;
+	}
+	if (!parser->grammar->jsgf_file_name) {
+		switch_file_t *file;
+		switch_size_t len;
+		const char *jsgf = srgs_to_jsgf(parser);
+		parser->grammar->jsgf_file_name = switch_core_sprintf(parser->pool, "%s%sjsgf_XXXXXX", basedir, SWITCH_PATH_SEPARATOR);
+		if (!jsgf) {
+			return NULL;
+		}
+
+		/* write grammar to file */
+		if (switch_file_mktemp(&file, parser->grammar->jsgf_file_name, SWITCH_FOPEN_CREATE | SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_BINARY, parser->pool) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to create jsgf file: %s!\n", parser->grammar->jsgf_file_name);
+			parser->grammar->jsgf_file_name = NULL;
+			return NULL;
+		}
+		len = strlen(jsgf);
+		switch_file_write(file, jsgf, &len);
+		switch_file_close(file);
+	}
+	return parser->grammar->jsgf_file_name;
 }
 
 /* For Emacs:
