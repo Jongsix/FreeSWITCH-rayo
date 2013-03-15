@@ -289,7 +289,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	} else {
 		const char *jsgf_path;
 		handler->speech_mode = 1;
-		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir);
+		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
 		if (!jsgf_path) {
 			rayo_component_unlock(handler->component);
 			rayo_component_destroy(handler->component);
