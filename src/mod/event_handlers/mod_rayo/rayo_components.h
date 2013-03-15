@@ -68,6 +68,7 @@ extern switch_status_t rayo_record_component_shutdown(void);
 
 extern void rayo_component_send_start(struct rayo_component *component, iks *iq);
 extern void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *error_type);
+extern void rayo_component_send_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail);
 extern void rayo_component_send_complete(struct rayo_component *component, const char *reason, const char *reason_namespace);
 extern void rayo_component_send_complete_event(struct rayo_component *component, iks *response);
 

@@ -44,6 +44,7 @@ extern struct srgs_parser *srgs_parser_new(const char *uuid);
 extern int srgs_parse(struct srgs_parser *parser, const char *document);
 extern const char *srgs_to_regex(struct srgs_parser *parser);
 extern const char *srgs_to_jsgf(struct srgs_parser *parser);
+extern const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir);
 extern enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input);
 extern void srgs_parser_destroy(struct srgs_parser *parser);
 
