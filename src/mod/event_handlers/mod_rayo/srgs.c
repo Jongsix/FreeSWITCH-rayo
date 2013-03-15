@@ -1190,7 +1190,21 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 			}
 			break;
 		case SNT_STRING: {
-			stream->write_function(stream, " %s", node->value.string);
+			int len = strlen(node->value.string);
+			int i;
+			stream->write_function(stream, " \"");
+			for (i = 0; i < len; i++) {
+				switch (node->value.string[i]) {
+					case '\\':
+					case '"':
+						stream->write_function(stream, "\\");
+						break;
+					default:
+						break;
+				}
+				stream->write_function(stream, "%c", node->value.string[i]);
+			}
+			stream->write_function(stream, "\"");
 			if (node->child) {
 				if (!create_jsgf(parser, node->child, stream)) {
 					return 0;
@@ -1252,9 +1266,11 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					if (item != node->child) {
 						stream->write_function(stream, " |");
 					}
+					stream->write_function(stream, " (");
 					if (!create_jsgf(parser, item, stream)) {
 						return 0;
 					}
+					stream->write_function(stream, " )");
 				}
 				if (node->num_children > 1) {
 					stream->write_function(stream, " )");
@@ -1302,9 +1318,10 @@ const char *srgs_to_jsgf(struct srgs_parser *parser)
  * Generate JSGF file from SRGS document.  Call this after parsing SRGS document.
  * @param parser the parser
  * @param basedir the base path to use if file does not already exist
+ * @param ext the extension to use
  * @return the path or NULL
  */
-const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir)
+const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir, const char *ext)
 {
 	if (!parser) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "parser is NULL!\n");
@@ -1315,16 +1332,18 @@ const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir)
 		return NULL;
 	}
 	if (!parser->grammar->jsgf_file_name) {
+		char file_name_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
 		switch_file_t *file;
 		switch_size_t len;
 		const char *jsgf = srgs_to_jsgf(parser);
-		parser->grammar->jsgf_file_name = switch_core_sprintf(parser->pool, "%s%sjsgf_XXXXXX", basedir, SWITCH_PATH_SEPARATOR);
+                switch_uuid_str(file_name_buf, sizeof(file_name_buf));
+		parser->grammar->jsgf_file_name = switch_core_sprintf(parser->pool, "%s%s%s.%s", basedir, SWITCH_PATH_SEPARATOR, file_name_buf, ext);
 		if (!jsgf) {
 			return NULL;
 		}
 
 		/* write grammar to file */
-		if (switch_file_mktemp(&file, parser->grammar->jsgf_file_name, SWITCH_FOPEN_CREATE | SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_BINARY, parser->pool) != SWITCH_STATUS_SUCCESS) {
+		if (switch_file_open(&file, parser->grammar->jsgf_file_name, SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_CREATE, SWITCH_FPROT_OS_DEFAULT, parser->pool) != SWITCH_STATUS_SUCCESS) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to create jsgf file: %s!\n", parser->grammar->jsgf_file_name);
 			parser->grammar->jsgf_file_name = NULL;
 			return NULL;
