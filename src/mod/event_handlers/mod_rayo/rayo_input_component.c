@@ -31,7 +31,7 @@
 #include "iks_helpers.h"
 #include "srgs.h"
 
-#define MAX_DTMF 1024
+#define MAX_DTMF 64
 
 /* not yet supported by adhearsion */
 //#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
@@ -65,9 +65,7 @@ static void send_input_component_dtmf_match(struct rayo_component *component, co
 
 static ATTRIB_RULE(input_mode)
 {
-	/* for now, only allow dtmf;
-	return !strcasecmp("any", value) || !strcasecmp("dtmf", value) || !strcasecmp("speech", value); */
-	return !strcasecmp("dtmf", value);
+	return !strcasecmp("any", value) || !strcasecmp("dtmf", value) || !strcasecmp("speech", value);
 }
 
 /**
@@ -88,6 +86,8 @@ ELEMENT_END
  * Current digit collection state
  */
 struct input_handler {
+	/** true if speech detection */
+	int speech_mode;
 	/** Number of collected digits */
 	int num_digits;
 	/** The collected digits */
@@ -96,8 +96,6 @@ struct input_handler {
 	struct srgs_parser *parser;
 	/** The component */
 	struct rayo_component *component;
-	/** component jid */
-	const char *jid;
 	/** time when last digit was received */
 	switch_time_t last_digit_time;
 	/** timeout before first digit is received */
@@ -217,32 +215,32 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 
 	/* validate input attributes */
 	if (!VALIDATE_RAYO_INPUT(input)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Bad input attrib\n");
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad input attrib\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <input> attrib value");
 		return NULL;
 	}
 
 	/* missing grammar */
 	grammar = iks_find(input, "grammar");
 	if (!grammar) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <grammar>");
 		return NULL;
 	}
 
 	/* only support srgs */
 	content_type = iks_find_attrib(grammar, "content-type");
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Unsupported content type\n");
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Unsupported content type\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Unsupported content type");
 		return NULL;
 	}
 
 	/* missing grammar body */
 	srgs = iks_find_cdata(input, "grammar");
 	if (zstr(srgs)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar body is missing\n");
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Grammar body is missing\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Grammar body is missing");
 		return NULL;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
@@ -255,32 +253,59 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		handler->parser = srgs_parser_new(switch_core_session_get_uuid(session));
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
 	}
-	handler->num_digits = 0;
-	handler->digits[0] = '\0';
-	handler->component = NULL;
-	handler->stop = 0;
-	handler->done = 0;
-	handler->bug = NULL;
-	handler->last_digit_time = switch_micro_time_now();
-	handler->initial_timeout = iks_find_int_attrib(input, "initial-timeout");
-	handler->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
 
 	/* parse the grammar */
 	if (!srgs_parse(handler->parser, srgs)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
-		rayo_component_send_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
 		return NULL;
 	}
 
 	/* create component */
 	handler->component = rayo_component_create("input", NULL, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
+	if (!handler->component) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create input component!\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create input component!");
+	}
 	rayo_component_set_data(handler->component, handler);
+	handler->num_digits = 0;
+	handler->digits[0] = '\0';
+	handler->component = NULL;
+	handler->stop = 0;
+	handler->done = 0;
+	handler->speech_mode = 0;
+	handler->bug = NULL;
 
-	/* acknowledge command */
-	rayo_component_send_start(handler->component, iq);
+	/* is this voice or dtmf srgs grammar? */
+	if (!strcasecmp("dtmf", iks_find_attrib_soft(input, "mode"))) {
+		handler->last_digit_time = switch_micro_time_now();
+		handler->initial_timeout = iks_find_int_attrib(input, "initial-timeout");
+		handler->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
 
-	/* start input detection */
-	switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
+		/* acknowledge command */
+		rayo_component_send_start(handler->component, iq);
+
+		/* start dtmf input detection */
+		switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
+	} else {
+		const char *jsgf_path;
+		handler->speech_mode = 1;
+		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir);
+		if (!jsgf_path) {
+			rayo_component_unlock(handler->component);
+			rayo_component_destroy(handler->component);
+			return NULL;
+		}
+		/* acknowledge command */
+		rayo_component_send_start(handler->component, iq);
+
+		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
+
+		/* start speech detection */
+		switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_input_jid", rayo_component_get_jid(handler->component));
+		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
+		switch_ivr_detect_speech(session, "pocketsphinx", jsgf_path, "mod_rayo_grammar", "", NULL);
+	}
 
 	return NULL;
 }
@@ -292,15 +317,42 @@ static iks *stop_input_component(struct rayo_component *component, iks *iq)
 {
 	struct input_handler *handler = (struct input_handler *)rayo_component_get_data(component);
 
-	if (handler && !handler->done && !handler->stop && handler->bug) {
+	if (handler && !handler->done && !handler->stop) {
 		switch_core_session_t *session = switch_core_session_locate(rayo_component_get_parent_id(component));
 		if (session) {
-			handler->stop = 1;
-			switch_core_media_bug_remove(session, &handler->bug);
+			if (handler->speech_mode) {
+				handler->stop = 1;
+				handler->done = 1;
+				switch_ivr_stop_detect_speech(session);
+				rayo_component_send_complete(component, COMPONENT_COMPLETE_STOP);
+			} else if (handler->bug) {
+				handler->stop = 1;
+				switch_core_media_bug_remove(session, &handler->bug);
+			}
 			switch_core_session_rwunlock(session);
 		}
 	}
 	return iks_new_iq_result(iq);
+}
+
+/**
+ * Handle speech detection event
+ */
+static void on_detected_speech_event(switch_event_t *event)
+{
+	const char *speech_type = switch_event_get_header(event, "Speech-Type");
+	char *event_str = NULL;
+	switch_event_serialize(event, &event_str, SWITCH_FALSE);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", event_str);
+	if (speech_type && !strcasecmp("detected-speech", speech_type)) {
+		struct rayo_component *component = rayo_component_locate(switch_event_get_header(event, "variable_rayo_input_jid"));
+		if (component) {
+			rayo_component_unlock(component);
+			/* TODO handle matches */
+			rayo_component_send_complete(component, INPUT_NOMATCH);
+		}
+	}
+	switch_safe_free(event_str);
 }
 
 /**
@@ -311,6 +363,7 @@ switch_status_t rayo_input_component_load(void)
 {
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
+	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -320,5 +373,6 @@ switch_status_t rayo_input_component_load(void)
  */
 switch_status_t rayo_input_component_shutdown(void)
 {
+	switch_event_unbind_callback(on_detected_speech_event);
 	return SWITCH_STATUS_SUCCESS;
 }

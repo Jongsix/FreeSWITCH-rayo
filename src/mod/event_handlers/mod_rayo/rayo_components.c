@@ -48,6 +48,20 @@ void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *e
 }
 
 /**
+ * Send IQ error to controlling client from call
+ * @param call the call
+ * @param iq the request that caused the error
+ * @param error the error message
+ * @param detail text
+ */
+void rayo_component_send_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail)
+{
+	iks *response = iks_new_iq_error_detailed(iq, error_name, error_type, detail);
+	rayo_iks_send(response);
+	iks_delete(response);
+}
+
+/**
  * Send component start reply
  * @param component the component
  * @param iq the start request
