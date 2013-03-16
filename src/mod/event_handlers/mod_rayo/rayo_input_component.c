@@ -48,18 +48,39 @@
 #define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
 
 /**
+ * Send voice match to client
+ * @param component the component
+ * @param utterance the match
+ */
+static void send_input_component_voice_match(struct rayo_component *component, const char *utterance)
+{
+	iks *presence = rayo_component_create_complete_event(component, INPUT_MATCH);
+	iks *x = iks_find(presence, "complete");
+	iks *success = iks_find(x, "match");
+	iks_insert_attrib(success, "mode", "voice");
+	iks_insert_attrib(success, "confidence", "100");
+	x = iks_insert(success, "utterance");
+	iks_insert_cdata(x, utterance, strlen(utterance));
+	x = iks_insert(success, "interpretation");
+	iks_insert_cdata(x, utterance, strlen(utterance));
+	rayo_component_send_complete_event(component, presence);
+}
+
+/**
  * Send DTMF match to client
  * @param component the component
- * @param digits the matching digits
+ * @param utterance the match
  */
 static void send_input_component_dtmf_match(struct rayo_component *component, const char *digits)
 {
 	iks *presence = rayo_component_create_complete_event(component, INPUT_SUCCESS);
 	iks *x = iks_find(presence, "complete");
-	x = iks_find(x, "success");
-	iks_insert_attrib(x, "mode", "dtmf");
-	iks_insert_attrib(x, "confidence", "1.0");
-	x = iks_insert(x, "utterance");
+	iks *success = iks_find(x, "success");
+	iks_insert_attrib(success, "mode", "dtmf");
+	iks_insert_attrib(success, "confidence", "100");
+	x = iks_insert(success, "utterance");
+	iks_insert_cdata(x, digits, strlen(digits));
+	x = iks_insert(success, "interpretation");
 	iks_insert_cdata(x, digits, strlen(digits));
 	rayo_component_send_complete_event(component, presence);
 }
@@ -365,14 +386,20 @@ static void on_detected_speech_event(switch_event_t *event)
 				iksparser *parser = iks_dom_new(&result_xml);
 				if (iks_parse(parser, result, strlen(result), 1) == IKS_OK) {
 					if (!strcmp("result", iks_name(result_xml))) {
-					//iks *x = iks_find(result_xml, "result");
-					iks *x = result_xml;
-					//if (x) {
-						iks *presence = rayo_component_create_complete_event(component, INPUT_MATCH);
-						iks *match = iks_find(presence, "complete");
-						match = iks_find(match, "match");
-						iks_insert_node(match, x);
-						rayo_component_send_complete_event(component, presence);
+						/* TODO pass along NLSML unaltered */
+						iks *interpretation = iks_find(result_xml, "interpretation");
+						if (interpretation) {
+							char *match = iks_find_cdata(interpretation, "input");
+					 		if (!zstr(match)) {
+								send_input_component_voice_match(component, match);
+							} else {
+								switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input>: %s!\n", result);
+								rayo_component_send_complete(component, INPUT_NOMATCH);
+							}
+						} else {
+							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <interpretation>: %s!\n", result);
+							rayo_component_send_complete(component, INPUT_NOMATCH);
+						}
 					} else {
 						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find speech result: %s!\n", result);
 						rayo_component_send_complete(component, INPUT_NOMATCH);
