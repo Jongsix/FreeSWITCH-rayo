@@ -34,10 +34,10 @@
 #define MAX_DTMF 64
 
 /* not yet supported by adhearsion */
-//#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
-//#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
+#define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
+#define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
+#define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
+#define INPUT_MIN_CONFIDENCE "min-confidence", RAYO_INPUT_COMPLETE_NS
 #define INPUT_MATCH "match", RAYO_INPUT_COMPLETE_NS
 #define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
 
@@ -318,6 +318,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
 	} else {
 		const char *jsgf_path;
+		char *grammar = NULL;
 		handler->speech_mode = 1;
 		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
 		if (!jsgf_path) {
@@ -329,10 +330,13 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		rayo_component_send_start(handler->component, iq);
 
 		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
-
+		grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=true,confidence-threshold=%d}%s",
+			iks_find_attrib(input, "initial-timeout"), iks_find_attrib(input, "max-silence"),
+			(int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0), jsgf_path);
 		/* start speech detection */
 		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
-		switch_ivr_detect_speech(session, "pocketsphinx", jsgf_path, "mod_rayo_grammar", "", NULL);
+		switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL);
+		switch_safe_free(grammar);
 	}
 
 	return NULL;
@@ -372,7 +376,10 @@ static void on_detected_speech_event(switch_event_t *event)
 	char *event_str = NULL;
 	switch_event_serialize(event, &event_str, SWITCH_FALSE);
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", event_str);
-	if (speech_type && !strcasecmp("detected-speech", speech_type)) {
+	if (!speech_type) {
+		return;
+	}
+	if (!strcasecmp("detected-speech", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
 		char *component_id = create_input_component_id(uuid);
 		struct rayo_component *component = rayo_component_locate(component_id);
@@ -393,8 +400,20 @@ static void on_detected_speech_event(switch_event_t *event)
 					 		if (!zstr(match)) {
 								send_input_component_voice_match(component, match);
 							} else {
-								switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input>: %s!\n", result);
-								rayo_component_send_complete(component, INPUT_NOMATCH);
+								iks *input = iks_find(interpretation, "input");
+								if (input) {
+									if (iks_find(input, "nomatch")) {
+										rayo_component_send_complete(component, INPUT_NOMATCH);
+									} else if (iks_find(input, "noinput")) {
+										rayo_component_send_complete(component, INPUT_NOINPUT);
+									} else {
+										switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input> body: %s!\n", result);
+										rayo_component_send_complete(component, INPUT_NOMATCH);
+									}
+								} else {
+									switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input>: %s!\n", result);
+									rayo_component_send_complete(component, INPUT_NOMATCH);
+								}
 							}
 						} else {
 							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <interpretation>: %s!\n", result);
@@ -412,6 +431,21 @@ static void on_detected_speech_event(switch_event_t *event)
 				iks_parser_delete(parser);
 			}
 			rayo_component_unlock(component);
+		}
+	} else if (!strcasecmp("closed", speech_type)) {
+		const char *uuid = switch_event_get_header(event, "Unique-ID");
+		char *component_id = create_input_component_id(uuid);
+		struct rayo_component *component = rayo_component_locate(component_id);
+		switch_safe_free(component_id);
+		if (component) {
+			char *channel_state = switch_event_get_header(event, "Channel-State");
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recognizer closed\n");
+			if (channel_state && !strcmp("CS_HANGUP", channel_state)) {
+				rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
+			} else {
+				/* shouldn't get here... */
+				rayo_component_send_complete(component, COMPONENT_COMPLETE_ERROR);
+			}
 		}
 	}
 	switch_safe_free(event_str);
