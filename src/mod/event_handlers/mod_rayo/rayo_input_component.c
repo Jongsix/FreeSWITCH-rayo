@@ -465,6 +465,7 @@ static void on_detected_speech_event(switch_event_t *event)
  */
 switch_status_t rayo_input_component_load(void)
 {
+	srgs_init();
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);

@@ -774,6 +774,7 @@ int main(int argc, char **argv)
 {
 	const char *err;
 	switch_core_init(0, SWITCH_TRUE, &err);
+	srgs_init();
 	TEST(test_parse_grammar);
 	TEST(test_match_adhearsion_ask_grammar);
 	TEST(test_match_multi_digit_grammar);

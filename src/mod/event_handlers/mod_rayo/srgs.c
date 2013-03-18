@@ -35,14 +35,41 @@
 
 #define MAX_RECURSION 100
 
+/** function to handle tag attributes */
+typedef int (* tag_attribs_fn)(struct srgs_parser *, char **);
+/** function to handle tag CDATA */
+typedef int (* tag_cdata_fn)(struct srgs_parser *, char *, size_t);
+
+/**
+ * Tag definition
+ */
+struct tag_def {
+	tag_attribs_fn attribs_fn;
+	tag_cdata_fn cdata_fn;
+	switch_bool_t is_root;
+	switch_hash_t *children_tags;
+};
+
+/**
+ * library configuration
+ */
+static struct {
+	/** true if initialized */
+	switch_bool_t init;
+	/** Mapping of tag name to definition */
+	switch_hash_t *tag_defs;
+	/** library memory pool */
+	switch_memory_pool_t *pool;
+} globals;
+
 /**
  * SRGS node types
  */
 enum srgs_node_type {
-	/** undefined */
-	SNT_UNKNOWN,
+	/** anything */
+	SNT_ANY,
 	/** <grammar> */
-	SNT_ROOT,
+	SNT_GRAMMAR,
 	/** <rule> */
 	SNT_RULE,
 	/** <one-of> */
@@ -64,7 +91,9 @@ enum srgs_node_type {
 	/** <token> */
 	SNT_TOKEN,
 	/** <meta> */
-	SNT_META
+	SNT_META,
+	/** <metadata> */
+	SNT_METADATA
 };
 
 /**
@@ -117,6 +146,8 @@ struct srgs_node {
 	struct srgs_node *next;
 	/** number of child nodes */
 	int num_children;
+	/** tag handling data */
+	struct tag_def *tag_def;
 };
 
 /**
@@ -164,12 +195,12 @@ struct srgs_parser {
 /**
  * Convert entity name to node type
  * @param name of entity
- * @return the type or UNKNOWN
+ * @return the type or ANY
  */
 static enum srgs_node_type string_to_node_type(char *name)
 {
 	if (!strcmp("grammar", name)) {
-		return SNT_ROOT;
+		return SNT_GRAMMAR;
 	}
 	if (!strcmp("item", name)) {
 		return SNT_ITEM;
@@ -198,18 +229,21 @@ static enum srgs_node_type string_to_node_type(char *name)
 	if (!strcmp("meta", name)) {
 		return SNT_META;
 	}
-	return SNT_UNKNOWN;
+	if (!strcmp("metadata", name)) {
+		return SNT_METADATA;
+	}
+	return SNT_ANY;
 }
 
 /**
  * Convert node type to entity name
  * @param type of node
- * @return the name or UNKNOWN
+ * @return the name or ANY
  */
 static const char *node_type_to_string(enum srgs_node_type type)
 {
 	switch (type) {
-		case SNT_ROOT: return "grammar";
+		case SNT_GRAMMAR: return "grammar";
 		case SNT_RULE: return "rule";
 		case SNT_ONE_OF: return "one-of";
 		case SNT_ITEM: return "item";
@@ -221,9 +255,10 @@ static const char *node_type_to_string(enum srgs_node_type type)
 		case SNT_EXAMPLE: return "example";
 		case SNT_TOKEN: return "token";
 		case SNT_META: return "meta";
-		case SNT_UNKNOWN: return "UNKNOWN";
+		case SNT_METADATA: return "metadata";
+		case SNT_ANY: return "ANY";
 	}
-	return "UNKNOWN";
+	return "ANY";
 }
 
 /**
@@ -232,7 +267,7 @@ static const char *node_type_to_string(enum srgs_node_type type)
 static void sn_log_node_open(struct srgs_node *node)
 {
 	switch (node->type) {
-		case SNT_ROOT:
+		case SNT_GRAMMAR:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<grammar>\n");
 			return;
 		case SNT_RULE:
@@ -268,8 +303,11 @@ static void sn_log_node_open(struct srgs_node *node)
 		case SNT_META:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<meta>\n");
 			return;
-		case SNT_UNKNOWN:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<unknown>\n");
+		case SNT_METADATA:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<metadata>\n");
+			return;
+		case SNT_ANY:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ANY>\n");
 			return;
 	}
 }
@@ -280,7 +318,7 @@ static void sn_log_node_open(struct srgs_node *node)
 static void sn_log_node_close(struct srgs_node *node)
 {
 	switch (node->type) {
-		case SNT_ROOT:
+		case SNT_GRAMMAR:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</grammar>\n");
 			return;
 		case SNT_RULE:
@@ -315,8 +353,11 @@ static void sn_log_node_close(struct srgs_node *node)
 		case SNT_META:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</meta>\n");
 			return;
-		case SNT_UNKNOWN:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</unknown>\n");
+		case SNT_METADATA:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</metadata>\n");
+			return;
+		case SNT_ANY:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ANY>\n");
 			return;
 	}
 }
@@ -331,8 +372,6 @@ static struct srgs_node *sn_new(switch_memory_pool_t *pool, enum srgs_node_type 
 {
 	struct srgs_node *node = switch_core_alloc(pool, sizeof(*node));
 	node->type = type;
-	node->visited = 0;
-	node->num_children = 0;
 	return node;
 }
 
@@ -357,14 +396,15 @@ static struct srgs_node *sn_find_last_sibling(struct srgs_node *node)
  */
 static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node *parent, enum srgs_node_type type)
 {
-	struct srgs_node *sibling = sn_find_last_sibling(parent->child);
+	struct srgs_node *sibling = parent ? sn_find_last_sibling(parent->child) : NULL;
 	struct srgs_node *child = sn_new(pool, type);
-	child->parent = parent;
-	child->next = NULL;
-	parent->num_children++;
+	if (parent) {
+		parent->num_children++;
+		child->parent = parent;
+	}
 	if (sibling) {
 		sibling->next = child;
-	} else {
+	} else if (parent) {
 		parent->child = child;
 	}
 	return child;
@@ -382,6 +422,128 @@ static struct srgs_node *sn_insert_string(switch_memory_pool_t *pool, struct srg
 	struct srgs_node *child = sn_insert(pool, parent, SNT_STRING);
 	child->value.string = string;
 	return child;
+}
+
+/**
+ * Add a definition for a tag
+ * @param tag the name
+ * @param attribs_fn the function to handle the tag attributes
+ * @param cdata_fn the function to handler the tag CDATA
+ * @param children_tags comma-separated list of valid child tag names
+ * @return the definition
+ */
+static struct tag_def *add_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+{
+	struct tag_def *def = switch_core_alloc(globals.pool, sizeof(*def));
+	switch_core_hash_init(&def->children_tags, globals.pool);
+	if (!zstr(children_tags)) {
+		char *children_tags_dup = switch_core_strdup(globals.pool, children_tags);
+		char *tags[32] = { 0 };
+		int tag_count = switch_separate_string(children_tags_dup, ',', tags, sizeof(tags) / sizeof(tags[0]));
+		if (tag_count) {
+			int i;
+			for (i = 0; i < tag_count; i++) {
+				switch_core_hash_insert(def->children_tags, tags[i], tags[i]);
+			}
+		}
+	}
+	def->attribs_fn = attribs_fn;
+	def->cdata_fn = cdata_fn;
+	def->is_root = SWITCH_FALSE;
+	switch_core_hash_insert(globals.tag_defs, tag, def);
+	return def;
+}
+
+/**
+ * Add a definition for a root tag
+ * @param tag the name
+ * @param attribs_fn the function to handle the tag attributes
+ * @param cdata_fn the function to handler the tag CDATA
+ * @param children_tags comma-separated list of valid child tag names
+ * @return the definition
+ */
+static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+{
+	struct tag_def *def = add_tag_def(tag, attribs_fn, cdata_fn, children_tags);
+	def->is_root = SWITCH_TRUE;
+	return def;
+}
+
+/**
+ * Handle tag attributes
+ * @param parser the parser
+ * @param name the tag name
+ * @param atts the attributes
+ * @return IKS_OK if OK IKS_BADXML on parse failure
+ */
+static int process_tag(struct srgs_parser *parser, const char *name, char **atts)
+{
+	struct tag_def *def = switch_core_hash_find(globals.tag_defs, name);
+	if (def) {
+		parser->cur->tag_def = def;
+		if (def->is_root && parser->cur->parent == NULL) {
+			/* no parent for ROOT tags */
+			return def->attribs_fn(parser, atts);
+		} else if (!def->is_root && parser->cur->parent) {
+			/* check if this child is allowed by parent node */
+			struct tag_def *parent_def = parser->cur->parent->tag_def;
+			if (switch_core_hash_find(parent_def->children_tags, "ANY") ||
+				switch_core_hash_find(parent_def->children_tags, name)) {
+				return def->attribs_fn(parser, atts);
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Child element without parent definition <%s>\n", name);
+			}
+		} else if (def->is_root && parser->cur->parent != NULL) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Root element with parent <%s>\n", name);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Child element without parent <%s>\n", name);
+		}
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unknown element <%s>\n", name);
+	}
+	return IKS_BADXML;
+}
+
+/**
+ * Handle tag attributes that are ignored
+ * @param parser the parser
+ * @param atts the attributes
+ * @return IKS_OK
+ */
+static int process_attribs_ignore(struct srgs_parser *parser, char **atts)
+{
+	return IKS_OK;
+}
+
+/**
+ * Handle CDATA that is ignored
+ * @param parser the parser
+ * @param data the CDATA
+ * @param len the CDATA length
+ * @return IKS_OK
+ */
+static int process_cdata_ignore(struct srgs_parser *parser, char *data, size_t len)
+{
+	return IKS_OK;
+}
+
+/**
+ * Handle CDATA that is not allowed
+ * @param parser the parser
+ * @param data the CDATA
+ * @param len the CDATA length
+ * @return IKS_BADXML if any printable characters
+ */
+static int process_cdata_bad(struct srgs_parser *parser, char *data, size_t len)
+{
+	int i;
+	for (i = 0; i < len; i++) {
+		if (isgraph(data[i])) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", node_type_to_string(parser->cur->type));
+			return IKS_BADXML;
+		}
+	}
+	return IKS_OK;
 }
 
 /**
@@ -533,14 +695,20 @@ static int process_item(struct srgs_parser *parser, char **atts)
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_root(struct srgs_parser *parser, char **atts)
+static int process_grammar(struct srgs_parser *parser, char **atts)
 {
+	if (parser->grammar->root) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Only one <grammar> tag allowed\n");
+		return IKS_BADXML;
+	}
+	parser->grammar->root = parser->cur;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
 			if (!strcmp("mode", atts[i])) {
 				char *mode = atts[i + 1];
 				if (zstr(mode)) {
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> mode is missing\n");
 					return IKS_BADXML;
 				}
 				parser->grammar->digit_mode = !strcasecmp(mode, "dtmf");
@@ -574,62 +742,64 @@ static int process_root(struct srgs_parser *parser, char **atts)
 
 /**
  * Process a tag
- * @param user_data the parser
- * @param name the tag name
- * @param atts tag attributes
- * @param type the tag type OPEN/CLOSE/etc
- * @return IKS_OK if XML is good
  */
 static int tag_hook(void *user_data, char *name, char **atts, int type)
 {
+	int result = IKS_OK;
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
-	enum srgs_node_type ntype = string_to_node_type(name);
 
-	switch (ntype) {
-	case SNT_ROOT:
-		/* grammar only allowed at root */
-		if (parser->cur->type != SNT_ROOT) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> must be root of document\n");
-			return IKS_BADXML;
-		}
-		return process_root(parser, atts);
-	case SNT_UNKNOWN:
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "unknown type\n");
-		return IKS_BADXML;
-	default:
-		/* proceed and add to parse tree */
-		break;
+	if (type == IKS_OPEN || type == IKS_SINGLE) {
+		enum srgs_node_type ntype = string_to_node_type(name);
+		parser->cur = sn_insert(parser->pool, parser->cur, ntype);
+		result = process_tag(parser, name, atts);
+		sn_log_node_open(parser->cur);
 	}
 
-	switch (type) {
-		case IKS_OPEN: {
-			int result = IKS_OK;
-			parser->cur = sn_insert(parser->pool, parser->cur, ntype);
-			if (ntype == SNT_UNRESOLVED_REF) {
-				result = process_ruleref(parser, atts);
-			} else if (ntype == SNT_ITEM) {
-				result = process_item(parser, atts);
-			} else if (ntype == SNT_RULE) {
-				result = process_rule(parser, atts);
+	if (type == IKS_CLOSE || type == IKS_SINGLE) {
+		sn_log_node_close(parser->cur);
+		parser->cur = parser->cur->parent;
+	}
+
+	return result;
+}
+
+/**
+ * Process CDATA grammar tokens
+ * @param parser the parser
+ * @param data the CDATA
+ * @param len the CDATA length
+ * @return IKS_OK
+ */
+static int process_cdata_tokens(struct srgs_parser *parser, char *data, size_t len)
+{
+	struct srgs_node *string = parser->cur;
+	int i;
+	if (parser->grammar->digit_mode) {
+		for (i = 0; i < len; i++) {
+			if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
+				char *digit = switch_core_alloc(parser->pool, sizeof(char) * 2);
+				digit[0] = data[i];
+				digit[1] = '\0';
+				string = sn_insert_string(parser->pool, string, digit);
+				sn_log_node_open(string);
 			}
-			sn_log_node_open(parser->cur);
-			return result;
 		}
-		case IKS_CLOSE: {
-			sn_log_node_close(parser->cur);
-			parser->cur = parser->cur->parent;
-			break;
+	} else {
+		char *data_dup = switch_core_alloc(parser->pool, sizeof(char) * (len + 1));
+		char *start = data_dup;
+		char *end = start + len - 1;
+		memcpy(data_dup, data, len);
+		/* remove start whitespace */
+		for (; start && *start && !isgraph(*start); start++) {
 		}
-		case IKS_SINGLE: {
-			int result = IKS_OK;
-			parser->cur = sn_insert(parser->pool, parser->cur, ntype);
-			if (ntype == SNT_UNRESOLVED_REF) {
-				result = process_ruleref(parser, atts);
+		if (!zstr(start)) {
+			/* remove end whitespace */
+			for (; end != start && *end && !isgraph(*end); end--) {
+				*end = '\0';
 			}
-			sn_log_node_open(parser->cur);
-			sn_log_node_close(parser->cur);
-			parser->cur = parser->cur->parent;
-			return result;
+			if (!zstr(start)) {
+				string = sn_insert_string(parser->pool, string, start);
+			}
 		}
 	}
 	return IKS_OK;
@@ -645,39 +815,17 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 static int cdata_hook(void *user_data, char *data, size_t len)
 {
 	struct srgs_parser *parser = (struct srgs_parser *)user_data;
-	if (len) {
-		if (parser->cur->type == SNT_ITEM /* TODO || parser->cur->type == SNT_RULE || parser->cur->type == SNT_TOKEN */) {
-			struct srgs_node *string = parser->cur;
-			int i;
-			if (parser->grammar->digit_mode) {
-				for (i = 0; i < len; i++) {
-					if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-						char *digit = switch_core_alloc(parser->pool, sizeof(char) * 2);
-						digit[0] = data[i];
-						digit[1] = '\0';
-						string = sn_insert_string(parser->pool, string, digit);
-						sn_log_node_open(string);
-					}
-				}
-			} else {
-				char *data_dup = switch_core_alloc(parser->pool, sizeof(char) * (len + 1));
-				char *start = data_dup;
-				char *end = start + len - 1;
-				memcpy(data_dup, data, len);
-				/* remove start whitespace */
-				for (; start && *start && !isgraph(*start); start++) {
-				}
-				if (!zstr(start)) {
-					/* remove end whitespace */
-					for (; end != start && *end && !isgraph(*end); end--) {
-						*end = '\0';
-					}
-					if (!zstr(start)) {
-						string = sn_insert_string(parser->pool, string, start);
-					}
-				}
-			}
+	if (!parser) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing parser\n");
+		return IKS_BADXML;
+	}
+	if (parser->cur) {
+		struct tag_def *def = switch_core_hash_find(globals.tag_defs, node_type_to_string(parser->cur->type));
+		if (def) {
+			return def->cdata_fn(parser, data, len);
 		}
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing definition for <%s>\n", node_type_to_string(parser->cur->type));
+		return IKS_BADXML;
 	}
 	return IKS_OK;
 }
@@ -740,7 +888,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 {
 	sn_log_node_open(node);
 	switch (node->type) {
-		case SNT_ROOT:
+		case SNT_GRAMMAR:
 			if (node->child) {
 				int num_rules = 0;
 				struct srgs_node *child = node->child;
@@ -893,9 +1041,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 			stream->write_function(stream, "%s", rule->value.rule.regex);
 			break;
 		}
-		case SNT_UNKNOWN:
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "create_regexes() bad type = %s\n", node_type_to_string(node->type));
-			return 0;
+		case SNT_ANY:
 		default:
 			/* ignore */
 			return 1;
@@ -951,7 +1097,7 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
 		return 0;
 	}
 
-	if (node->type == SNT_ROOT && node->value.root) {
+	if (node->type == SNT_GRAMMAR && node->value.root) {
 		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(parser->rules, node->value.root);
 		if (!rule) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Root rule not found: %s\n", node->value.root);
@@ -1022,13 +1168,17 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
 		grammar = switch_core_alloc(parser->pool, sizeof (*grammar));
 		parser->grammar = grammar;
-		parser->grammar->root = sn_new(parser->pool, SNT_ROOT);
-		parser->cur = parser->grammar->root;
+		parser->grammar->root = NULL;
+		parser->cur = NULL;
 		switch_core_hash_delete_multi(parser->rules, NULL, NULL);
 		if (iks_parse(p, document, 0, 1) == IKS_OK) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Resolving references\n");
-			if (resolve_refs(parser, parser->grammar->root, 0)) {
-				result = 1;
+			if (parser->grammar->root) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Resolving references\n");
+				if (resolve_refs(parser, parser->grammar->root, 0)) {
+					result = 1;
+				}
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Nothing to parse!\n");
 			}
 		}
 		iks_parser_delete(p);
@@ -1101,7 +1251,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 {
 	sn_log_node_open(node);
 	switch (node->type) {
-		case SNT_ROOT:
+		case SNT_GRAMMAR:
 			if (node->child) {
 				struct srgs_node *child;
 				switch_stream_handle_t new_stream = { 0 };
@@ -1296,9 +1446,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 			stream->write_function(stream, " <%s>", rule->value.rule.id);
 			break;
 		}
-		case SNT_UNKNOWN:
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "create_jsgf() bad type = %s\n", node_type_to_string(node->type));
-			return 0;
+		case SNT_ANY:
 		default:
 			/* ignore */
 			return 1;
@@ -1367,6 +1515,35 @@ const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir, c
 		switch_file_close(file);
 	}
 	return parser->grammar->jsgf_file_name;
+}
+
+/**
+ * Initialize SRGS parser.  This function is not thread safe.
+ */
+int srgs_init(void)
+{
+	if (globals.init) {
+		return 1;
+	}
+
+	globals.init = SWITCH_TRUE;
+	switch_core_new_memory_pool(&globals.pool);
+	switch_core_hash_init(&globals.tag_defs, globals.pool);
+
+	add_root_tag_def("grammar", process_grammar, process_cdata_bad, "meta,metadata,lexicon,tag,rule");
+	add_tag_def("ANY", process_attribs_ignore, process_cdata_ignore, "ANY");
+	add_tag_def("ruleref", process_ruleref, process_cdata_bad, "");
+	add_tag_def("token", process_attribs_ignore, process_cdata_ignore, "");
+	add_tag_def("tag", process_attribs_ignore, process_cdata_ignore, "");
+	add_tag_def("one-of", process_attribs_ignore, process_cdata_tokens, "item");
+	add_tag_def("item", process_item, process_cdata_tokens, "token,ruleref,item,one-of,tag");
+	add_tag_def("rule", process_rule, process_cdata_tokens, "token,ruleref,item,one-of,tag,example");
+	add_tag_def("example", process_attribs_ignore, process_cdata_ignore, "");
+	add_tag_def("lexicon", process_attribs_ignore, process_cdata_bad, "");
+	add_tag_def("meta", process_attribs_ignore, process_cdata_bad, "");
+	add_tag_def("metadata", process_attribs_ignore, process_cdata_ignore, "ANY");
+
+	return 1;
 }
 
 /* For Emacs:
