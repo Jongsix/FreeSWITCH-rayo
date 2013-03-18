@@ -2289,7 +2289,7 @@ SWITCH_STANDARD_APP(httapi_function)
 
 static char *load_cache_data(http_file_context_t *context, const char *url)
 {
-	char *ext = NULL;
+	char *ext = NULL, *dext = NULL, *p;
 	char digest[SWITCH_MD5_DIGEST_STRING_SIZE] = { 0 };
 	char meta_buffer[1024] = "";
 	int fd;
@@ -2307,6 +2307,14 @@ static char *load_cache_data(http_file_context_t *context, const char *url)
 		} else {
 			ext = "wav";
 		}
+	}
+	
+	if (ext && (p = strchr(ext, '?'))) {
+		dext = strdup(ext);
+		if ((p = strchr(dext, '?'))) {
+			*p = '\0';
+			ext = dext;
+		} else free(dext);
 	}
 
 	context->cache_file_base = switch_core_sprintf(context->pool, "%s%s%s", globals.cache_path, SWITCH_PATH_SEPARATOR, digest);
@@ -2328,6 +2336,8 @@ static char *load_cache_data(http_file_context_t *context, const char *url)
 		}
 		close(fd);
 	}
+
+	switch_safe_free(dext);
 
 	return context->cache_file;
 }
@@ -2591,15 +2601,22 @@ static switch_status_t locate_url_file(http_file_context_t *context, const char 
 		
 		if ((!context->url_params || !switch_event_get_header(context->url_params, "ext")) 
 			&& headers && (ct = switch_event_get_header(headers, "content-type"))) {
-			if (!strcasecmp(ct, "audio/mpeg")) {
+			if (switch_strcasecmp_any(ct, "audio/mpeg", "audio/x-mpeg", "audio/mp3", "audio/x-mp3", "audio/mpeg3", 
+									  "audio/x-mpeg3", "audio/mpg", "audio/x-mpg", "audio/x-mpegaudio", NULL)) {
 				newext = "mp3";
-			} else if (!strcasecmp(ct, "audio/wav")) {
+			} else if (switch_strcasecmp_any(ct, "audio/wav", "audio/x-wave", "audio/wav", NULL)) {
 				newext = "wav";
 			}
 		}
 
 
 		if (newext) {
+			char *p;
+
+			if ((p = strrchr(context->cache_file, '.'))) {
+				*p = '\0';
+			}
+			
 			context->cache_file = switch_core_sprintf(context->pool, "%s.%s", context->cache_file, newext);
 		}
 

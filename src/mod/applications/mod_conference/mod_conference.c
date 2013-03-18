@@ -3932,7 +3932,7 @@ static void *SWITCH_THREAD_FUNC conference_record_thread_run(switch_thread_t *th
 		switch_event_fire(&event);
 	}
 
-	while (switch_test_flag(member, MFLAG_RUNNING) && switch_test_flag(conference, CFLAG_RUNNING) && conference->count > 1) {
+	while (switch_test_flag(member, MFLAG_RUNNING) && switch_test_flag(conference, CFLAG_RUNNING) && conference->count) {
 
 		len = 0;
 
@@ -4130,7 +4130,7 @@ static void conference_send_all_dtmf(conference_member_t *member, conference_obj
 				
 				switch_zmalloc(dt, sizeof(*dt));
 				*dt = digit;
-				switch_queue_push(member->dtmf_queue, dt);
+				switch_queue_push(imember->dtmf_queue, dt);
 				switch_core_session_kill_channel(imember->session, SWITCH_SIG_BREAK);
 			}
 		}
