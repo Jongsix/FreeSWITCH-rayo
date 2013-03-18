@@ -268,7 +268,7 @@ static int process_tag(struct ssml_parser *parser, const char *name, char **atts
  * @param atts the attributes
  * @return IKS_OK
  */
-static int process_tag_ignore(struct ssml_parser *parser, char **atts)
+static int process_attribs_ignore(struct ssml_parser *parser, char **atts)
 {
 	return IKS_OK;
 }
@@ -294,7 +294,14 @@ static int process_cdata_ignore(struct ssml_parser *parser, char *data, size_t l
  */
 static int process_cdata_bad(struct ssml_parser *parser, char *data, size_t len)
 {
-	return IKS_BADXML;
+	int i;
+	for (i = 0; i < len; i++) {
+		if (isgraph(data[i])) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", parser->cur_node->tag_name);
+			return IKS_BADXML;
+		}
+	}
+	return IKS_OK;
 }
 
 /**
@@ -609,9 +616,6 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 		strncpy(new_node->tag_name, name, TAG_LEN);
 		new_node->tag_name[TAG_LEN - 1] = '\0';
 		parsed_data->cur_node = new_node;
-	}
-
-	if (type == IKS_OPEN || type == IKS_SINGLE) {
 		result = process_tag(parsed_data, name, atts);
 	}
 
@@ -754,14 +758,18 @@ static int process_sub(struct ssml_parser *parsed_data, char **atts)
 static int cdata_hook(void *user_data, char *data, size_t len)
 {
 	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
-	if (parsed_data && parsed_data->cur_node) {
+	if (!parsed_data) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing parser\n");
+		return IKS_BADXML;
+	}
+	if (parsed_data->cur_node) {
 		struct tag_def *handler = switch_core_hash_find(globals.tag_defs, parsed_data->cur_node->tag_name);
 		if (handler) {
 			return handler->cdata_fn(parsed_data, data, len);
 		}
 		return IKS_BADXML;
 	}
-	return IKS_BADXML;
+	return IKS_OK;
 }
 
 /**
@@ -1101,18 +1109,18 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	add_tag_def("p", process_xml_lang, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,s");
 	add_tag_def("s", process_xml_lang, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub");
 	add_tag_def("voice", process_voice, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s");
-	add_tag_def("prosody", process_tag_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s");
+	add_tag_def("prosody", process_attribs_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s");
 	add_tag_def("audio", process_audio, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s,desc");
-	add_tag_def("desc", process_tag_ignore, process_cdata_ignore, "");
-	add_tag_def("emphasis", process_tag_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub");
+	add_tag_def("desc", process_attribs_ignore, process_cdata_ignore, "");
+	add_tag_def("emphasis", process_attribs_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub");
 	add_tag_def("say-as", process_say_as, process_cdata_tts, "");
 	add_tag_def("sub", process_sub, process_cdata_ignore, "");
-	add_tag_def("phoneme", process_tag_ignore, process_cdata_tts, "");
+	add_tag_def("phoneme", process_attribs_ignore, process_cdata_tts, "");
 	add_tag_def("break", process_break, process_cdata_bad, "");
-	add_tag_def("mark", process_tag_ignore, process_cdata_bad, "");
-	add_tag_def("lexicon", process_tag_ignore, process_cdata_bad, "");
-	add_tag_def("metadata", process_tag_ignore, process_cdata_ignore, "ANY");
-	add_tag_def("meta", process_tag_ignore, process_cdata_bad, "");
+	add_tag_def("mark", process_attribs_ignore, process_cdata_bad, "");
+	add_tag_def("lexicon", process_attribs_ignore, process_cdata_bad, "");
+	add_tag_def("metadata", process_attribs_ignore, process_cdata_ignore, "ANY");
+	add_tag_def("meta", process_attribs_ignore, process_cdata_bad, "");
 
 	return do_config(pool);
 }
