@@ -297,7 +297,7 @@ static int process_cdata_bad(struct ssml_parser *parser, char *data, size_t len)
 	int i;
 	for (i = 0; i < len; i++) {
 		if (isgraph(data[i])) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", parser->cur_node->tag_name);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", parser->cur_node->tag_name);
 			return IKS_BADXML;
 		}
 	}
