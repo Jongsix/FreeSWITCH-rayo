@@ -767,6 +767,71 @@ static void test_jsgf(void)
 	srgs_parser_destroy(parser);
 }
 
+/* removed the ruleref to URL from example */
+static const char *w3c_example_grammar =
+	"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+
+	"<!DOCTYPE grammar PUBLIC \"-//W3C//DTD GRAMMAR 1.0//EN\""
+	"                  \"http://www.w3.org/TR/speech-grammar/grammar.dtd\">\n"
+	"\n"
+	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" xml:lang=\"en\"\n"
+	"         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
+	"         xsi:schemaLocation=\"http://www.w3.org/2001/06/grammar\n"
+	"                             http://www.w3.org/TR/speech-grammar/grammar.xsd\"\n"
+	"         version=\"1.0\" mode=\"voice\" root=\"basicCmd\">\n"
+	"\n"
+	"<meta name=\"author\" content=\"Stephanie Williams\"/>\n"
+	"\n"
+	"<rule id=\"basicCmd\" scope=\"public\">\n"
+	"  <example> please move the window </example>\n"
+	"  <example> open a file </example>\n"
+	"\n"
+	"  <!--ruleref uri=\"http://grammar.example.com/politeness.grxml#startPolite\"/-->\n"
+	"\n"
+	"  <ruleref uri=\"#command\"/>\n"
+	"  <!--ruleref uri=\"http://grammar.example.com/politeness.grxml#endPolite\"/-->\n"
+	"\n"
+	"</rule>\n"
+	"\n"
+	"<rule id=\"command\">\n"
+	"  <ruleref uri=\"#action\"/> <ruleref uri=\"#object\"/>\n"
+	"</rule>\n"
+	"\n"
+	"<rule id=\"action\">\n"
+	"   <one-of>\n"
+	"      <item weight=\"10\"> open   <tag>TAG-CONTENT-1</tag> </item>\n"
+	"      <item weight=\"2\">  close  <tag>TAG-CONTENT-2</tag> </item>\n"
+	"      <item weight=\"1\">  delete <tag>TAG-CONTENT-3</tag> </item>\n"
+	"      <item weight=\"1\">  move   <tag>TAG-CONTENT-4</tag> </item>\n"
+	"    </one-of>\n"
+	"</rule>\n"
+	"\n"
+	"<rule id=\"object\">\n"
+	"  <item repeat=\"0-1\">\n"
+	"    <one-of>\n"
+	"      <item> the </item>\n"
+	"      <item> a </item>\n"
+	"    </one-of>\n"
+	"  </item>\n"
+	"\n"
+	"  <one-of>\n"
+	"      <item> window </item>\n"
+	"      <item> file </item>\n"
+	"      <item> menu </item>\n"
+	"  </one-of>\n"
+	"</rule>\n"
+	"\n"
+	"</grammar>";
+
+static void test_w3c_example_grammar(void)
+{
+	struct srgs_parser *parser;
+	parser = srgs_parser_new("1234");
+
+	ASSERT_EQUALS(1, srgs_parse(parser, w3c_example_grammar));
+	ASSERT_NOT_NULL(srgs_to_jsgf(parser));
+}
+
 /**
  * main program
  */
@@ -782,5 +847,6 @@ int main(int argc, char **argv)
 	TEST(test_match_rayo_example_grammar);
 	TEST(test_repeat_item_grammar);
 	TEST(test_jsgf);
+	TEST(test_w3c_example_grammar);
 	return 0;
 }
