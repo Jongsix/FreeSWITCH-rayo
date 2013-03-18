@@ -295,17 +295,14 @@ static switch_bool_t stop_detect(pocketsphinx_t *ps, int16_t *data, unsigned int
 	/* Check silence timeouts */
 	if (ps->silence_time && switch_test_flag(ps, PSFLAG_INPUT_TIMERS)) {
 		int elapsed_ms = (switch_micro_time_now() - ps->silence_time) / 1000;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Elapsed time = %d ms\n", elapsed_ms);
 		if (switch_test_flag(ps, PSFLAG_START_OF_SPEECH)) {
 			if (ps->speech_timeout > 0 && !switch_test_flag(ps, PSFLAG_SPEECH_TIMEOUT) && elapsed_ms >= ps->speech_timeout) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "SPEECH TIMEOUT\n");
 				switch_set_flag_locked(ps, PSFLAG_SPEECH_TIMEOUT);
 				ps->listening = 0;
 				return SWITCH_TRUE;
 			}
 		} else {
 			if (ps->no_input_timeout > 0 && !switch_test_flag(ps, PSFLAG_NOINPUT_TIMEOUT) && elapsed_ms >= ps->no_input_timeout) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "NO INPUT\n");
 				switch_mutex_lock(ps->flag_mutex);
 				switch_set_flag(ps, PSFLAG_NOINPUT_TIMEOUT);
 				switch_set_flag(ps, PSFLAG_NOINPUT);
