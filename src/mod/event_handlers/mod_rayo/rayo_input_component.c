@@ -296,6 +296,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!handler->component) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create input component!\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create input component!");
+		return NULL;
 	}
 	rayo_component_set_data(handler->component, handler);
 	handler->num_digits = 0;
@@ -315,17 +316,22 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		rayo_component_send_start(handler->component, iq);
 
 		/* start dtmf input detection */
-		switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug);
+		if (switch_core_media_bug_add(session, "rayo_input_component", NULL, input_component_bug_callback, handler, 0, SMBF_READ_REPLACE, &handler->bug) != SWITCH_STATUS_SUCCESS) {
+			rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_ERROR);
+			return NULL;
+		}
 	} else {
 		const char *jsgf_path;
 		char *grammar = NULL;
 		handler->speech_mode = 1;
 		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
 		if (!jsgf_path) {
+			rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Grammar error");
 			rayo_component_unlock(handler->component);
 			rayo_component_destroy(handler->component);
 			return NULL;
 		}
+
 		/* acknowledge command */
 		rayo_component_send_start(handler->component, iq);
 
@@ -335,7 +341,9 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 			(int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0), jsgf_path);
 		/* start speech detection */
 		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
-		switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL);
+		if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
+			rayo_component_send_complete(handler->component, COMPONENT_COMPLETE_ERROR);
+		}
 		switch_safe_free(grammar);
 	}
 
