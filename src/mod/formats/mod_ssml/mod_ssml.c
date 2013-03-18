@@ -42,6 +42,23 @@ SWITCH_MODULE_DEFINITION(mod_ssml, mod_ssml_load, mod_ssml_shutdown, NULL);
 #define VOICE_GENDER_PRIORITY 1000
 #define VOICE_LANG_PRIORITY 1000000
 
+struct ssml_parser;
+
+/** function to handle tag attributes */
+typedef int (* tag_attribs_fn)(struct ssml_parser *, char **);
+/** function to handle tag CDATA */
+typedef int (* tag_cdata_fn)(struct ssml_parser *, char *, size_t);
+
+/**
+ * Tag definition
+ */
+struct tag_def {
+	tag_attribs_fn attribs_fn;
+	tag_cdata_fn cdata_fn;
+	switch_bool_t is_root;
+	switch_hash_t *children_tags;
+};
+
 /**
  * Module configuration
  */
@@ -56,6 +73,10 @@ static struct {
 	switch_hash_t *interpret_as_map;
 	/** Mapping of ISO language code to say-module */
 	switch_hash_t *language_map;
+	/** Mapping of tag name to definition */
+	switch_hash_t *tag_defs;
+	/** module memory pool */
+	switch_memory_pool_t *pool;
 } globals;
 
 /**
@@ -108,7 +129,7 @@ struct voice {
 /**
  * SSML voice state
  */
-struct ssml_voice_attribs {
+struct ssml_node {
 	/** tag name */
 	char tag_name[TAG_LEN];
 	/** requested name */
@@ -121,8 +142,10 @@ struct ssml_voice_attribs {
 	struct voice *tts_voice;
 	/** say macro to use */
 	struct macro *say_macro;
-	/** previous attribs */
-	struct ssml_voice_attribs *parent;
+	/** tag handling data */
+	struct tag_def *tag_def;
+	/** previous node */
+	struct ssml_node *parent_node;
 };
 
 /**
@@ -140,7 +163,7 @@ struct ssml_file {
  */
 struct ssml_parser {
 	/** current attribs */
-	struct ssml_voice_attribs *attribs;
+	struct ssml_node *cur_node;
 	/** files to play */
 	struct ssml_file *files;
 	/** number of files */
@@ -168,23 +191,130 @@ struct ssml_context {
 };
 
 /**
+ * Add a definition for a tag
+ * @param tag the name
+ * @param attribs_fn the function to handle the tag attributes
+ * @param cdata_fn the function to handler the tag CDATA
+ * @param children_tags comma-separated list of valid child tag names
+ * @return the definition
+ */
+static struct tag_def *add_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+{
+	struct tag_def *def = switch_core_alloc(globals.pool, sizeof(*def));
+	switch_core_hash_init(&def->children_tags, globals.pool);
+	if (!zstr(children_tags)) {
+		char *children_tags_dup = switch_core_strdup(globals.pool, children_tags);
+		char *tags[32] = { 0 };
+		int tag_count = switch_separate_string(children_tags_dup, ',', tags, sizeof(tags) / sizeof(tags[0]));
+		if (tag_count) {
+			int i;
+			for (i = 0; i < tag_count; i++) {
+				switch_core_hash_insert(def->children_tags, tags[i], tags[i]);
+			}
+		}
+	}
+	def->attribs_fn = attribs_fn;
+	def->cdata_fn = cdata_fn;
+	def->is_root = SWITCH_FALSE;
+	switch_core_hash_insert(globals.tag_defs, tag, def);
+	return def;
+}
+
+/**
+ * Add a definition for a root tag
+ * @param tag the name
+ * @param attribs_fn the function to handle the tag attributes
+ * @param cdata_fn the function to handler the tag CDATA
+ * @param children_tags comma-separated list of valid child tag names
+ * @return the definition
+ */
+static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_fn, tag_cdata_fn cdata_fn, const char *children_tags)
+{
+	struct tag_def *def = add_tag_def(tag, attribs_fn, cdata_fn, children_tags);
+	def->is_root = SWITCH_TRUE;
+	return def;
+}
+
+/**
+ * Handle tag attributes
+ * @param parser the parser
+ * @param name the tag name
+ * @param atts the attributes
+ * @return IKS_OK if OK IKS_BADXML on parse failure
+ */
+static int process_tag(struct ssml_parser *parser, const char *name, char **atts)
+{
+	struct tag_def *def = switch_core_hash_find(globals.tag_defs, name);
+	if (def) {
+		parser->cur_node->tag_def = def;
+		if (def->is_root && parser->cur_node->parent_node == NULL) {
+			/* no parent for ROOT tags */
+			return def->attribs_fn(parser, atts);
+		} else if (!def->is_root && parser->cur_node->parent_node) {
+			/* check if this child is allowed by parent node */
+			struct tag_def *parent_def = parser->cur_node->parent_node->tag_def;
+			if (switch_core_hash_find(parent_def->children_tags, "ANY") ||
+				switch_core_hash_find(parent_def->children_tags, name)) {
+				return def->attribs_fn(parser, atts);
+			}
+		}
+	}
+	return IKS_BADXML;
+}
+
+/**
+ * Handle tag attributes that are ignored
+ * @param parser the parser
+ * @param atts the attributes
+ * @return IKS_OK
+ */
+static int process_tag_ignore(struct ssml_parser *parser, char **atts)
+{
+	return IKS_OK;
+}
+
+/**
+ * Handle CDATA that is ignored
+ * @param parser the parser
+ * @param data the CDATA
+ * @param len the CDATA length
+ * @return IKS_OK
+ */
+static int process_cdata_ignore(struct ssml_parser *parser, char *data, size_t len)
+{
+	return IKS_OK;
+}
+
+/**
+ * Handle CDATA that is not allowed
+ * @param parser the parser
+ * @param data the CDATA
+ * @param len the CDATA length
+ * @return IKS_BADXML
+ */
+static int process_cdata_bad(struct ssml_parser *parser, char *data, size_t len)
+{
+	return IKS_BADXML;
+}
+
+/**
  * Score the voice on how close it is to desired language, name, and gender
  * @param voice the voice to score
- * @param attribs the desired voice attributes
+ * @param cur_node the desired voice attributes
  * @param lang_required if true, language must match
  * @return the score
  */
-static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs, int lang_required)
+static int score_voice(struct voice *voice, struct ssml_node *cur_node, int lang_required)
 {
 	/* language > gender,name > priority */
 	int score = voice->priority;
-	if (!zstr_buf(attribs->gender) && !strcmp(attribs->gender, voice->gender)) {
+	if (!zstr_buf(cur_node->gender) && !strcmp(cur_node->gender, voice->gender)) {
 		score += VOICE_GENDER_PRIORITY;
 	}
-	if (!zstr_buf(attribs->name) && !strcmp(attribs->name, voice->name)) {
+	if (!zstr_buf(cur_node->name) && !strcmp(cur_node->name, voice->name)) {
 		score += VOICE_NAME_PRIORITY;
 	}
-	if (!zstr_buf(attribs->language) && !strcmp(attribs->language, voice->language)) {
+	if (!zstr_buf(cur_node->language) && !strcmp(cur_node->language, voice->language)) {
 		score += VOICE_LANG_PRIORITY;
 	} else if (lang_required) {
 		score = 0;
@@ -194,21 +324,21 @@ static int score_voice(struct voice *voice, struct ssml_voice_attribs *attribs, 
 
 /**
  * Search for best voice based on attributes
- * @param attribs the desired voice attributes
+ * @param cur_node the desired voice attributes
  * @param map the map to search
  * @param type "say" or "tts"
  * @param lang_required if true, language must match
  * @return the voice or NULL
  */
-static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_t *map, char *type, int lang_required)
+static struct voice *find_voice(struct ssml_node *cur_node, switch_hash_t *map, char *type, int lang_required)
 {
 	switch_hash_index_t *hi = NULL;
-	struct voice *voice = (struct voice *)switch_core_hash_find(map, attribs->name);
+	struct voice *voice = (struct voice *)switch_core_hash_find(map, cur_node->name);
 	char *lang_name_gender = NULL;
 	int best_score = 0;
 
 	/* check cache */
-	lang_name_gender = switch_mprintf("%s-%s-%s-%s", type, attribs->language, attribs->name, attribs->gender);
+	lang_name_gender = switch_mprintf("%s-%s-%s-%s", type, cur_node->language, cur_node->name, cur_node->gender);
 	voice = (struct voice *)switch_core_hash_find(globals.voice_cache, lang_name_gender);
 	if (voice) {
 		/* that was easy! */
@@ -223,7 +353,7 @@ static struct voice *find_voice(struct ssml_voice_attribs *attribs, switch_hash_
 		int candidate_score = 0;
 		switch_hash_this(hi, &key, NULL, &val);
 		candidate = (struct voice *)val;
-		candidate_score = score_voice(candidate, attribs, lang_required);
+		candidate_score = score_voice(candidate, cur_node, lang_required);
 		if (candidate_score > 0 && candidate_score > best_score) {
 			voice = candidate;
 			best_score = candidate_score;
@@ -243,22 +373,22 @@ done:
 
 /**
  * Search for best voice based on attributes
- * @param attribs the desired voice attributes
+ * @param cur_node the desired voice attributes
  * @return the voice or NULL
  */
-static struct voice *find_tts_voice(struct ssml_voice_attribs *attribs)
+static struct voice *find_tts_voice(struct ssml_node *cur_node)
 {
-	return find_voice(attribs, globals.tts_voice_map, "tts", 0);
+	return find_voice(cur_node, globals.tts_voice_map, "tts", 0);
 }
 
 /**
  * Search for best voice based on attributes
- * @param attribs the desired voice attributes
+ * @param cur_node the desired voice attributes
  * @return the voice or NULL
  */
-static struct voice *find_say_voice(struct ssml_voice_attribs *attribs)
+static struct voice *find_say_voice(struct ssml_node *cur_node)
 {
-	return find_voice(attribs, globals.say_voice_map, "say", 1);
+	return find_voice(cur_node, globals.say_voice_map, "say", 1);
 }
 
 /**
@@ -312,67 +442,67 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 }
 
 /**
- * Process anything else
+ * Process xml:lang attribute
  */
-static void process_default_open(struct ssml_parser *parsed_data, char *name, char **atts)
+static int process_xml_lang(struct ssml_parser *parsed_data, char **atts)
 {
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	struct ssml_node *cur_node = parsed_data->cur_node;
 
 	/* only allow language change in <speak>, <p>, and <s> */
-	if (!strcmp("speak", name) || !strcmp("p", name) || !strcmp("s", name)) {
-		if (atts) {
-			int i = 0;
-			while (atts[i]) {
-				if (!strcmp("xml:lang", atts[i])) {
-					if (!zstr(atts[i + 1])) {
-					strncpy(attribs->language, atts[i + 1], LANGUAGE_LEN);
-					attribs->language[LANGUAGE_LEN - 1] = '\0';
-					}
-				}
-				i += 2;
-			}
-		}
-	}
-	attribs->tts_voice = find_tts_voice(attribs);
-}
-
-/**
- * Process <voice>
- */
-static void process_voice_open(struct ssml_parser *parsed_data, char **atts)
-{
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
 			if (!strcmp("xml:lang", atts[i])) {
 				if (!zstr(atts[i + 1])) {
-					strncpy(attribs->language, atts[i + 1], LANGUAGE_LEN);
-					attribs->language[LANGUAGE_LEN - 1] = '\0';
-				}
-			} else if (!strcmp("name", atts[i])) {
-				if (!zstr(atts[i + 1])) {
-					strncpy(attribs->name, atts[i + 1], NAME_LEN);
-					attribs->name[NAME_LEN - 1] = '\0';
-				}
-			} else if (!strcmp("gender", atts[i])) {
-				if (!zstr(atts[i + 1])) {
-					strncpy(attribs->gender, atts[i + 1], GENDER_LEN);
-					attribs->gender[GENDER_LEN - 1] = '\0';
+				strncpy(cur_node->language, atts[i + 1], LANGUAGE_LEN);
+				cur_node->language[LANGUAGE_LEN - 1] = '\0';
 				}
 			}
 			i += 2;
 		}
 	}
-	attribs->tts_voice = find_tts_voice(attribs);
+	cur_node->tts_voice = find_tts_voice(cur_node);
+	return IKS_OK;
+}
+
+/**
+ * Process <voice>
+ */
+static int process_voice(struct ssml_parser *parsed_data, char **atts)
+{
+	struct ssml_node *cur_node = parsed_data->cur_node;
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("xml:lang", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(cur_node->language, atts[i + 1], LANGUAGE_LEN);
+					cur_node->language[LANGUAGE_LEN - 1] = '\0';
+				}
+			} else if (!strcmp("name", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(cur_node->name, atts[i + 1], NAME_LEN);
+					cur_node->name[NAME_LEN - 1] = '\0';
+				}
+			} else if (!strcmp("gender", atts[i])) {
+				if (!zstr(atts[i + 1])) {
+					strncpy(cur_node->gender, atts[i + 1], GENDER_LEN);
+					cur_node->gender[GENDER_LEN - 1] = '\0';
+				}
+			}
+			i += 2;
+		}
+	}
+	cur_node->tts_voice = find_tts_voice(cur_node);
+	return IKS_OK;
 }
 
 /**
  * Process <say-as>
  */
-static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
+static int process_say_as(struct ssml_parser *parsed_data, char **atts)
 {
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
+	struct ssml_node *cur_node = parsed_data->cur_node;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
@@ -380,22 +510,22 @@ static void process_say_as_open(struct ssml_parser *parsed_data, char **atts)
 				char *interpret_as = atts[i + 1];
 				if (!zstr(interpret_as)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "interpret-as: %s\n", atts[i + 1]);
-					attribs->say_macro = (struct macro *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
+					cur_node->say_macro = (struct macro *)switch_core_hash_find(globals.interpret_as_map, interpret_as);
 				}
 				break;
 			}
 			i += 2;
 		}
 	}
-	attribs->tts_voice = find_tts_voice(attribs);
+	cur_node->tts_voice = find_tts_voice(cur_node);
+	return IKS_OK;
 }
 
 /**
  * Process <break>- this is a period of silence
  */
-static void process_break(struct ssml_parser *parsed_data, char **atts)
+static int process_break(struct ssml_parser *parsed_data, char **atts)
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Process <break>\n");
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
@@ -421,17 +551,18 @@ static void process_break(struct ssml_parser *parsed_data, char **atts)
 						parsed_data->files[parsed_data->num_files++].prefix = NULL;
 					}
 				}
-				return;
+				return IKS_OK;
 			}
 			i += 2;
 		}
 	}
+	return IKS_OK;
 }
 
 /**
  * Process <audio>- this is a URL to play
  */
-static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
+static int process_audio(struct ssml_parser *parsed_data, char **atts)
 {
 	if (atts) {
 		int i = 0;
@@ -444,11 +575,12 @@ static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
 					parsed_data->files[parsed_data->num_files].name = switch_core_strdup(parsed_data->pool, src);
 					parsed_data->files[parsed_data->num_files++].prefix = NULL;
 				}
-				return;
+				return IKS_OK;
 			}
 			i += 2;
 		}
 	}
+	return IKS_OK;
 }
 
 /**
@@ -456,57 +588,42 @@ static void process_audio_open(struct ssml_parser *parsed_data, char **atts)
  */
 static int tag_hook(void *user_data, char *name, char **atts, int type)
 {
+	int result = IKS_OK;
 	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
-	switch (type) {
-		case IKS_OPEN: {
-			struct ssml_voice_attribs *new_attribs = malloc(sizeof *new_attribs);
-			struct ssml_voice_attribs *parent = parsed_data->attribs;
-			if (parent) {
-				/* inherit parent attribs */
-				*new_attribs = *parent;
-				new_attribs->parent = parent;
-			} else {
-				new_attribs->name[0] = '\0';
-				new_attribs->language[0] = '\0';
-				new_attribs->gender[0] = '\0';
-				new_attribs->parent = NULL;
-			}
-			new_attribs->tts_voice = NULL;
-			new_attribs->say_macro = NULL;
-			strncpy(new_attribs->tag_name, name, TAG_LEN);
-			new_attribs->tag_name[TAG_LEN - 1] = '\0';
-			parsed_data->attribs = new_attribs;
+	struct ssml_node *new_node = malloc(sizeof *new_node);
+	struct ssml_node *parent_node = parsed_data->cur_node;
 
-			if (!strcmp("audio", name)) {
-				process_audio_open(parsed_data, atts);
-			} else if (!strcmp("voice", name)) {
-				process_voice_open(parsed_data, atts);
-			} else if (!strcmp("say-as", name)) {
-				process_say_as_open(parsed_data, atts);
-			} else if (!strcmp("break", name)) {
-				process_break(parsed_data, atts);
-			} else {
-				process_default_open(parsed_data, name, atts);
-			}
-			break;
+	if (type == IKS_OPEN || type == IKS_SINGLE) {
+		if (parent_node) {
+			/* inherit parent attribs */
+			*new_node = *parent_node;
+			new_node->parent_node = parent_node;
+		} else {
+			new_node->name[0] = '\0';
+			new_node->language[0] = '\0';
+			new_node->gender[0] = '\0';
+			new_node->parent_node = NULL;
 		}
-		case IKS_CLOSE: {
-			if (parsed_data->attribs) {
-				struct ssml_voice_attribs *parent = parsed_data->attribs->parent;
-				free(parsed_data->attribs);
-				parsed_data->attribs = parent;
-			}
-			break;
-		}
-		case IKS_SINGLE:
-			if (!strcmp("break", name)) {
-				process_break(parsed_data, atts);
-			} else if (!strcmp("audio", name)) {
-				process_audio_open(parsed_data, atts);
-			}
-			break;
+		new_node->tts_voice = NULL;
+		new_node->say_macro = NULL;
+		strncpy(new_node->tag_name, name, TAG_LEN);
+		new_node->tag_name[TAG_LEN - 1] = '\0';
+		parsed_data->cur_node = new_node;
 	}
-	return IKS_OK;
+
+	if (type == IKS_OPEN || type == IKS_SINGLE) {
+		result = process_tag(parsed_data, name, atts);
+	}
+
+	if (type == IKS_CLOSE || type == IKS_SINGLE) {
+		if (parsed_data->cur_node) {
+			struct ssml_node *parent_node = parsed_data->cur_node->parent_node;
+			free(parsed_data->cur_node);
+			parsed_data->cur_node = parent_node;
+		}
+	}
+
+	return result;
 }
 
 /**
@@ -517,9 +634,9 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
  */
 static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
 {
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	struct macro *say_macro = attribs->say_macro;
-	struct voice *say_voice = find_say_voice(attribs);
+	struct ssml_node *cur_node = parsed_data->cur_node;
+	struct macro *say_macro = cur_node->say_macro;
+	struct voice *say_voice = find_say_voice(cur_node);
 	struct language *language;
 	char *file_string = NULL;
 	char *gender = NULL;
@@ -565,29 +682,24 @@ static int get_file_from_macro(struct ssml_parser *parsed_data, char *to_say)
  */
 static int get_file_from_voice(struct ssml_parser *parsed_data, char *to_say)
 {
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", attribs->tts_voice->prefix, to_say);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: \"%s\"\n", attribs->tag_name, file);
+	struct ssml_node *cur_node = parsed_data->cur_node;
+	char *file = switch_core_sprintf(parsed_data->pool, "%s%s", cur_node->tts_voice->prefix, to_say);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding <%s>: \"%s\"\n", cur_node->tag_name, file);
 	parsed_data->files[parsed_data->num_files].name = file;
 	parsed_data->files[parsed_data->num_files++].prefix = NULL;
 	return 1;
 }
 
 /**
- * Process cdata- this is the text to speak
+ * Get TTS from CDATA
  */
-static int cdata_hook(void *user_data, char *data, size_t len)
+static int process_cdata_tts(struct ssml_parser *parsed_data, char *data, size_t len)
 {
-	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
-	struct ssml_voice_attribs *attribs = parsed_data->attribs;
-	if (len && attribs && attribs->tts_voice &&
-			parsed_data->num_files < parsed_data->max_files &&
-			(!strcmp("speak", attribs->tag_name) ||
-			!strcmp("voice", attribs->tag_name) ||
-			!strcmp("say-as", attribs->tag_name) ||
-			!strcmp("s", attribs->tag_name) ||
-			!strcmp("p", attribs->tag_name))) {
-
+	struct ssml_node *cur_node = parsed_data->cur_node;
+	if (!len) {
+		return IKS_OK;
+	}
+	if (cur_node && cur_node->tts_voice && parsed_data->num_files < parsed_data->max_files) {
 		int i = 0;
 		int empty = 1;
 		char *to_say;
@@ -605,13 +717,51 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 		to_say = malloc(len + 1);
 		strncpy(to_say, data, len);
 		to_say[len] = '\0';
-		if (!attribs->say_macro || !get_file_from_macro(parsed_data, to_say)) {
+		if (!cur_node->say_macro || !get_file_from_macro(parsed_data, to_say)) {
 			/* use voice instead */
 			get_file_from_voice(parsed_data, to_say);
 		}
 		free(to_say);
+		return IKS_OK;
+	}
+	return IKS_BADXML;
+}
+
+/**
+ * Process <sub>- this is an alias for text to speak
+ */
+static int process_sub(struct ssml_parser *parsed_data, char **atts)
+{
+	if (atts) {
+		int i = 0;
+		while (atts[i]) {
+			if (!strcmp("alias", atts[i])) {
+				char *alias = atts[i + 1];
+				if (!zstr(alias)) {
+					return process_cdata_tts(parsed_data, alias, strlen(alias));
+				}
+				return IKS_BADXML;
+			}
+			i += 2;
+		}
 	}
 	return IKS_OK;
+}
+
+/**
+ * Process cdata
+ */
+static int cdata_hook(void *user_data, char *data, size_t len)
+{
+	struct ssml_parser *parsed_data = (struct ssml_parser *)user_data;
+	if (parsed_data && parsed_data->cur_node) {
+		struct tag_def *handler = switch_core_hash_find(globals.tag_defs, parsed_data->cur_node->tag_name);
+		if (handler) {
+			return handler->cdata_fn(parsed_data, data, len);
+		}
+		return IKS_BADXML;
+	}
+	return IKS_BADXML;
 }
 
 /**
@@ -629,7 +779,7 @@ static switch_status_t ssml_file_open(switch_file_handle_t *handle, const char *
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Open: %s\n", path);
 
-	parsed_data->attribs = NULL;
+	parsed_data->cur_node = NULL;
 	parsed_data->files = switch_core_alloc(handle->memory_pool, sizeof(struct ssml_file) * MAX_VOICE_FILES);
 	parsed_data->max_files = MAX_VOICE_FILES;
 	parsed_data->num_files = 0;
@@ -939,11 +1089,31 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_ssml_load)
 	 * file_interface->file_seek = tts_file_seek;
 	 */
 
+	globals.pool = pool;
 	switch_core_hash_init(&globals.voice_cache, pool);
 	switch_core_hash_init(&globals.tts_voice_map, pool);
 	switch_core_hash_init(&globals.say_voice_map, pool);
 	switch_core_hash_init(&globals.interpret_as_map, pool);
 	switch_core_hash_init(&globals.language_map, pool);
+	switch_core_hash_init(&globals.tag_defs, pool);
+
+	add_root_tag_def("speak", process_xml_lang, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s,lexicon,metadata,meta");
+	add_tag_def("p", process_xml_lang, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,s");
+	add_tag_def("s", process_xml_lang, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub");
+	add_tag_def("voice", process_voice, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s");
+	add_tag_def("prosody", process_tag_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s");
+	add_tag_def("audio", process_audio, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub,p,s,desc");
+	add_tag_def("desc", process_tag_ignore, process_cdata_ignore, "");
+	add_tag_def("emphasis", process_tag_ignore, process_cdata_tts, "audio,break,emphasis,mark,phoneme,prosody,say-as,voice,sub");
+	add_tag_def("say-as", process_say_as, process_cdata_tts, "");
+	add_tag_def("sub", process_sub, process_cdata_ignore, "");
+	add_tag_def("phoneme", process_tag_ignore, process_cdata_tts, "");
+	add_tag_def("break", process_break, process_cdata_bad, "");
+	add_tag_def("mark", process_tag_ignore, process_cdata_bad, "");
+	add_tag_def("lexicon", process_tag_ignore, process_cdata_bad, "");
+	add_tag_def("metadata", process_tag_ignore, process_cdata_ignore, "ANY");
+	add_tag_def("meta", process_tag_ignore, process_cdata_bad, "");
+
 	return do_config(pool);
 }
 
