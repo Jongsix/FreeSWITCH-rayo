@@ -31,6 +31,28 @@
 #include <switch.h>
 
 /**
+ * Create a <presence> event
+ * @param name the event name
+ * @param namespace the event namespace
+ * @param from
+ * @param to
+ * @return the event XML node
+ */
+iks *iks_new_presence(const char *name, const char *namespace, const char *from, const char *to)
+{
+	iks *event = iks_new("presence");
+	iks *x;
+	/* iks makes copies of attrib name and value */
+	iks_insert_attrib(event, "from", from);
+	iks_insert_attrib(event, "to", to);
+	x = iks_insert(event, name);
+	if (!zstr(namespace)) {
+		iks_insert_attrib(x, "xmlns", namespace);
+	}
+	return event;
+}
+
+/**
  * Create <iq> error response from <iq> request
  * @param iq the <iq> get/set request
  * @param from
@@ -323,7 +345,7 @@ int iks_attrib_is_positive_or_neg_one(const char *value)
  * @param value
  * @return SWTICH_TRUE
  */
-int iks_attrib_is_any(const char *value) 
+int iks_attrib_is_any(const char *value)
 {
 	return SWITCH_TRUE;
 }
@@ -333,7 +355,7 @@ int iks_attrib_is_any(const char *value)
  * @param value
  * @return SWTICH_TRUE if 0.0 <= x <= 1.0
  */
-int iks_attrib_is_decimal_between_zero_and_one(const char *value) 
+int iks_attrib_is_decimal_between_zero_and_one(const char *value)
 {
 	if (!zstr(value) && switch_is_number(value)) {
 		double value_d = atof(value);

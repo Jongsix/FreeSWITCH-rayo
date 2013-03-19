@@ -454,6 +454,7 @@ static void on_detected_speech_event(switch_event_t *event)
 				/* shouldn't get here... */
 				rayo_component_send_complete(component, COMPONENT_COMPLETE_ERROR);
 			}
+			rayo_component_unlock(component);
 		}
 	}
 	switch_safe_free(event_str);
