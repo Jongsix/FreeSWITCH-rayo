@@ -44,6 +44,8 @@ struct output_component {
 	int repeat_times;
 	/** component file handle */
 	switch_file_handle_t *fh;
+	/** true if stopped */
+	int stop;
 };
 
 #define OUTPUT_COMPONENT(x) ((struct output_component *)(rayo_component_get_data(x)))
@@ -181,6 +183,7 @@ static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
 	if (OUTPUT_COMPONENT(component)->fh) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
+		OUTPUT_COMPONENT(component)->stop = 1;
 		switch_set_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_DONE);
 		return iks_new_iq_result(iq);
 	}
@@ -466,7 +469,8 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	if (status != SWITCH_STATUS_SUCCESS && context->component) {
 		/* TODO send error */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Status = %i\n", status);
-		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
+		rayo_component_unlock(context->component);
+		rayo_component_send_complete(context->component, COMPONENT_COMPLETE_ERROR);
 	}
 
 	return status;
@@ -485,7 +489,11 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 		struct output_component *output = OUTPUT_COMPONENT(context->component);
 
 		/* send completion and destroy */
-		rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
+		if (output->stop) {
+			rayo_component_send_complete(context->component, COMPONENT_COMPLETE_STOP);
+		} else {
+			rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
+		}
 		/* TODO hangup / timed out */
 
 		/* cleanup internals */
