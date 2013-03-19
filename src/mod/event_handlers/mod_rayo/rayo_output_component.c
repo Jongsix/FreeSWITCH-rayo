@@ -96,6 +96,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	struct rayo_component *component = NULL;
 	struct output_component *output_component = NULL;
 	iks *output = iks_find(iq, "output");
+	switch_status_t status;
 	switch_stream_handle_t stream = { 0 };
 
 	component = create_output_component(rayo_call_get_actor(call), output, iks_find_attrib(iq, "from"));
@@ -117,76 +118,26 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
 	if (rayo_call_is_joined(call) || rayo_call_is_playing(call)) {
 		/* mixed */
-		switch_ivr_displace_session(session, stream.data, 0, "m");
+		status = switch_ivr_displace_session(session, stream.data, 0, "m");
 	} else {
 		/* normal play */
-		switch_core_session_execute_application_async(session, "playback", stream.data);
+		status = switch_core_session_execute_application_async(session, "playback", stream.data);
 	}
 	switch_safe_free(stream.data);
-	rayo_component_unlock(component);
-	return NULL;
-}
 
-/**
- * Background API data
- */
-struct bg_api_cmd {
-	const char *cmd;
-	const char *args;
-	switch_memory_pool_t *pool;
-};
-
-/**
- * Thread that outputs to component
- * @param thread this thread
- * @param obj the Rayo mixer context
- * @return NULL
- */
-static void *SWITCH_THREAD_FUNC bg_api_thread(switch_thread_t *thread, void *obj)
-{
-	struct bg_api_cmd *cmd = (struct bg_api_cmd *)obj;
-	switch_stream_handle_t stream = { 0 };
-	switch_memory_pool_t *pool = cmd->pool;
-	SWITCH_STANDARD_STREAM(stream);
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC: %s %s\n", cmd->cmd, cmd->args);
-	if (switch_api_execute(cmd->cmd, cmd->args, NULL, &stream) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC FAILURE\n");
-		/* TODO send complete on failure */
-		/* TODO make component-specific thread */
+	if (status == SWITCH_STATUS_SUCCESS) {
+		rayo_component_unlock(component);
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC RESULT: %s\n", (char *)stream.data);
+		if (switch_channel_get_state(switch_core_session_get_channel(session)) >= CS_HANGUP) {
+			rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
+			component = NULL;
+		} else {
+			rayo_component_send_complete(component, COMPONENT_COMPLETE_ERROR);
+			component = NULL;
+		}
 	}
-	switch_safe_free(stream.data);
-	switch_core_destroy_memory_pool(&pool);
+
 	return NULL;
-}
-
-/**
- * Run a background API command
- * @param cmd API command
- * @param args API args
- */
-static void rayo_api_execute_async(const char *cmd, const char *args)
-{
-	switch_thread_t *thread;
-	switch_threadattr_t *thd_attr = NULL;
-	struct bg_api_cmd *bg_cmd = NULL;
-	switch_memory_pool_t *pool;
-
-	/* set up command */
-	switch_core_new_memory_pool(&pool);
-	bg_cmd = switch_core_alloc(pool, sizeof(*bg_cmd));
-	bg_cmd->pool = pool;
-	bg_cmd->cmd = switch_core_strdup(pool, cmd);
-	bg_cmd->args = switch_core_strdup(pool, args);
-
-	/* create thread */
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI START\n");
-	switch_threadattr_create(&thd_attr, pool);
-	switch_threadattr_detach_set(thd_attr, 1);
-	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-	switch_thread_create(&thread, thd_attr, bg_api_thread, bg_cmd, pool);
 }
 
 /**
@@ -215,7 +166,7 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	}
 
 	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
-	rayo_api_execute_async("conference", stream.data);
+	rayo_component_api_execute_async(component, "conference", stream.data);
 
 	switch_safe_free(stream.data);
 	rayo_component_unlock(component);
