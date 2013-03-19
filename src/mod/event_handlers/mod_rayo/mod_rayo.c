@@ -694,6 +694,7 @@ static void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int 
 	}
 	actor->destroy = 1;
 	if (actor->ref_count <= 0) {
+		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Destroying %s\n", actor->jid);
 		if (actor->cleanup_fn) {
 			actor->cleanup_fn(actor);
 		}
@@ -707,7 +708,7 @@ static void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int 
 
 #define rayo_actor_lock(actor) _rayo_actor_lock(actor, __FILE__, __LINE__)
 /**
- * Unlock rayo actor
+ * Lock rayo actor (prevents destruction)
  */
 static void _rayo_actor_lock(struct rayo_actor *actor, const char *file, int line)
 {
