@@ -74,4 +74,6 @@ extern void rayo_component_send_complete_event(struct rayo_component *component,
 
 extern iks *rayo_component_create_complete_event(struct rayo_component *component, const char *reason, const char *reason_namespace);
 
+extern void rayo_component_api_execute_async(struct rayo_component *component, const char *cmd, const char *args);
+
 #endif

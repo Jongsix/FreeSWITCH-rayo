@@ -118,6 +118,69 @@ void rayo_component_send_complete(struct rayo_component *component, const char *
 }
 
 /**
+ * Background API data
+ */
+struct component_bg_api_cmd {
+	const char *cmd;
+	const char *args;
+	switch_memory_pool_t *pool;
+	struct rayo_component *component;
+};
+
+/**
+ * Thread that outputs to component
+ * @param thread this thread
+ * @param obj the Rayo mixer context
+ * @return NULL
+ */
+static void *SWITCH_THREAD_FUNC component_bg_api_thread(switch_thread_t *thread, void *obj)
+{
+	struct component_bg_api_cmd *cmd = (struct component_bg_api_cmd *)obj;
+	switch_stream_handle_t stream = { 0 };
+	switch_memory_pool_t *pool = cmd->pool;
+	SWITCH_STANDARD_STREAM(stream);
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC: %s %s\n", cmd->cmd, cmd->args);
+	if (switch_api_execute(cmd->cmd, cmd->args, NULL, &stream) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC FAILURE\n");
+		rayo_component_send_complete(cmd->component, COMPONENT_COMPLETE_ERROR);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "BGAPI EXEC RESULT: %s\n", (char *)stream.data);
+	}
+	switch_safe_free(stream.data);
+	switch_core_destroy_memory_pool(&pool);
+	return NULL;
+}
+
+/**
+ * Run a background API command
+ * @param cmd API command
+ * @param args API args
+ */
+void rayo_component_api_execute_async(struct rayo_component *component, const char *cmd, const char *args)
+{
+	switch_thread_t *thread;
+	switch_threadattr_t *thd_attr = NULL;
+	struct component_bg_api_cmd *bg_cmd = NULL;
+	switch_memory_pool_t *pool;
+
+	/* set up command */
+	switch_core_new_memory_pool(&pool);
+	bg_cmd = switch_core_alloc(pool, sizeof(*bg_cmd));
+	bg_cmd->pool = pool;
+	bg_cmd->cmd = switch_core_strdup(pool, cmd);
+	bg_cmd->args = switch_core_strdup(pool, args);
+	bg_cmd->component = component;
+
+	/* create thread */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s BGAPI START\n", rayo_component_get_jid(component));
+	switch_threadattr_create(&thd_attr, pool);
+	switch_threadattr_detach_set(thd_attr, 1);
+	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
+	switch_thread_create(&thread, thd_attr, component_bg_api_thread, bg_cmd, pool);
+}
+
+/**
  * Handle configuration
  */
 switch_status_t rayo_components_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool)
