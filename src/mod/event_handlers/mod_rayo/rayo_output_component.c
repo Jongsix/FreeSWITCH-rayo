@@ -98,7 +98,6 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	struct rayo_component *component = NULL;
 	struct output_component *output_component = NULL;
 	iks *output = iks_find(iq, "output");
-	switch_status_t status;
 	switch_stream_handle_t stream = { 0 };
 
 	component = create_output_component(rayo_call_get_actor(call), output, iks_find_attrib(iq, "from"));
@@ -117,19 +116,13 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 		stream.write_function(&stream, "{timeout=%i}", output_component->max_time * 1000);
 	}
 
-	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
-	if (rayo_call_is_joined(call) || rayo_call_is_playing(call)) {
-		/* mixed */
-		status = switch_ivr_displace_session(session, stream.data, 0, "m");
-	} else {
-		/* normal play */
-		status = switch_core_session_execute_application_async(session, "playback", stream.data);
-	}
-	switch_safe_free(stream.data);
-
-	if (status == SWITCH_STATUS_SUCCESS) {
+	stream.write_function(&stream, "fileman://rayo://%s", rayo_component_get_jid(component));
+	if (switch_ivr_displace_session(session, stream.data, 0, "m") == SWITCH_STATUS_SUCCESS) {
 		rayo_component_unlock(component);
 	} else {
+		if (output_component->document) {
+			iks_delete(output_component->document);
+		}
 		if (switch_channel_get_state(switch_core_session_get_channel(session)) >= CS_HANGUP) {
 			rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
 			component = NULL;
@@ -138,6 +131,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 			component = NULL;
 		}
 	}
+	switch_safe_free(stream.data);
 
 	return NULL;
 }
@@ -430,6 +424,8 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 	handle->sections = context->fh.sections;
 	handle->seekable = context->fh.seekable;
 	handle->speed = context->fh.speed;
+	handle->vol = context->fh.vol;
+	handle->offset_pos = context->fh.offset_pos;
 	handle->interval = context->fh.interval;
 
 	if (switch_test_flag((&context->fh), SWITCH_FILE_NATIVE)) {
@@ -457,7 +453,7 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	context->component = rayo_component_locate(path);
 
 	if (context->component) {
-		OUTPUT_COMPONENT(context->component)->fh = handle;
+		OUTPUT_COMPONENT(context->component)->fh = (switch_file_handle_t *)handle->private_info; /* fileman puts its handle here for us */
 		handle->private_info = context;
 		context->cur_doc = NULL;
 		context->play_count = 0;
@@ -467,10 +463,9 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	}
 
 	if (status != SWITCH_STATUS_SUCCESS && context->component) {
-		/* TODO send error */
+		/* complete error event will be sent by calling thread */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Status = %i\n", status);
 		rayo_component_unlock(context->component);
-		rayo_component_send_complete(context->component, COMPONENT_COMPLETE_ERROR);
 	}
 
 	return status;
@@ -560,7 +555,310 @@ static switch_status_t rayo_file_seek(switch_file_handle_t *handle, unsigned int
 	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
 }
 
+#define FILE_STARTBYTES 1024 * 32
+#define FILE_BLOCKSIZE 1024 * 8
+#define FILE_BUFSIZE 1024 * 64
+
+/**
+ * Fileman playback state
+ */
+struct fileman_file_context {
+	/** handle to current file */
+	switch_file_handle_t fh;
+	/** file buffer */
+	int16_t *abuf;
+	/** end of file */
+	int eof;
+	/** size of a packet in 2-byte samples */
+	switch_size_t frame_len;
+};
+
+/**
+ * Wraps file with interface that can be controlled by fileman flags
+ * @param handle
+ * @param path the file to play
+ * @return SWITCH_STATUS_SUCCESS if opened
+ */
+static switch_status_t fileman_file_open(switch_file_handle_t *handle, const char *path)
+{
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	struct fileman_file_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
+	handle->private_info = context;
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Got path %s\n", path);
+
+	/* pass top-level handle to allow rayo file handle to control audio */
+	context->fh.private_info = handle;
+
+	if ((status = switch_core_file_open(&context->fh, path, handle->channels, handle->samplerate, handle->flags, NULL)) != SWITCH_STATUS_SUCCESS) {
+		return status;
+	}
+
+	context->frame_len = (handle->samplerate / 1000 * 20);
+	switch_zmalloc(context->abuf, FILE_STARTBYTES);
+
+	if (!context->fh.audio_buffer) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Create audio buffer\n");
+		switch_buffer_create_dynamic(&context->fh.audio_buffer, FILE_BLOCKSIZE, FILE_BUFSIZE, 0);
+		switch_assert(context->fh.audio_buffer);
+	}
+
+	handle->samples = context->fh.samples;
+	handle->format = context->fh.format;
+	handle->sections = context->fh.sections;
+	handle->seekable = context->fh.seekable;
+	handle->speed = context->fh.speed;
+	handle->vol = context->fh.vol;
+	handle->offset_pos = context->fh.offset_pos;
+	handle->interval = context->fh.interval;
+
+	if (switch_test_flag((&context->fh), SWITCH_FILE_NATIVE)) {
+		switch_set_flag(handle, SWITCH_FILE_NATIVE);
+	} else {
+		switch_clear_flag(handle, SWITCH_FILE_NATIVE);
+	}
+
+	return status;
+}
+
+/**
+ * Close file.
+ * @param handle
+ * @return SWITCH_STATUS_SUCCESS
+ */
+static switch_status_t fileman_file_close(switch_file_handle_t *handle)
+{
+	struct fileman_file_context *context = (struct fileman_file_context *)handle->private_info;
+	switch_file_handle_t *fh = &context->fh;
+	if (switch_test_flag(fh, SWITCH_FILE_OPEN)) {
+		free(context->abuf);
+
+		if (fh->audio_buffer) {
+			switch_buffer_destroy(&fh->audio_buffer);
+		}
+
+		if (fh->sp_audio_buffer) {
+			switch_buffer_destroy(&fh->sp_audio_buffer);
+		}
+
+		return switch_core_file_close(fh);
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Read from file
+ * @param handle
+ * @param data
+ * @param len
+ * @return
+ */
+static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *data, size_t *len)
+{
+	struct fileman_file_context *context = (struct fileman_file_context *)handle->private_info;
+	switch_file_handle_t *fh = &context->fh;
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	switch_size_t o_len = 0;
+
+	/* anything called "_len" is measured in 2-byte samples */
+
+	if (switch_test_flag(fh, SWITCH_FILE_NATIVE)) {
+		return switch_core_file_read(fh, data, len);
+	}
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
+	if (*len < context->frame_len) {
+		/* Too small! */
+		memset(context->abuf, 255, context->frame_len * 2);
+		status = SWITCH_STATUS_FALSE;
+		goto done;
+	}
+	*len = context->frame_len;
+
+	for (;;) {
+		int do_speed = 1;
+		int last_speed = -1;
+		size_t read_bytes = 0;
+
+		if (switch_test_flag(handle, SWITCH_FILE_PAUSE)) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read pause frame\n");
+			memset(context->abuf, 255, context->frame_len * 2);
+			do_speed = 0;
+			o_len = context->frame_len;
+		} else if (fh->sp_audio_buffer && (context->eof || (switch_buffer_inuse(fh->sp_audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read speed frame\n");
+			/* get next speed frame */
+			if (!(read_bytes = switch_buffer_read(fh->sp_audio_buffer, context->abuf, context->frame_len * 2))) {
+				/* This is the reverse of what happens in switch_ivr_play_file... i think that implementation is wrong */
+				if (context->eof) {
+					/* done with file */
+					status = SWITCH_STATUS_FALSE;
+					goto done;
+				} else {
+					/* try again to fetch frame */
+					continue;
+				}
+			}
+
+			/* pad short frame with silence */
+			if (read_bytes < context->frame_len * 2) {
+				//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Padding speed frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
+				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
+			}
+			o_len = context->frame_len;
+			do_speed = 0;
+		} else if (fh->audio_buffer && (context->eof || (switch_buffer_inuse(fh->audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) Read audio frame\n");
+			/* get next file frame */
+			if (!(read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2))) {
+				if (context->eof) {
+					/* done with file */
+					status = SWITCH_STATUS_FALSE;
+					goto done;
+				} else {
+					/* try again to fetch frame */
+					continue;
+				}
+			}
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+			fh->offset_pos += read_bytes / 2;
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) file pos = %i\n", fh->offset_pos);
+
+			/* pad short frame with silence */
+			if (read_bytes < (context->frame_len * 2)) {
+				//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Padding audio frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
+				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
+			}
+
+			o_len = context->frame_len;
+		} else {
+			if (context->eof) {
+				/* done with file */
+				status = SWITCH_STATUS_FALSE;
+				goto done;
+			}
+			o_len = FILE_STARTBYTES / 2;
+			if (switch_core_file_read(fh, context->abuf, &o_len) != SWITCH_STATUS_SUCCESS) {
+				context->eof++;
+				/* at end of file... need to clear buffers before giving up */
+				continue;
+			}
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read file %"SWITCH_SIZE_T_FMT" bytes\n", o_len * 2);
+
+			/* add file data to audio bufer */
+			read_bytes = switch_buffer_write(fh->audio_buffer, context->abuf, o_len * 2);
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Write audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+
+			read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2);
+			o_len = read_bytes / 2;
+			fh->offset_pos += o_len;
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "file pos = %i\n", fh->offset_pos);
+		}
+
+		if (o_len <= 0) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "o_len <= 0 (%"SWITCH_SIZE_T_FMT")\n", o_len);
+			status = SWITCH_STATUS_FALSE;
+			goto done;
+		}
+
+		/* limit speed... there is a .25 factor change in packet size relative to original packet size for each increment.
+		   Too many increments and we cause badness when (factor * speed * o_len) > o_len */
+		if (handle->speed > 2) {
+			handle->speed = 2;
+		} else if (handle->speed < -2) {
+			handle->speed = -2;
+		}
+
+		if (fh->audio_buffer && last_speed > -1 && last_speed != handle->speed) {
+			/* speed has changed, flush the buffer */
+			switch_buffer_zero(fh->sp_audio_buffer);
+		}
+
+		if (switch_test_flag(fh, SWITCH_FILE_SEEK)) {
+			/* file position has changed flush the buffer */
+			switch_buffer_zero(fh->audio_buffer);
+			switch_clear_flag(fh, SWITCH_FILE_SEEK);
+		}
+
+		/* generate speed frames */
+		if (handle->speed && do_speed) {
+			float factor = 0.25f * abs(handle->speed);
+			switch_size_t new_len, supplement_len, step_len;
+			short *bp = context->abuf;
+			switch_size_t wrote_len = 0;
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Generate speed frame (%i)\n", handle->speed);
+
+			supplement_len = (int) (factor * o_len);
+			if (!supplement_len) {
+				supplement_len = 1;
+			}
+			new_len = (handle->speed > 0) ? o_len - supplement_len : o_len + supplement_len;
+
+			step_len = (handle->speed > 0) ? (new_len / supplement_len) : (o_len / supplement_len);
+
+			if (!fh->sp_audio_buffer) {
+				switch_buffer_create_dynamic(&fh->sp_audio_buffer, 1024, 1024, 0);
+			}
+
+			while ((wrote_len + step_len) < new_len) {
+				switch_buffer_write(fh->sp_audio_buffer, bp, step_len * 2);
+				wrote_len += step_len;
+				bp += step_len;
+				if (handle->speed > 0) {
+					bp++;
+				} else {
+					float f;
+					short s;
+					f = (float) (*bp + *(bp + 1) + *(bp - 1));
+					f /= 3;
+					s = (short) f;
+					switch_buffer_write(fh->sp_audio_buffer, &s, 2);
+					wrote_len++;
+				}
+			}
+			if (wrote_len < new_len) {
+				switch_size_t r_len = new_len - wrote_len;
+				switch_buffer_write(fh->sp_audio_buffer, bp, r_len * 2);
+				wrote_len += r_len;
+			}
+			last_speed = handle->speed;
+			continue;
+		}
+
+		/* adjust volume on frame */
+		if (handle->vol) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adjust volume to = %i\n", handle->vol);
+			switch_change_sln_volume(context->abuf, context->frame_len, handle->vol);
+		}
+		break;
+	}
+
+done:
+
+	/* copy frame over to return to caller */
+	memcpy(data, context->abuf, *len * 2);
+	handle->offset_pos = context->fh.offset_pos;
+
+	return status;
+}
+
+/**
+ * Seek file
+ */
+static switch_status_t fileman_file_seek(switch_file_handle_t *handle, unsigned int *cur_sample, int64_t samples, int whence)
+{
+	struct fileman_file_context *context = handle->private_info;
+
+	if (!handle->seekable) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "File is not seekable\n");
+		return SWITCH_STATUS_NOTIMPL;
+	}
+	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
+}
+
 static char *rayo_supported_formats[] = { "rayo", NULL };
+static char *fileman_supported_formats[] = { "fileman", NULL };
 
 /**
  * Initialize output component
@@ -597,6 +895,14 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 	file_interface->file_close = rayo_file_close;
 	file_interface->file_read = rayo_file_read;
 	file_interface->file_seek = rayo_file_seek;
+
+	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
+	file_interface->interface_name = "mod_rayo";
+	file_interface->extens = fileman_supported_formats;
+	file_interface->file_open = fileman_file_open;
+	file_interface->file_close = fileman_file_close;
+	file_interface->file_read = fileman_file_read;
+	file_interface->file_seek = fileman_file_seek;
 
 	return SWITCH_STATUS_SUCCESS;
 }
