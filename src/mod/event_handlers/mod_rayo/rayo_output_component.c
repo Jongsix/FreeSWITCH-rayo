@@ -42,6 +42,8 @@ struct output_component {
 	int repeat_interval;
 	/** number of times to repeat */
 	int repeat_times;
+	/** true if started paused */
+	switch_bool_t start_paused;
 	/** true if stopped */
 	int stop;
 };
@@ -84,6 +86,7 @@ static struct rayo_component *create_output_component(struct rayo_actor *actor, 
 	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
 	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
 	output_component->max_time = iks_find_int_attrib(output, "max-time");
+	output_component->start_paused = iks_find_bool_attrib(output, "start-paused");
 	rayo_component_set_data(component, output_component);
 	return component;
 }
@@ -109,15 +112,14 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 
 	/* build playback command */
 	SWITCH_STANDARD_STREAM(stream);
-
+	stream.write_function(&stream, "{id=%s,session=%s,pause=%s",
+		rayo_component_get_jid(component), rayo_call_get_uuid(call),
+		output_component->start_paused ? "true" : "false");
 	if (output_component->max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i,id=%s,session=%s}", output_component->max_time * 1000,
-			rayo_component_get_jid(component), rayo_call_get_uuid(call));
-	} else {
-		stream.write_function(&stream, "{id=%s,session=%s}", rayo_component_get_jid(component), rayo_call_get_uuid(call));
+		stream.write_function(&stream, ",timeout=%i", output_component->max_time * 1000);
 	}
+	stream.write_function(&stream, "}fileman://rayo://%s", rayo_component_get_jid(component));
 
-	stream.write_function(&stream, "fileman://rayo://%s", rayo_component_get_jid(component));
 	if (switch_ivr_displace_session(session, stream.data, 0, "m") == SWITCH_STATUS_SUCCESS) {
 		rayo_component_unlock(component);
 	} else {
@@ -155,17 +157,16 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 
 	/* build conference command */
 	SWITCH_STANDARD_STREAM(stream);
-
 	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), rayo_component_get_id(component));
 
+	stream.write_function(&stream, "{id=%s,pause=%s",
+		rayo_component_get_jid(component),
+		output_component->start_paused ? "true" : "false");
 	if (output_component->max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i,id=%s}", output_component->max_time * 1000,
-			rayo_component_get_jid(component));
-	} else {
-		stream.write_function(&stream, "{id=%s}", rayo_component_get_jid(component));
+		stream.write_function(&stream, ",timeout=%i", output_component->max_time * 1000);
 	}
+	stream.write_function(&stream, "}fileman://rayo://%s", rayo_component_get_jid(component));
 
-	stream.write_function(&stream, "fileman://rayo://%s", rayo_component_get_jid(component));
 	rayo_component_api_execute_async(component, "conference", stream.data);
 
 	switch_safe_free(stream.data);
@@ -613,13 +614,18 @@ static switch_status_t fileman_file_open(switch_file_handle_t *handle, const cha
 	}
 
 	/* set up handle for external control */
-	if (context->id) {
-		switch_mutex_lock(fileman_globals.mutex);
-		switch_core_hash_insert(fileman_globals.hash, context->id, handle);
-		switch_mutex_unlock(fileman_globals.mutex);
-	} else {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_WARNING, "Set 'id' fileman param if you want to control %s\n", path);
+	if (!context->id) {
+		/* use filename as ID */
+		context->id = switch_core_strdup(handle->memory_pool, path);
 	}
+	switch_mutex_lock(fileman_globals.mutex);
+	if (!switch_core_hash_find(fileman_globals.hash, context->id)) {
+		switch_core_hash_insert(fileman_globals.hash, context->id, handle);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_WARNING, "Duplicate fileman ID: %s\n", context->id);
+		return SWITCH_STATUS_FALSE;
+	}
+	switch_mutex_unlock(fileman_globals.mutex);
 
 	context->frame_len = (handle->samplerate / 1000 * 20);
 	switch_zmalloc(context->abuf, FILE_STARTBYTES);
@@ -643,6 +649,10 @@ static switch_status_t fileman_file_open(switch_file_handle_t *handle, const cha
 		switch_set_flag(handle, SWITCH_FILE_NATIVE);
 	} else {
 		switch_clear_flag(handle, SWITCH_FILE_NATIVE);
+	}
+
+	if (handle->params && switch_true(switch_event_get_header(handle->params, "pause"))) {
+		switch_set_flag(handle, SWITCH_FILE_PAUSE);
 	}
 
 	return status;
