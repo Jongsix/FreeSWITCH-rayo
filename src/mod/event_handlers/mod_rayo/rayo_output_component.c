@@ -1009,7 +1009,11 @@ static switch_status_t fileman_process_cmd(const char *cmd, switch_file_handle_t
 					int step;
 					int32_t target;
 					if (!(step = atoi(p))) {
-						step = 1000;
+						if (*p == '+') {
+							step = 1000;
+						} else {
+							step = -1000;
+						}
 					}
 
 					samps = step * (fhp->samplerate / 1000);
