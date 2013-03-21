@@ -802,6 +802,7 @@ static void rayo_call_cleanup(struct rayo_actor *actor)
 
 	if (!event) {
 		/* destroyed before FS session was created (in originate, for example) */
+		return;
 	}
 
 	cause_str = switch_event_get_header(event, "variable_hangup_cause");
@@ -2736,11 +2737,13 @@ static void on_call_end_event(switch_event_t *event)
 	struct rayo_call *call = rayo_call_locate(switch_event_get_header(event, "Unique-ID"));
 
 	if (call) {
+#if 0
 		char *event_str;
 		if (switch_event_serialize(event, &event_str, SWITCH_FALSE) == SWITCH_STATUS_SUCCESS) {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_DEBUG, "%s\n", event_str);
 			switch_safe_free(event_str);
 		}
+#endif
 		switch_event_dup(&call->end_event, event);
 		rayo_call_unlock(call); /* decrement ref from creation */
 		rayo_call_destroy(call);
