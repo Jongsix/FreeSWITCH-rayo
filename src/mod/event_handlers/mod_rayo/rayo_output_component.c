@@ -42,8 +42,6 @@ struct output_component {
 	int repeat_interval;
 	/** number of times to repeat */
 	int repeat_times;
-	/** component file handle */
-	switch_file_handle_t *fh;
 	/** true if stopped */
 	int stop;
 };
@@ -113,7 +111,10 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	SWITCH_STANDARD_STREAM(stream);
 
 	if (output_component->max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i}", output_component->max_time * 1000);
+		stream.write_function(&stream, "{timeout=%i,id=%s,session=%s}", output_component->max_time * 1000,
+			rayo_component_get_jid(component), rayo_call_get_uuid(call));
+	} else {
+		stream.write_function(&stream, "{id=%s,session=%s}", rayo_component_get_jid(component), rayo_call_get_uuid(call));
 	}
 
 	stream.write_function(&stream, "fileman://rayo://%s", rayo_component_get_jid(component));
@@ -158,10 +159,13 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), rayo_component_get_id(component));
 
 	if (output_component->max_time > 0) {
-		stream.write_function(&stream, "{timeout=%i}", output_component->max_time * 1000);
+		stream.write_function(&stream, "{timeout=%i,id=%s}", output_component->max_time * 1000,
+			rayo_component_get_jid(component));
+	} else {
+		stream.write_function(&stream, "{id=%s}", rayo_component_get_jid(component));
 	}
 
-	stream.write_function(&stream, "rayo://%s", rayo_component_get_jid(component));
+	stream.write_function(&stream, "fileman://rayo://%s", rayo_component_get_jid(component));
 	rayo_component_api_execute_async(component, "conference", stream.data);
 
 	switch_safe_free(stream.data);
@@ -175,14 +179,15 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
  */
 static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
-		OUTPUT_COMPONENT(component)->stop = 1;
-		switch_set_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_DONE);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s stop", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	OUTPUT_COMPONENT(component)->stop = 1;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -190,13 +195,14 @@ static iks *stop_output_component(struct rayo_component *component, iks *iq)
  */
 static iks *pause_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s pausing\n", rayo_component_get_jid(component));
-		switch_set_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_PAUSE);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s pause", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s pausing\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -204,13 +210,14 @@ static iks *pause_output_component(struct rayo_component *component, iks *iq)
  */
 static iks *resume_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s resuming\n", rayo_component_get_jid(component));
-		switch_clear_flag(OUTPUT_COMPONENT(component)->fh, SWITCH_FILE_PAUSE);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s resume", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s resuming\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -218,13 +225,14 @@ static iks *resume_output_component(struct rayo_component *component, iks *iq)
  */
 static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		OUTPUT_COMPONENT(component)->fh->speed++;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s speeding up to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->speed);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s speed:+", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s speeding up\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -232,13 +240,14 @@ static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
  */
 static iks *speed_down_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		OUTPUT_COMPONENT(component)->fh->speed--;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s slowing down to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->speed);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s speed:-", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s slowing down\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -246,13 +255,14 @@ static iks *speed_down_output_component(struct rayo_component *component, iks *i
  */
 static iks *volume_up_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		OUTPUT_COMPONENT(component)->fh->vol++;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s increasing volume to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->vol);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s volume:+", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s increasing volume\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 /**
@@ -260,13 +270,14 @@ static iks *volume_up_output_component(struct rayo_component *component, iks *iq
  */
 static iks *volume_down_output_component(struct rayo_component *component, iks *iq)
 {
-	if (OUTPUT_COMPONENT(component)->fh) {
-		OUTPUT_COMPONENT(component)->fh->vol--;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s lowering volume to %i\n", rayo_component_get_jid(component), OUTPUT_COMPONENT(component)->fh->vol);
-		return iks_new_iq_result(iq);
-	}
-	/* unlikely- got here before fh assigned */
-	return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+	switch_stream_handle_t stream = { 0 };
+	char *command = switch_mprintf("%s volume:-", rayo_component_get_jid(component));
+	SWITCH_STANDARD_STREAM(stream);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s lowering volume\n", rayo_component_get_jid(component));
+	switch_api_execute("fileman", command, NULL, &stream);
+	switch_safe_free(stream.data);
+	switch_safe_free(command);
+	return iks_new_iq_result(iq);
 }
 
 ATTRIB_RULE(seek_direction)
@@ -285,37 +296,23 @@ ELEMENT_END
 static iks *seek_output_component(struct rayo_component *component, iks *iq)
 {
 	iks *seek = iks_find(iq, "seek");
-	iks *response = NULL;
-	if (!OUTPUT_COMPONENT(component)->fh) {
-		/* unlikely- got here before fh assigned */
-		response = iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
-	} else if (!VALIDATE_RAYO_OUTPUT_SEEK(seek)) {
-		response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-	} else {
-		struct output_component *output = OUTPUT_COMPONENT(component);
+
+	if (VALIDATE_RAYO_OUTPUT_SEEK(seek)) {
 		int is_forward = !strcmp("forward", iks_find_attrib(seek, "direction"));
 		int amount_ms = iks_find_int_attrib(seek, "amount");
-		int samples_per_ms = 0;
-		int32_t target = 0;
-		unsigned int pos = 0;
-		if (rayo_component_get_parent_type(component) == RAT_MIXER) {
-			/* TODO get sample rate from mixer */
-			samples_per_ms = 16000 / 1000;
-		} else {
-			/* TODO get sample rate from call */
-			samples_per_ms = 8000 / 1000;
-		}
-		if (!is_forward) {
-			amount_ms *= -1;
-		}
-		target = (int32_t)output->fh->pos + (amount_ms * samples_per_ms);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s seeking %i ms\n",
-			rayo_component_get_jid(component), amount_ms);
-		switch_core_file_seek(output->fh, &pos, target, SWITCH_SEEK_SET);
+		char *command = switch_mprintf("%s seek:%s%i", rayo_component_get_jid(component),
+			is_forward ? "+" : "-", amount_ms);
+		switch_stream_handle_t stream = { 0 };
+		SWITCH_STANDARD_STREAM(stream);
+
+		switch_api_execute("fileman", command, NULL, &stream);
+
+		switch_safe_free(stream.data);
+		switch_safe_free(command);
+
 		return iks_new_iq_result(iq);
 	}
-
-	return response;
+	return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 }
 
 /**
@@ -453,7 +450,6 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	context->component = rayo_component_locate(path);
 
 	if (context->component) {
-		OUTPUT_COMPONENT(context->component)->fh = (switch_file_handle_t *)handle->private_info; /* fileman puts its handle here for us */
 		handle->private_info = context;
 		context->cur_doc = NULL;
 		context->play_count = 0;
@@ -555,6 +551,16 @@ static switch_status_t rayo_file_seek(switch_file_handle_t *handle, unsigned int
 	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
 }
 
+/**
+ * Manages access to fileman controls
+ */
+struct {
+	/** synchronizes access to fileman hash */
+	switch_mutex_t *mutex;
+	/** fileman mapped by id */
+	switch_hash_t *hash;
+} fileman_globals;
+
 #define FILE_STARTBYTES 1024 * 32
 #define FILE_BLOCKSIZE 1024 * 8
 #define FILE_BUFSIZE 1024 * 64
@@ -571,6 +577,10 @@ struct fileman_file_context {
 	int eof;
 	/** size of a packet in 2-byte samples */
 	switch_size_t frame_len;
+	/** optional session UUID */
+	const char *uuid;
+	/** fileman control ID */
+	const char *id;
 };
 
 /**
@@ -585,20 +595,37 @@ static switch_status_t fileman_file_open(switch_file_handle_t *handle, const cha
 	struct fileman_file_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
 	handle->private_info = context;
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Got path %s\n", path);
+	if (handle->params) {
+		const char *id = switch_event_get_header(handle->params, "id");
+		const char *uuid = switch_event_get_header(handle->params, "session");
+		if (!zstr(id)) {
+			context->id = switch_core_strdup(handle->memory_pool, id);
+		}
+		if (!zstr(uuid)) {
+			context->uuid = switch_core_strdup(handle->memory_pool, uuid);
+		}
+	}
 
-	/* pass top-level handle to allow rayo file handle to control audio */
-	context->fh.private_info = handle;
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Got path %s\n", path);
 
 	if ((status = switch_core_file_open(&context->fh, path, handle->channels, handle->samplerate, handle->flags, NULL)) != SWITCH_STATUS_SUCCESS) {
 		return status;
+	}
+
+	/* set up handle for external control */
+	if (context->id) {
+		switch_mutex_lock(fileman_globals.mutex);
+		switch_core_hash_insert(fileman_globals.hash, context->id, handle);
+		switch_mutex_unlock(fileman_globals.mutex);
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_WARNING, "Set 'id' fileman param if you want to control %s\n", path);
 	}
 
 	context->frame_len = (handle->samplerate / 1000 * 20);
 	switch_zmalloc(context->abuf, FILE_STARTBYTES);
 
 	if (!context->fh.audio_buffer) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Create audio buffer\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Create audio buffer\n");
 		switch_buffer_create_dynamic(&context->fh.audio_buffer, FILE_BLOCKSIZE, FILE_BUFSIZE, 0);
 		switch_assert(context->fh.audio_buffer);
 	}
@@ -630,6 +657,13 @@ static switch_status_t fileman_file_close(switch_file_handle_t *handle)
 {
 	struct fileman_file_context *context = (struct fileman_file_context *)handle->private_info;
 	switch_file_handle_t *fh = &context->fh;
+
+	if (context->id) {
+		switch_mutex_lock(fileman_globals.mutex);
+		switch_core_hash_delete(fileman_globals.hash, context->id);
+		switch_mutex_unlock(fileman_globals.mutex);
+	}
+
 	if (switch_test_flag(fh, SWITCH_FILE_OPEN)) {
 		free(context->abuf);
 
@@ -640,8 +674,24 @@ static switch_status_t fileman_file_close(switch_file_handle_t *handle)
 		if (fh->sp_audio_buffer) {
 			switch_buffer_destroy(&fh->sp_audio_buffer);
 		}
-
 		return switch_core_file_close(fh);
+	}
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
+ * Write to file
+ * @param handle
+ * @param data
+ * @param len
+ * @return
+ */
+static switch_status_t fileman_file_write(switch_file_handle_t *handle, void *data, size_t *len)
+{
+	struct fileman_file_context *context = (struct fileman_file_context *)handle->private_info;
+	switch_file_handle_t *fh = &context->fh;
+	if (!switch_test_flag(handle, SWITCH_FILE_PAUSE)) {
+		return switch_core_file_write(fh, data, len);
 	}
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -666,7 +716,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 		return switch_core_file_read(fh, data, len);
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
 	if (*len < context->frame_len) {
 		/* Too small! */
 		memset(context->abuf, 255, context->frame_len * 2);
@@ -681,12 +731,12 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 		size_t read_bytes = 0;
 
 		if (switch_test_flag(handle, SWITCH_FILE_PAUSE)) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read pause frame\n");
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read pause frame\n");
 			memset(context->abuf, 255, context->frame_len * 2);
 			do_speed = 0;
 			o_len = context->frame_len;
 		} else if (fh->sp_audio_buffer && (context->eof || (switch_buffer_inuse(fh->sp_audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read speed frame\n");
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read speed frame\n");
 			/* get next speed frame */
 			if (!(read_bytes = switch_buffer_read(fh->sp_audio_buffer, context->abuf, context->frame_len * 2))) {
 				/* This is the reverse of what happens in switch_ivr_play_file... i think that implementation is wrong */
@@ -702,13 +752,13 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 
 			/* pad short frame with silence */
 			if (read_bytes < context->frame_len * 2) {
-				//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Padding speed frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
+				//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Padding speed frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
 				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
 			}
 			o_len = context->frame_len;
 			do_speed = 0;
 		} else if (fh->audio_buffer && (context->eof || (switch_buffer_inuse(fh->audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) Read audio frame\n");
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "(2) Read audio frame\n");
 			/* get next file frame */
 			if (!(read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2))) {
 				if (context->eof) {
@@ -720,13 +770,13 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 					continue;
 				}
 			}
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "(2) Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
 			fh->offset_pos += read_bytes / 2;
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "(2) file pos = %i\n", fh->offset_pos);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "(2) file pos = %i\n", fh->offset_pos);
 
 			/* pad short frame with silence */
 			if (read_bytes < (context->frame_len * 2)) {
-				//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Padding audio frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
+				//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Padding audio frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
 				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
 			}
 
@@ -743,21 +793,21 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 				/* at end of file... need to clear buffers before giving up */
 				continue;
 			}
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read file %"SWITCH_SIZE_T_FMT" bytes\n", o_len * 2);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read file %"SWITCH_SIZE_T_FMT" bytes\n", o_len * 2);
 
 			/* add file data to audio bufer */
 			read_bytes = switch_buffer_write(fh->audio_buffer, context->abuf, o_len * 2);
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Write audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Write audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
 
 			read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2);
 			o_len = read_bytes / 2;
 			fh->offset_pos += o_len;
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "file pos = %i\n", fh->offset_pos);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "file pos = %i\n", fh->offset_pos);
 		}
 
 		if (o_len <= 0) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "o_len <= 0 (%"SWITCH_SIZE_T_FMT")\n", o_len);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "o_len <= 0 (%"SWITCH_SIZE_T_FMT")\n", o_len);
 			status = SWITCH_STATUS_FALSE;
 			goto done;
 		}
@@ -787,7 +837,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 			switch_size_t new_len, supplement_len, step_len;
 			short *bp = context->abuf;
 			switch_size_t wrote_len = 0;
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Generate speed frame (%i)\n", handle->speed);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Generate speed frame (%i)\n", handle->speed);
 
 			supplement_len = (int) (factor * o_len);
 			if (!supplement_len) {
@@ -828,7 +878,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 
 		/* adjust volume on frame */
 		if (handle->vol) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adjust volume to = %i\n", handle->vol);
+			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Adjust volume to = %i\n", handle->vol);
 			switch_change_sln_volume(context->abuf, context->frame_len, handle->vol);
 		}
 		break;
@@ -851,10 +901,166 @@ static switch_status_t fileman_file_seek(switch_file_handle_t *handle, unsigned 
 	struct fileman_file_context *context = handle->private_info;
 
 	if (!handle->seekable) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "File is not seekable\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_WARNING, "File is not seekable\n");
 		return SWITCH_STATUS_NOTIMPL;
 	}
 	return switch_core_file_seek(&context->fh, cur_sample, samples, whence);
+}
+
+/**
+ * Process fileman command
+ */
+static switch_status_t fileman_process_cmd(const char *cmd, switch_file_handle_t *fhp)
+{
+	if (zstr(cmd)) {
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	if (fhp) {
+		if (!switch_test_flag(fhp, SWITCH_FILE_OPEN)) {
+			return SWITCH_STATUS_FALSE;
+		}
+
+		if (!strncasecmp(cmd, "speed", 5)) {
+			char *p;
+
+			if ((p = strchr(cmd, ':'))) {
+				p++;
+				if (*p == '+' || *p == '-') {
+					int step;
+					if (!(step = atoi(p))) {
+						if (*p == '+') {
+							step = 1;
+						} else {
+							step = -1;
+						}
+					}
+					fhp->speed += step;
+				} else {
+					int speed = atoi(p);
+					fhp->speed = speed;
+				}
+				return SWITCH_STATUS_SUCCESS;
+			}
+
+			return SWITCH_STATUS_FALSE;
+
+		} else if (!strncasecmp(cmd, "volume", 6)) {
+			char *p;
+
+			if ((p = strchr(cmd, ':'))) {
+				p++;
+				if (*p == '+' || *p == '-') {
+					int step;
+					if (!(step = atoi(p))) {
+						if (*p == '+') {
+							step = 1;
+						} else {
+							step = -1;
+						}
+					}
+					fhp->vol += step;
+				} else {
+					int vol = atoi(p);
+					fhp->vol = vol;
+				}
+				return SWITCH_STATUS_SUCCESS;
+			}
+
+			if (fhp->vol) {
+				switch_normalize_volume(fhp->vol);
+			}
+
+			return SWITCH_STATUS_FALSE;
+		} else if (!strcasecmp(cmd, "pause")) {
+			switch_set_flag(fhp, SWITCH_FILE_PAUSE);
+			return SWITCH_STATUS_SUCCESS;
+		} else if (!strcasecmp(cmd, "resume")) {
+			switch_clear_flag(fhp, SWITCH_FILE_PAUSE);
+			return SWITCH_STATUS_SUCCESS;
+		} else if (!strcasecmp(cmd, "stop")) {
+			switch_set_flag(fhp, SWITCH_FILE_DONE);
+			return SWITCH_STATUS_FALSE;
+		} else if (!strcasecmp(cmd, "truncate")) {
+			switch_core_file_truncate(fhp, 0);
+		} else if (!strcasecmp(cmd, "restart")) {
+			unsigned int pos = 0;
+			fhp->speed = 0;
+			switch_core_file_seek(fhp, &pos, 0, SEEK_SET);
+			return SWITCH_STATUS_SUCCESS;
+		} else if (!strncasecmp(cmd, "seek", 4)) {
+			unsigned int samps = 0;
+			unsigned int pos = 0;
+			char *p;
+
+			if ((p = strchr(cmd, ':'))) {
+				p++;
+				if (*p == '+' || *p == '-') {
+					int step;
+					int32_t target;
+					if (!(step = atoi(p))) {
+						step = 1000;
+					}
+
+					samps = step * (fhp->samplerate / 1000);
+					target = (int32_t)fhp->pos + samps;
+
+					if (target < 0) {
+						target = 0;
+					}
+
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "seek to position %d\n", target);
+					switch_core_file_seek(fhp, &pos, target, SEEK_SET);
+
+				} else {
+					samps = switch_atoui(p) * (fhp->samplerate / 1000);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "seek to position %d\n", samps);
+					switch_core_file_seek(fhp, &pos, samps, SEEK_SET);
+				}
+			}
+
+			return SWITCH_STATUS_SUCCESS;
+		}
+	}
+
+	if (!strcmp(cmd, "true") || !strcmp(cmd, "undefined")) {
+		return SWITCH_STATUS_SUCCESS;
+	}
+
+	return SWITCH_STATUS_FALSE;
+}
+
+#define FILEMAN_SYNTAX "<id> <cmd>:<val>"
+SWITCH_STANDARD_API(fileman_api)
+{
+	char *mycmd = NULL, *argv[4] = { 0 };
+	int argc = 0;
+
+	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
+		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
+		if (argc >= 2 && !zstr(argv[0])) {
+			char *id = argv[0];
+			char *cmd = argv[1];
+			switch_file_handle_t *fh = NULL;
+			switch_mutex_lock(fileman_globals.mutex);
+			fh = (switch_file_handle_t *)switch_core_hash_find(fileman_globals.hash, id);
+			if (fh) {
+				fileman_process_cmd(cmd, fh);
+				switch_mutex_unlock(fileman_globals.mutex);
+				stream->write_function(stream, "+OK\n");
+			} else {
+				switch_mutex_unlock(fileman_globals.mutex);
+				stream->write_function(stream, "-ERR No file handle!\n");
+			}
+			goto done;
+		}
+	}
+
+	stream->write_function(stream, "-USAGE: %s\n", FILEMAN_SYNTAX);
+
+  done:
+	switch_safe_free(mycmd);
+	return SWITCH_STATUS_SUCCESS;
 }
 
 static char *rayo_supported_formats[] = { "rayo", NULL };
@@ -866,6 +1072,7 @@ static char *fileman_supported_formats[] = { "fileman", NULL };
  */
 switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool)
 {
+	switch_api_interface_t *api_interface;
 	switch_file_interface_t *file_interface;
 
 	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
@@ -896,13 +1103,19 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 	file_interface->file_read = rayo_file_read;
 	file_interface->file_seek = rayo_file_seek;
 
+	switch_mutex_init(&fileman_globals.mutex, SWITCH_MUTEX_NESTED, pool);
+	switch_core_hash_init(&fileman_globals.hash, pool);
+
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = "mod_rayo";
 	file_interface->extens = fileman_supported_formats;
 	file_interface->file_open = fileman_file_open;
 	file_interface->file_close = fileman_file_close;
+	file_interface->file_write = fileman_file_write;
 	file_interface->file_read = fileman_file_read;
 	file_interface->file_seek = fileman_file_seek;
+
+	SWITCH_ADD_API(api_interface, "fileman", "Manage file audio", fileman_api, FILEMAN_SYNTAX);
 
 	return SWITCH_STATUS_SUCCESS;
 }
