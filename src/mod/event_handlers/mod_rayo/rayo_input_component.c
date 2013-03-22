@@ -30,6 +30,7 @@
 #include "rayo_components.h"
 #include "iks_helpers.h"
 #include "srgs.h"
+#include "nlsml.h"
 
 #define MAX_DTMF 64
 
@@ -41,49 +42,7 @@
 #define INPUT_MATCH "match", RAYO_INPUT_COMPLETE_NS
 #define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
 
-/* this is not part of rayo spec */
-#define INPUT_NOINPUT "noinput", RAYO_INPUT_COMPLETE_NS
-#define INPUT_SUCCESS "success", RAYO_INPUT_COMPLETE_NS
-
 #define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
-
-/**
- * Send voice match to client
- * @param component the component
- * @param utterance the match
- */
-static void send_input_component_voice_match(struct rayo_component *component, const char *utterance)
-{
-	iks *presence = rayo_component_create_complete_event(component, INPUT_MATCH);
-	iks *x = iks_find(presence, "complete");
-	iks *success = iks_find(x, "match");
-	iks_insert_attrib(success, "mode", "voice");
-	iks_insert_attrib(success, "confidence", "100");
-	x = iks_insert(success, "utterance");
-	iks_insert_cdata(x, utterance, strlen(utterance));
-	x = iks_insert(success, "interpretation");
-	iks_insert_cdata(x, utterance, strlen(utterance));
-	rayo_component_send_complete_event(component, presence);
-}
-
-/**
- * Send DTMF match to client
- * @param component the component
- * @param utterance the match
- */
-static void send_input_component_dtmf_match(struct rayo_component *component, const char *digits)
-{
-	iks *presence = rayo_component_create_complete_event(component, INPUT_SUCCESS);
-	iks *x = iks_find(presence, "complete");
-	iks *success = iks_find(x, "success");
-	iks_insert_attrib(success, "mode", "dtmf");
-	iks_insert_attrib(success, "confidence", "100");
-	x = iks_insert(success, "utterance");
-	iks_insert_cdata(x, digits, strlen(digits));
-	x = iks_insert(success, "interpretation");
-	iks_insert_cdata(x, digits, strlen(digits));
-	rayo_component_send_complete_event(component, presence);
-}
 
 static ATTRIB_RULE(input_mode)
 {
@@ -163,11 +122,13 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				break;
 			}
 			case SMT_MATCH: {
+				iks *result = nlsml_create_dtmf_match(handler->digits);
 				/* notify of match and remove input handler */
 				handler->done = 1;
 				switch_core_media_bug_remove(session, &handler->bug);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", handler->digits);
-				send_input_component_dtmf_match(handler->component, handler->digits);
+				rayo_component_send_complete_with_metadata(handler->component, INPUT_MATCH, result);
+				iks_delete(result);
 				break;
 			}
 		}
@@ -195,11 +156,11 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 				if (handler->num_digits && handler->inter_digit_timeout > 0 && elapsed_ms > handler->inter_digit_timeout) {
 					handler->done = 1;
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
-					rayo_component_send_complete(handler->component, INPUT_NOMATCH);
+					rayo_component_send_complete(handler->component, INPUT_INTER_DIGIT_TIMEOUT);
 				} else if (!handler->num_digits && handler->initial_timeout > 0 && elapsed_ms > handler->initial_timeout) {
 					handler->done = 1;
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
-					rayo_component_send_complete(handler->component, INPUT_NOINPUT);
+					rayo_component_send_complete(handler->component, INPUT_INITIAL_TIMEOUT);
 				}
 			}
 			switch_core_media_bug_set_read_replace_frame(bug, rframe);
@@ -397,46 +358,26 @@ static void on_detected_speech_event(switch_event_t *event)
 			if (zstr(result)) {
 				rayo_component_send_complete(component, INPUT_NOMATCH);
 			} else {
-				iks *result_xml = NULL;
-				iksparser *parser = iks_dom_new(&result_xml);
-				if (iks_parse(parser, result, strlen(result), 1) == IKS_OK) {
-					if (!strcmp("result", iks_name(result_xml))) {
-						/* TODO pass along NLSML unaltered */
-						iks *interpretation = iks_find(result_xml, "interpretation");
-						if (interpretation) {
-							char *match = iks_find_cdata(interpretation, "input");
-					 		if (!zstr(match)) {
-								send_input_component_voice_match(component, match);
-							} else {
-								iks *input = iks_find(interpretation, "input");
-								if (input) {
-									if (iks_find(input, "nomatch")) {
-										rayo_component_send_complete(component, INPUT_NOMATCH);
-									} else if (iks_find(input, "noinput")) {
-										rayo_component_send_complete(component, INPUT_NOINPUT);
-									} else {
-										switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input> body: %s!\n", result);
-										rayo_component_send_complete(component, INPUT_NOMATCH);
-									}
-								} else {
-									switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <input>: %s!\n", result);
-									rayo_component_send_complete(component, INPUT_NOMATCH);
-								}
-							}
-						} else {
-							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find <interpretation>: %s!\n", result);
-							rayo_component_send_complete(component, INPUT_NOMATCH);
-						}
-					} else {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to find speech result: %s!\n", result);
-						rayo_component_send_complete(component, INPUT_NOMATCH);
-					}
-					iks_delete(result_xml);
-				} else {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to parse speech result: %s!\n", result);
+				enum nlsml_match_type match_type = nlsml_parse(result, uuid);
+				switch (match_type) {
+				case NMT_NOINPUT:
+					rayo_component_send_complete(component, INPUT_INITIAL_TIMEOUT);
+					break;
+				case NMT_MATCH:
+					rayo_component_send_complete_with_metadata_string(component, INPUT_MATCH, result);
+					break;
+				case NMT_BAD_XML:
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to parse NLSML result: %s!\n", result);
 					rayo_component_send_complete(component, INPUT_NOMATCH);
+					break;
+				case NMT_NOMATCH:
+					rayo_component_send_complete(component, INPUT_NOMATCH);
+					break;
+				default:
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_CRIT, "Unknown NLSML match type: %i, %s!\n", match_type, result);
+					rayo_component_send_complete(component, INPUT_NOMATCH);
+					break;
 				}
-				iks_parser_delete(parser);
 			}
 			rayo_component_unlock(component);
 		}
@@ -467,6 +408,7 @@ static void on_detected_speech_event(switch_event_t *event)
 switch_status_t rayo_input_component_load(void)
 {
 	srgs_init();
+	nlsml_init();
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
