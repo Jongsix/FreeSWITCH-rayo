@@ -62,8 +62,6 @@ ELEMENT(RAYO_OUTPUT)
 	ATTRIB(renderer,, any)
 ELEMENT_END
 
-/* adhearsion uses incorrect reason for finish... this is a temporary fix */
-#define OUTPUT_FINISH_AHN "success", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
 
@@ -484,7 +482,7 @@ static switch_status_t rayo_file_close(switch_file_handle_t *handle)
 		if (output->stop) {
 			rayo_component_send_complete(context->component, COMPONENT_COMPLETE_STOP);
 		} else {
-			rayo_component_send_complete(context->component, OUTPUT_FINISH_AHN);
+			rayo_component_send_complete(context->component, OUTPUT_FINISH);
 		}
 		/* TODO hangup / timed out */
 
