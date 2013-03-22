@@ -102,7 +102,6 @@ iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *c
 	return response;
 }
 
-
 /**
  * Create component complete event
  * @param component the component
@@ -142,6 +141,27 @@ void rayo_component_send_complete_with_metadata(struct rayo_component *component
 	rayo_component_send_complete_event(component, rayo_component_create_complete_event_with_metadata(component, reason, reason_namespace, meta));
 }
 
+/**
+ * Send rayo complete
+ */
+void rayo_component_send_complete_with_metadata_string(struct rayo_component *component, const char *reason, const char *reason_namespace, const char *meta)
+{
+	iks *meta_xml = NULL;
+	iksparser *p = iks_dom_new(&meta_xml);
+	if (iks_parse(p, meta, 0, 1) != IKS_OK) {
+		/* unexpected ... */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "%s Failed to parse metadata for complete event: %s\n",
+			rayo_component_get_jid(component), meta);
+		/* send without... */
+		rayo_component_send_complete(component, reason, reason_namespace);
+	} else {
+		rayo_component_send_complete_with_metadata(component, reason, reason_namespace, meta_xml);
+	}
+	if (meta_xml) {
+		iks_delete(meta_xml);
+	}
+	iks_parser_delete(p);
+}
 
 /**
  * Background API data
