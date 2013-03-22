@@ -72,6 +72,7 @@ extern void rayo_component_send_iq_error_detailed(iks *iq, const char *error_nam
 extern void rayo_component_send_complete(struct rayo_component *component, const char *reason, const char *reason_namespace);
 extern void rayo_component_send_complete_event(struct rayo_component *component, iks *response);
 extern void rayo_component_send_complete_with_metadata(struct rayo_component *component, const char *reason, const char *reason_namespace, iks *meta);
+extern void rayo_component_send_complete_with_metadata_string(struct rayo_component *component, const char *reason, const char *reason_namespace, const char *meta);
 
 extern iks *rayo_component_create_complete_event(struct rayo_component *component, const char *reason, const char *reason_namespace);
 extern iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *component, const char *reason, const char *reason_namespace, iks *meta);

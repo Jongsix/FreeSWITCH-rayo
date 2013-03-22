@@ -1,59 +1,9 @@
 
 
 #include <switch.h>
+#include "test.h"
 #include "srgs.h"
 
-
-static void assert_equals(const char *test, const char *expected_str, int expected, int actual, const char *file, int line)
-{
-	if (expected != actual) {
-		printf("TEST\t%s\tFAIL\t%s\t%i\t!=\t%i\t%s:%i\n", test, expected_str, expected, actual, file, line);
-		exit(1);
-	} else {
-		printf("TEST\t%s\tPASS\n", test);
-	}
-}
-
-static void assert_string_equals(const char *test, const char *expected, const char *actual, const char *file, int line)
-{
-	if (!actual || strcmp(expected, actual)) {
-		printf("TEST\t%s\tFAIL\t\t%s\t!=\t%s\t%s:%i\n", test, expected, actual, file, line);
-		exit(1);
-	} else {
-		printf("TEST\t%s\tPASS\n", test);
-	}
-}
-
-static void assert_not_null(const char *test, const void *actual, const char *file, int line)
-{
-	if (!actual) {
-		printf("TEST\t%s\tFAIL\t\t\t\t\t%s:%i\n", test, file, line);
-		exit(1);
-	} else {
-		printf("TEST\t%s\tPASS\n", test);
-	}
-}
-
-static void assert_null(const char *test, const void *actual, const char *file, int line)
-{
-	if (actual) {
-		printf("TEST\t%s\tFAIL\t\t\t\t\t%s:%i\n", test, file, line);
-		exit(1);
-	} else {
-		printf("TEST\t%s\tPASS\n", test);
-	}
-}
-
-#define ASSERT_EQUALS(expected, actual) assert_equals(#actual, #expected, expected, actual, __FILE__, __LINE__)
-#define ASSERT_STRING_EQUALS(expected, actual) assert_string_equals(#actual, expected, actual, __FILE__, __LINE__)
-#define ASSERT_NOT_NULL(actual) assert_not_null(#actual " not null", actual, __FILE__, __LINE__)
-#define ASSERT_NULL(actual) assert_null(#actual " is null", actual, __FILE__, __LINE__)
-
-#define SKIP_ASSERT_EQUALS(expected, actual) if (0) { ASSERT_EQUALS(expected, actual); }
-
-#define TEST(name) printf("TEST BEGIN\t" #name "\n"); name(); printf("TEST END\t"#name "\tPASS\n");
-
-#define SKIP_TEST(name) if (0) { TEST(name) };
 
 static const char *adhearsion_ask_grammar =
 	"<grammar xmlns=\"http://www.w3.org/2001/06/grammar\" version=\"1.0\" xml:lang=\"en-US\" mode=\"dtmf\" root=\"inputdigits\">"
@@ -838,7 +788,7 @@ static void test_w3c_example_grammar(void)
 int main(int argc, char **argv)
 {
 	const char *err;
-	switch_core_init(0, SWITCH_TRUE, &err);
+	TEST_INIT
 	srgs_init();
 	TEST(test_parse_grammar);
 	TEST(test_match_adhearsion_ask_grammar);

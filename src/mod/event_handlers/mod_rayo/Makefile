@@ -8,6 +8,7 @@ LOCAL_CFLAGS += -I$(BASE)/libs/iksemel/include -I$(BASE)/libs/pcre
 LOCAL_OBJS= $(IKS_LA) \
 	$(PCRE_LA) \
 	iks_helpers.o \
+	nlsml.o \
 	rayo_components.o \
 	rayo_input_component.o \
 	rayo_output_component.o \
@@ -17,6 +18,7 @@ LOCAL_OBJS= $(IKS_LA) \
 	srgs.o
 LOCAL_SOURCES=	\
 	iks_helpers.c \
+	nlsml.c \
 	rayo_components.c \
 	rayo_input_component.c \
 	rayo_output_component.c \
