@@ -2109,14 +2109,9 @@ static void on_iq_set_xmpp_bind(struct rayo_session *rsession, iks *node)
 	switch(rsession->state) {
 	case SS_AUTHENTICATED: {
 		iks *bind = iks_find(node, "bind");
-		iks *resource = iks_find(bind, "resource");
 		iks *x;
-		char *resource_id = NULL;
-
 		/* get optional client resource ID */
-		if (resource) {
-			resource_id = iks_cdata(iks_child(resource));
-		}
+		char *resource_id = iks_find_cdata(bind, "resource");
 
 		/* generate resource ID for client if not already set */
 		if (zstr(resource_id)) {
@@ -2302,7 +2297,7 @@ static int on_iq(void *user_data, ikspak *pak)
 	struct rayo_actor *actor = NULL;
 	struct rayo_session *rsession = (struct rayo_session *)user_data;
 	iks *iq = pak->x;
-	iks *command = iks_child(iq);
+	iks *command = iks_first_tag(iq);
 	const char *iq_type = iks_find_attrib_soft(iq, "type");
 	const char *to = iks_find_attrib_soft(iq, "to");
 	const char *from = iks_find_attrib_soft(iq, "from");
