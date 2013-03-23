@@ -32,8 +32,6 @@
 
 #include "nlsml.h"
 
-#define MAX_RECURSION 100
-
 struct nlsml_parser;
 
 /** function to handle tag attributes */
