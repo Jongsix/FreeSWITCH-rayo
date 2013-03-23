@@ -352,13 +352,6 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 
 	if (!context->cur_doc) {
 		context->cur_doc = iks_find(output->document, "document");
-		/* TODO remove this IF block once adhearsion is fixed to use <document> */
-		if (!context->cur_doc) {
-			iks *speak = iks_find(output->document, "speak");
-			if (speak) {
-				context->cur_doc = output->document;
-			}
-		}
 		if (!context->cur_doc) {
 			iks_delete(output->document);
 			output->document = NULL;
@@ -395,13 +388,19 @@ static switch_status_t next_file(switch_file_handle_t *handle)
 		context->ssml = NULL;
  		speak = iks_find(context->cur_doc, "speak");
 		if (speak) {
+			/* <speak> is child node */
 			char *ssml_str = iks_string(NULL, speak);
 			context->ssml = switch_mprintf("ssml://%s", ssml_str);
 			iks_free(ssml_str);
 		} else if (iks_has_children(context->cur_doc)) {
-			const char *ssml_str = iks_cdata(iks_child(context->cur_doc));
+			/* check if <speak> is in CDATA */
+			const char *ssml_str = NULL;
+			iks *ssml = iks_child(context->cur_doc);
+			if (ssml && iks_type(ssml) == IKS_CDATA) {
+				ssml_str = iks_cdata(ssml);
+			}
 			if (zstr(ssml_str)) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Empty <speak> CDATA\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing <document> CDATA\n");
 				return SWITCH_STATUS_FALSE;
 			}
 			context->ssml = switch_mprintf("ssml://%s", ssml_str);
