@@ -277,7 +277,7 @@ static int start_call_record(switch_core_session_t *session, struct rayo_compone
 static iks *start_call_record_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
 	struct rayo_component *component = NULL;
-	iks *record = iks_child(iq);
+	iks *record = iks_find(iq, "record");
 
 	component = record_component_create(rayo_call_get_actor(call), iks_find_attrib(iq, "from"), record);
 	if (!component) {
@@ -399,7 +399,7 @@ static int start_mixer_record(struct rayo_component *component)
 static iks *start_mixer_record_component(struct rayo_mixer *mixer, iks *iq)
 {
 	struct rayo_component *component = NULL;
-	iks *record = iks_child(iq);
+	iks *record = iks_find(iq, "record");
 
 	component = record_component_create(rayo_mixer_get_actor(mixer), iks_find_attrib(iq, "from"), record);
 	if (!component) {
