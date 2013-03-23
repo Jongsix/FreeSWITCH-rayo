@@ -28,7 +28,7 @@
  *
  */
 #include "rayo_components.h"
-#include "iks_helpers.h"
+#include "rayo_elements.h"
 
 /* TODO timeouts / durations are affected by pause/resume */
 
@@ -68,31 +68,6 @@ struct record_component {
 #define RECORD_COMPLETE_MAX_DURATION "max-duration", RAYO_RECORD_COMPLETE_NS
 #define RECORD_COMPLETE_INITIAL_TIMEOUT "initial-timeout", RAYO_RECORD_COMPLETE_NS
 #define RECORD_COMPLETE_FINAL_TIMEOUT "final-timeout", RAYO_RECORD_COMPLETE_NS
-
-/**
- * Validate <record direction="">
- */
-static ATTRIB_RULE(record_direction)
-{
-	return (!strcmp("duplex", value) ||
-		!strcmp("send", value) ||
-		!strcmp("recv", value));
-}
-
-/**
- * <record> component validation
- */
-ELEMENT(RAYO_RECORD)
-	ATTRIB(format, mp3, any)
-	ATTRIB(start-beep, false, bool)
-	ATTRIB(stop-beep, false, bool)
-	ATTRIB(start-paused, false, bool)
-	ATTRIB(max-duration, -1, positive_or_neg_one)
-	ATTRIB(initial-timeout, -1, positive_or_neg_one)
-	ATTRIB(final-timeout, -1, positive_or_neg_one)
-	ATTRIB(direction, duplex, record_direction)
-	ATTRIB(mix, false, bool)
-ELEMENT_END
 
 /**
  * Notify completion of record component

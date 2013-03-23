@@ -280,92 +280,26 @@ iks *iks_insert_attrib_printf(iks *xml, const char *name, const char *fmt, ...)
 }
 
 /**
- * Validate boolean
- * @param value
- * @return SWTICH_TRUE if boolean
+ * @param value to match
+ * @param rule to check
+ * @return true if value is one of the comma-separated values in rule
  */
-int iks_attrib_is_bool(const char *value)
+int value_matches(const char *value, const char *rule)
 {
-	if (!zstr(value) && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
-		return SWITCH_TRUE;
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Validate integer
- * @param value
- * @return SWTICH_TRUE if not negative
- */
-int iks_attrib_is_not_negative(const char *value)
-{
-	if (!zstr(value) && switch_is_number(value)) {
-		int value_i = atoi(value);
-		if (value_i >= 0) {
-			return SWITCH_TRUE;
+	if (rule && *rule && value && *value && !strchr(value, ',')) {
+		const char *begin = strstr(rule, value);
+		const char *end = begin + strlen(value);
+		if (!begin) {
+			return 0;
 		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Validate integer
- * @param value
- * @return SWTICH_TRUE if positive
- */
-int iks_attrib_is_positive(const char *value)
-{
-	if (!zstr(value) && switch_is_number(value)) {
-		int value_i = atoi(value);
-		if (value_i > 0) {
-			return SWITCH_TRUE;
+		if ((begin == rule || *(begin - 1) == ',') && (*end == ',' || *end == '\0')) {
+				return 1;
 		}
+		/* substring matched... try farther down the string */
+		return value_matches(value, end);
 	}
-	return SWITCH_FALSE;
+	return 0;
 }
-
-/**
- * Validate integer
- * @param value
- * @return SWTICH_TRUE if positive or -1
- */
-int iks_attrib_is_positive_or_neg_one(const char *value)
-{
-	if (!zstr(value) && switch_is_number(value)) {
-		int value_i = atoi(value);
-		if (value_i == -1 || value_i > 0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
-/**
- * Validate string
- * @param value
- * @return SWTICH_TRUE
- */
-int iks_attrib_is_any(const char *value)
-{
-	return SWITCH_TRUE;
-}
-
-/**
- * Validate decimal
- * @param value
- * @return SWTICH_TRUE if 0.0 <= x <= 1.0
- */
-int iks_attrib_is_decimal_between_zero_and_one(const char *value)
-{
-	if (!zstr(value) && switch_is_number(value)) {
-		double value_d = atof(value);
-		if (value_d >= 0.0 || value_d <= 1.0) {
-			return SWITCH_TRUE;
-		}
-	}
-	return SWITCH_FALSE;
-}
-
 
 /* For Emacs:
  * Local Variables:

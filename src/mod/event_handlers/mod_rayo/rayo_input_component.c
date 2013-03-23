@@ -28,13 +28,12 @@
  *
  */
 #include "rayo_components.h"
-#include "iks_helpers.h"
+#include "rayo_elements.h"
 #include "srgs.h"
 #include "nlsml.h"
 
 #define MAX_DTMF 64
 
-/* not yet supported by adhearsion */
 #define INPUT_INITIAL_TIMEOUT "initial-timeout", RAYO_INPUT_COMPLETE_NS
 #define INPUT_INTER_DIGIT_TIMEOUT "inter-digit-timeout", RAYO_INPUT_COMPLETE_NS
 #define INPUT_MAX_SILENCE "max-silence", RAYO_INPUT_COMPLETE_NS
@@ -43,25 +42,6 @@
 #define INPUT_NOMATCH "nomatch", RAYO_INPUT_COMPLETE_NS
 
 #define RAYO_INPUT_COMPONENT_PRIVATE_VAR "__rayo_input_component"
-
-static ATTRIB_RULE(input_mode)
-{
-	return !strcasecmp("any", value) || !strcasecmp("dtmf", value) || !strcasecmp("speech", value);
-}
-
-/**
- * <input> component validation
- */
-ELEMENT(RAYO_INPUT)
-	ATTRIB(mode, any, input_mode)
-	ATTRIB(terminator,, any)
-	ATTRIB(recognizer, en-US, any)
-	ATTRIB(initial-timeout, -1, positive_or_neg_one)
-	ATTRIB(inter-digit-timeout, -1, positive_or_neg_one)
-	ATTRIB(sensitivity, 0.5, decimal_between_zero_and_one)
-	ATTRIB(min-confidence, 0, decimal_between_zero_and_one)
-	ATTRIB(max-silence, -1, positive_or_neg_one)
-ELEMENT_END
 
 /**
  * Current digit collection state
@@ -196,7 +176,7 @@ char *create_input_component_id(const char *uuid)
 static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
 	char *component_id = NULL;
-	iks *input = iks_child(iq);
+	iks *input = iks_find(iq, "input");
 	iks *grammar = NULL;
 	char *content_type = NULL;
 	char *srgs = NULL;
@@ -314,7 +294,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 /**
  * Stop execution of input component
  */
-static iks *stop_input_component(struct rayo_component *component, iks *iq)
+static iks *stop_call_input_component(struct rayo_component *component, iks *iq)
 {
 	struct input_handler *handler = (struct input_handler *)rayo_component_get_data(component);
 
@@ -402,6 +382,45 @@ static void on_detected_speech_event(switch_event_t *event)
 }
 
 /**
+ * Start execution of prompt component
+ */
+static iks *start_call_prompt_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+{
+	iks *prompt = iks_find(iq, "prompt");
+	iks *input;
+	iks *output;
+
+	/* validate prompt attributes */
+	if (!VALIDATE_RAYO_PROMPT(prompt)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad prompt attrib\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <prompt> attrib value");
+	}
+
+	input = iks_find(prompt, "input");
+	output = iks_find(prompt, "output");
+
+	if (!VALIDATE_RAYO_INPUT(input)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad input attrib\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <input> attrib value");
+	}
+
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad output attrib\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <output> attrib value");
+	}
+
+	return NULL;
+}
+
+/**
+ * Stop execution of prompt component
+ */
+static iks *stop_call_prompt_component(struct rayo_component *component, iks *iq)
+{
+	return NULL;
+}
+
+/**
  * Initialize input component
  * @return SWITCH_STATUS_SUCCESS if successful
  */
@@ -409,9 +428,15 @@ switch_status_t rayo_input_component_load(void)
 {
 	srgs_init();
 	nlsml_init();
+
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
-	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_input_component);
+	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_call_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
+
+	/* Prompt is a special <input> linked to <output> */
+	rayo_call_command_handler_add("set:"RAYO_PROMPT_NS":prompt", start_call_prompt_component);
+	rayo_call_component_command_handler_add("prompt", "set:"RAYO_EXT_NS":stop", stop_call_prompt_component);
+
 	return SWITCH_STATUS_SUCCESS;
 }
 
