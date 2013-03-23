@@ -126,6 +126,8 @@ union ref_value {
  * A node in the SRGS parse tree
  */
 struct srgs_node {
+	/** Name of node */
+	const char *name;
 	/** Type of node */
 	enum srgs_node_type type;
 	/** True if node has been inspected for loops */
@@ -236,78 +238,36 @@ static enum srgs_node_type string_to_node_type(char *name)
 }
 
 /**
- * Convert node type to entity name
- * @param type of node
- * @return the name or ANY
- */
-static const char *node_type_to_string(enum srgs_node_type type)
-{
-	switch (type) {
-		case SNT_GRAMMAR: return "grammar";
-		case SNT_RULE: return "rule";
-		case SNT_ONE_OF: return "one-of";
-		case SNT_ITEM: return "item";
-		case SNT_UNRESOLVED_REF:
-		case SNT_REF: return "ruleref";
-		case SNT_STRING: return "string";
-		case SNT_TAG: return "tag";
-		case SNT_LEXICON: return "lexicon";
-		case SNT_EXAMPLE: return "example";
-		case SNT_TOKEN: return "token";
-		case SNT_META: return "meta";
-		case SNT_METADATA: return "metadata";
-		case SNT_ANY: return "ANY";
-	}
-	return "ANY";
-}
-
-/**
  * Log node
  */
 static void sn_log_node_open(struct srgs_node *node)
 {
 	switch (node->type) {
+		case SNT_ANY:
+		case SNT_METADATA:
+		case SNT_META:
+		case SNT_TOKEN:
+		case SNT_EXAMPLE:
+		case SNT_LEXICON:
+		case SNT_TAG:
+		case SNT_ONE_OF:
 		case SNT_GRAMMAR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<grammar>\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<%s>\n", node->name);
 			return;
 		case SNT_RULE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
-			return;
-		case SNT_ONE_OF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<one-of>\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
 			return;
 		case SNT_ITEM:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<item repeat='%i'>\n", node->value.item.repeat_min);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<item repeat='%i'>\n", node->value.item.repeat_min);
 			return;
 		case SNT_UNRESOLVED_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
 			return;
 		case SNT_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
 			return;
 		case SNT_STRING:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%s\n", node->value.string);
-			return;
-		case SNT_TAG:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<tag>\n");
-			return;
-		case SNT_LEXICON:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<lexicon>\n");
-			return;
-		case SNT_EXAMPLE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<example>\n");
-			return;
-		case SNT_TOKEN:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<token>\n");
-			return;
-		case SNT_META:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<meta>\n");
-			return;
-		case SNT_METADATA:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<metadata>\n");
-			return;
-		case SNT_ANY:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ANY>\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", node->value.string);
 			return;
 	}
 }
@@ -319,45 +279,23 @@ static void sn_log_node_close(struct srgs_node *node)
 {
 	switch (node->type) {
 		case SNT_GRAMMAR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</grammar>\n");
-			return;
 		case SNT_RULE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</rule>\n");
-			return;
 		case SNT_ONE_OF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</one-of>\n");
-			return;
 		case SNT_ITEM:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</item>\n");
+		case SNT_REF:
+		case SNT_TAG:
+		case SNT_LEXICON:
+		case SNT_EXAMPLE:
+		case SNT_TOKEN:
+		case SNT_META:
+		case SNT_METADATA:
+		case SNT_ANY:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "</%s>\n", node->name);
 			return;
 		case SNT_UNRESOLVED_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref (unresolved)>\n");
-			return;
-		case SNT_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref>\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "</ruleref (unresolved)>\n");
 			return;
 		case SNT_STRING:
-			return;
-		case SNT_TAG:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</tag>\n");
-			return;
-		case SNT_LEXICON:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</lexicon>\n");
-			return;
-		case SNT_EXAMPLE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</example>\n");
-			return;
-		case SNT_TOKEN:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</token>\n");
-			return;
-		case SNT_META:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</meta>\n");
-			return;
-		case SNT_METADATA:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</metadata>\n");
-			return;
-		case SNT_ANY:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ANY>\n");
 			return;
 	}
 }
@@ -365,12 +303,14 @@ static void sn_log_node_close(struct srgs_node *node)
 /**
  * Create a new node
  * @param pool to use
+ * @param name of node
  * @param type of node
  * @return the node
  */
-static struct srgs_node *sn_new(switch_memory_pool_t *pool, enum srgs_node_type type)
+static struct srgs_node *sn_new(switch_memory_pool_t *pool, const char *name, enum srgs_node_type type)
 {
 	struct srgs_node *node = switch_core_alloc(pool, sizeof(*node));
+	node->name = switch_core_strdup(pool, name);
 	node->type = type;
 	return node;
 }
@@ -391,13 +331,14 @@ static struct srgs_node *sn_find_last_sibling(struct srgs_node *node)
  * Add child node
  * @param pool to use
  * @param parent node to add child to
+ * @param name the child node name
  * @param type the child node type
  * @return the child node
  */
-static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node *parent, enum srgs_node_type type)
+static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node *parent, const char *name, enum srgs_node_type type)
 {
 	struct srgs_node *sibling = parent ? sn_find_last_sibling(parent->child) : NULL;
-	struct srgs_node *child = sn_new(pool, type);
+	struct srgs_node *child = sn_new(pool, name, type);
 	if (parent) {
 		parent->num_children++;
 		child->parent = parent;
@@ -419,7 +360,7 @@ static struct srgs_node *sn_insert(switch_memory_pool_t *pool, struct srgs_node 
  */
 static struct srgs_node *sn_insert_string(switch_memory_pool_t *pool, struct srgs_node *parent, char *string)
 {
-	struct srgs_node *child = sn_insert(pool, parent, SNT_STRING);
+	struct srgs_node *child = sn_insert(pool, parent, string, SNT_STRING);
 	child->value.string = string;
 	return child;
 }
@@ -478,28 +419,23 @@ static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_
  */
 static int process_tag(struct srgs_parser *parser, const char *name, char **atts)
 {
-	struct tag_def *def = switch_core_hash_find(globals.tag_defs, name);
-	if (def) {
-		parser->cur->tag_def = def;
-		if (def->is_root && parser->cur->parent == NULL) {
-			/* no parent for ROOT tags */
-			return def->attribs_fn(parser, atts);
-		} else if (!def->is_root && parser->cur->parent) {
-			/* check if this child is allowed by parent node */
-			struct tag_def *parent_def = parser->cur->parent->tag_def;
-			if (switch_core_hash_find(parent_def->children_tags, "ANY") ||
-				switch_core_hash_find(parent_def->children_tags, name)) {
-				return def->attribs_fn(parser, atts);
-			} else {
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Child element without parent definition <%s>\n", name);
-			}
-		} else if (def->is_root && parser->cur->parent != NULL) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Root element with parent <%s>\n", name);
+	struct srgs_node *cur = parser->cur;
+	if (cur->tag_def->is_root && cur->parent == NULL) {
+		/* no parent for ROOT tags */
+		return cur->tag_def->attribs_fn(parser, atts);
+	} else if (!cur->tag_def->is_root && cur->parent) {
+		/* check if this child is allowed by parent node */
+		struct tag_def *parent_def = cur->parent->tag_def;
+		if (switch_core_hash_find(parent_def->children_tags, "ANY") ||
+			switch_core_hash_find(parent_def->children_tags, name)) {
+			return cur->tag_def->attribs_fn(parser, atts);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Child element without parent <%s>\n", name);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> cannot be a child of <%s>\n", name, cur->parent->name);
 		}
+	} else if (cur->tag_def->is_root && cur->parent != NULL) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> must be the root element\n", name);
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unknown element <%s>\n", name);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> cannot be a root element\n", name);
 	}
 	return IKS_BADXML;
 }
@@ -539,7 +475,7 @@ static int process_cdata_bad(struct srgs_parser *parser, char *data, size_t len)
 	int i;
 	for (i = 0; i < len; i++) {
 		if (isgraph(data[i])) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", node_type_to_string(parser->cur->type));
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", parser->cur->name);
 			return IKS_BADXML;
 		}
 	}
@@ -750,7 +686,11 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 
 	if (type == IKS_OPEN || type == IKS_SINGLE) {
 		enum srgs_node_type ntype = string_to_node_type(name);
-		parser->cur = sn_insert(parser->pool, parser->cur, ntype);
+		parser->cur = sn_insert(parser->pool, parser->cur, name, ntype);
+		parser->cur->tag_def = switch_core_hash_find(globals.tag_defs, name);
+		if (!parser->cur->tag_def) {
+			parser->cur->tag_def = switch_core_hash_find(globals.tag_defs, "ANY");
+		}
 		result = process_tag(parser, name, atts);
 		sn_log_node_open(parser->cur);
 	}
@@ -820,11 +760,10 @@ static int cdata_hook(void *user_data, char *data, size_t len)
 		return IKS_BADXML;
 	}
 	if (parser->cur) {
-		struct tag_def *def = switch_core_hash_find(globals.tag_defs, node_type_to_string(parser->cur->type));
-		if (def) {
-			return def->cdata_fn(parser, data, len);
+		if (parser->cur->tag_def) {
+			return parser->cur->tag_def->cdata_fn(parser, data, len);
 		}
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing definition for <%s>\n", node_type_to_string(parser->cur->type));
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing definition for <%s>\n", parser->cur->name);
 		return IKS_BADXML;
 	}
 	return IKS_OK;
@@ -1531,7 +1470,6 @@ int srgs_init(void)
 	switch_core_hash_init(&globals.tag_defs, globals.pool);
 
 	add_root_tag_def("grammar", process_grammar, process_cdata_bad, "meta,metadata,lexicon,tag,rule");
-	add_tag_def("ANY", process_attribs_ignore, process_cdata_ignore, "ANY");
 	add_tag_def("ruleref", process_ruleref, process_cdata_bad, "");
 	add_tag_def("token", process_attribs_ignore, process_cdata_ignore, "");
 	add_tag_def("tag", process_attribs_ignore, process_cdata_ignore, "");
@@ -1542,6 +1480,7 @@ int srgs_init(void)
 	add_tag_def("lexicon", process_attribs_ignore, process_cdata_bad, "");
 	add_tag_def("meta", process_attribs_ignore, process_cdata_bad, "");
 	add_tag_def("metadata", process_attribs_ignore, process_cdata_ignore, "ANY");
+	add_tag_def("ANY", process_attribs_ignore, process_cdata_ignore, "ANY");
 
 	return 1;
 }
