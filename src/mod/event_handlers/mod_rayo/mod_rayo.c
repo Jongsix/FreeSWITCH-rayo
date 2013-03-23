@@ -1472,8 +1472,8 @@ static iks *on_rayo_redirect(struct rayo_call *call, switch_core_session_t *sess
 static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *session, iks *node)
 {
 	iks *response = NULL;
-	iks *hangup = iks_child(node);
-	iks *reason = iks_child(hangup);
+	iks *hangup = iks_first_tag(node);
+	iks *reason = iks_first_tag(hangup);
 	int hangup_cause = RAYO_CAUSE_HANGUP;
 
 	/* get hangup cause */
@@ -1962,11 +1962,10 @@ static int on_presence(void *user_data, ikspak *pak)
 
 	/* figure out if online/offline */
 	if (zstr(type)) {
-		iks *show = iks_find(node, "show");
-		if (show) {
-			/* <presence><show>chat</show></presence> */
-			char *status_str = iks_cdata(iks_child(show));
-			if (!zstr(status_str) && !strcmp("chat", status_str)) {
+		/* <presence><show>chat</show></presence> */
+		char *status_str = iks_find_cdata(node, "show");
+		if (!zstr(status_str)) {
+			if (!strcmp("chat", status_str)) {
 				status = PS_ONLINE;
 			} else {
 				status = PS_OFFLINE;
@@ -2234,13 +2233,14 @@ static int rayo_send_header_auth(struct rayo_session *rsession)
 static void on_auth(struct rayo_session *rsession, iks *node)
 {
 	const char *xmlns, *mechanism;
+	iks *auth_body;
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, auth, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
 
 	/* wrong state for authentication */
 	if (rsession->state != SS_NEW) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth UNEXPECTED, state = %s\n", rsession->id, rayo_session_state_to_string(rsession->state));
-		/* TODO on_auth unexpected error */
+		/* on_auth unexpected error */
 		rsession->state = SS_ERROR;
 		return;
 	}
@@ -2249,7 +2249,7 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 	xmlns = iks_find_attrib_soft(node, "xmlns");
 	if (strcmp(IKS_NS_XMPP_SASL, xmlns)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported namespace: %s!\n", rsession->id, rayo_session_state_to_string(rsession->state), xmlns);
-		/* TODO on_auth namespace error */
+		/* on_auth namespace error */
 		rsession->state = SS_ERROR;
 		return;
 	}
@@ -2263,9 +2263,9 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 		return;
 	}
 
-	{
+	if ((auth_body = iks_child(node)) && iks_type(auth_body) == IKS_CDATA) {
 		/* get user and password from auth */
-		char *message = iks_cdata(iks_child(node));
+		char *message = iks_cdata(auth_body);
 		char *authzid = NULL, *authcid, *password;
 		/* TODO use library for SASL! */
 		parse_plain_auth_message(message, &authzid, &authcid, &password);
@@ -2284,6 +2284,9 @@ static void on_auth(struct rayo_session *rsession, iks *node)
 			rsession->state = SS_ERROR;
 		}
 		switch_safe_free(authzid);
+	} else {
+		/* missing message */
+		rsession->state = SS_ERROR;
 	}
 }
 
