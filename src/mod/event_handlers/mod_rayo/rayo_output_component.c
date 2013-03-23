@@ -28,7 +28,7 @@
  *
  */
 #include "rayo_components.h"
-#include "iks_helpers.h"
+#include "rayo_elements.h"
 
 /**
  * An output component
@@ -49,18 +49,6 @@ struct output_component {
 };
 
 #define OUTPUT_COMPONENT(x) ((struct output_component *)(rayo_component_get_data(x)))
-
-/**
- * <output> component validation
- */
-ELEMENT(RAYO_OUTPUT)
-	ATTRIB(start-offset, 0, not_negative)
-	ATTRIB(start-paused, false, bool)
-	ATTRIB(repeat-interval, 0, not_negative)
-	ATTRIB(repeat-times, 1, positive)
-	ATTRIB(max-time, -1, positive_or_neg_one)
-	ATTRIB(renderer,, any)
-ELEMENT_END
 
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
@@ -278,16 +266,6 @@ static iks *volume_down_output_component(struct rayo_component *component, iks *
 	switch_safe_free(command);
 	return iks_new_iq_result(iq);
 }
-
-ATTRIB_RULE(seek_direction)
-{
-	return !strcmp("forward", value) || !strcmp("back", value);
-}
-
-ELEMENT(RAYO_OUTPUT_SEEK)
-	ATTRIB(direction,, seek_direction)
-	ATTRIB(amount,-1, positive)
-ELEMENT_END
 
 /**
  * Seek output component
