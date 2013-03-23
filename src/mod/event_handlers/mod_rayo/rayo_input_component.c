@@ -69,6 +69,10 @@ struct input_handler {
 	int done;
 	/** media bug to monitor frames / control input lifecycle */
 	switch_media_bug_t *bug;
+	/** true if input barges in on output */
+	int barge_in;
+	/** optional output linked to this input */
+	const char *output_file;
 };
 
 /**
@@ -165,18 +169,17 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 	return SWITCH_TRUE;
 }
 
-char *create_input_component_id(const char *uuid)
-{
-	return switch_mprintf("%s-input", uuid);
-}
-
 /**
- * Start execution of input component
+ * Start call input for the given component
+ * @param component the input or prompt component
+ * @param session the session
+ * @param input the input request
+ * @param iq the original input/prompt request
+ * @param output_file optional output file linked to this input
+ * @param barge_in true if start of input stops output
  */
-static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static iks *start_call_input(struct rayo_component *component, switch_core_session_t *session, iks *input, iks *iq, const char *output_file, int barge_in)
 {
-	char *component_id = NULL;
-	iks *input = iks_find(iq, "input");
 	iks *grammar = NULL;
 	char *content_type = NULL;
 	char *srgs = NULL;
@@ -186,6 +189,8 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!VALIDATE_RAYO_INPUT(input)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad input attrib\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <input> attrib value");
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
 		return NULL;
 	}
 
@@ -194,6 +199,8 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!grammar) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <input><grammar>\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <grammar>");
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
 		return NULL;
 	}
 
@@ -202,6 +209,8 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (!zstr(content_type) && strcmp("application/srgs+xml", content_type)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Unsupported content type\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Unsupported content type");
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
 		return NULL;
 	}
 
@@ -210,6 +219,8 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	if (zstr(srgs)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Grammar body is missing\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Grammar body is missing");
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
 		return NULL;
 	}
 	//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Grammar = %s\n", srgs);
@@ -222,23 +233,7 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		handler->parser = srgs_parser_new(switch_core_session_get_uuid(session));
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
 	}
-
-	/* parse the grammar */
-	if (!srgs_parse(handler->parser, srgs)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
-		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
-		return NULL;
-	}
-
-	/* create component */
-	component_id = create_input_component_id(switch_core_session_get_uuid(session));
-	handler->component = rayo_component_create("input", component_id, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
-	switch_safe_free(component_id);
-	if (!handler->component) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create input component!\n");
-		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create input component!");
-		return NULL;
-	}
+	handler->component = component;
 	rayo_component_set_data(handler->component, handler);
 	handler->num_digits = 0;
 	handler->digits[0] = '\0';
@@ -246,6 +241,17 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	handler->done = 0;
 	handler->speech_mode = 0;
 	handler->bug = NULL;
+	handler->output_file = output_file;
+	handler->barge_in = barge_in;
+
+	/* parse the grammar */
+	if (!srgs_parse(handler->parser, srgs)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
+		rayo_component_unlock(component);
+		rayo_component_destroy(component);
+		return NULL;
+	}
 
 	/* is this voice or dtmf srgs grammar? */
 	if (!strcasecmp("dtmf", iks_find_attrib_soft(input, "mode"))) {
@@ -277,8 +283,9 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 		rayo_component_send_start(handler->component, iq);
 
 		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
-		grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=true,confidence-threshold=%d}%s",
+		grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=%s,confidence-threshold=%d}%s",
 			iks_find_attrib(input, "initial-timeout"), iks_find_attrib(input, "max-silence"),
+			zstr(handler->output_file) ? "true" : "false",
 			(int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0), jsgf_path);
 		/* start speech detection */
 		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
@@ -289,6 +296,27 @@ static iks *start_call_input_component(struct rayo_call *call, switch_core_sessi
 	}
 
 	return NULL;
+}
+
+/**
+ * Start execution of input component
+ */
+static iks *start_call_input_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+{
+	char *component_id = switch_mprintf("%s-input", switch_core_session_get_uuid(session));
+	struct rayo_component *component = NULL;
+
+	/* create component */
+	component = rayo_component_create("input", component_id, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
+	switch_safe_free(component_id);
+	if (!component) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create input component!\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create input component!");
+		return NULL;
+	}
+
+	/* start input */
+	return start_call_input(component, session, iks_find(iq, "input"), iq, NULL, 0);
 }
 
 /**
@@ -330,7 +358,7 @@ static void on_detected_speech_event(switch_event_t *event)
 	}
 	if (!strcasecmp("detected-speech", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
-		char *component_id = create_input_component_id(uuid);
+		char *component_id = switch_mprintf("%s-input", uuid);
 		struct rayo_component *component = rayo_component_locate(component_id);
 		switch_safe_free(component_id);
 		if (component) {
@@ -363,7 +391,7 @@ static void on_detected_speech_event(switch_event_t *event)
 		}
 	} else if (!strcasecmp("closed", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
-		char *component_id = create_input_component_id(uuid);
+		char *component_id = switch_mprintf("%s-input", uuid);
 		struct rayo_component *component = rayo_component_locate(component_id);
 		switch_safe_free(component_id);
 		if (component) {
@@ -386,30 +414,53 @@ static void on_detected_speech_event(switch_event_t *event)
  */
 static iks *start_call_prompt_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
 {
+	char *component_id = switch_mprintf("%s-input", switch_core_session_get_uuid(session));
+	struct rayo_component *component = NULL;
 	iks *prompt = iks_find(iq, "prompt");
 	iks *input;
 	iks *output;
 
-	/* validate prompt attributes */
 	if (!VALIDATE_RAYO_PROMPT(prompt)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad prompt attrib\n");
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad <prompt> attrib\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <prompt> attrib value");
+		return NULL;
 	}
 
-	input = iks_find(prompt, "input");
 	output = iks_find(prompt, "output");
-
-	if (!VALIDATE_RAYO_INPUT(input)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad input attrib\n");
-		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <input> attrib value");
+	if (!output) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <output>\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <output>");
+		return NULL;
 	}
 
 	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad output attrib\n");
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad <output> attrib\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <output> attrib value");
+		return NULL;
 	}
 
-	return NULL;
+	input = iks_find(prompt, "input");
+	if (!input) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <input>\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <input>");
+		return NULL;
+	}
+
+	/* create component */
+	component = rayo_component_create("prompt", component_id, rayo_call_get_actor(call), iks_find_attrib(iq, "from"));
+	switch_safe_free(component_id);
+	if (!component) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to create prompt component!\n");
+		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to create prompt component!");
+		return NULL;
+	}
+
+	/* TODO get filename and barge_in value */
+
+	/* start input */
+	return start_call_input(component, session, iks_find(iq, "input"), iq, NULL, 0);
+
+	/* TODO start output */
 }
 
 /**
