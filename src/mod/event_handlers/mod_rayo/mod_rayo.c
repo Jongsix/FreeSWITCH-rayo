@@ -32,7 +32,7 @@
 
 #include "mod_rayo.h"
 #include "rayo_components.h"
-#include "iks_helpers.h"
+#include "rayo_elements.h"
 #include "sasl.h"
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown);
@@ -1506,28 +1506,6 @@ static iks *on_rayo_hangup(struct rayo_call *call, switch_core_session_t *sessio
 
 	return response;
 }
-
-static ATTRIB_RULE(join_direction)
-{
-	/* for now, only allow duplex
-	return !strcmp("send", value) || !strcmp("recv", value) || !strcmp("duplex", value); */
-	return !strcmp("duplex", value);
-}
-
-static ATTRIB_RULE(join_media)
-{
-	return !strcmp("bridge", value) || !strcmp("direct", value);
-}
-
-/**
- * <join> command validation
- */
-ELEMENT(RAYO_JOIN)
-	ATTRIB(direction, duplex, join_direction)
-	ATTRIB(media, bridge, join_media)
-	ATTRIB(call-id,, any)
-	ATTRIB(mixer-name,, any)
-ELEMENT_END
 
 /**
  * Join calls together

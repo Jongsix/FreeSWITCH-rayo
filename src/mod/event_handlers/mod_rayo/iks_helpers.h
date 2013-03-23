@@ -78,18 +78,102 @@ extern iks *iks_insert_attrib_printf(iks *xml, const char *name, const char *fmt
 /** A function to validate attribute value */
 typedef int (*iks_attrib_validation_function)(const char *);
 
-#define ELEMENT(name) static int VALIDATE_##name(iks *node) { int result = 1;
+#define ELEMENT(name) inline int VALIDATE_##name(iks *node) { int result = 1; if (!node) return 0;
 #define ATTRIB(name, def, rule) result &= iks_attrib_is_##rule(iks_find_attrib_default(node, #name, #def));
+#define STRING_ATTRIB(name, def, rule) result &= value_matches(iks_find_attrib_default(node, #name, #def), rule);
 #define ELEMENT_END return result; }
 
-#define ATTRIB_RULE(rule) int iks_attrib_is_ ## rule (const char *value)
+extern int value_matches(const char *value, const char *rule);
 
-extern ATTRIB_RULE(bool);
-extern ATTRIB_RULE(not_negative);
-extern ATTRIB_RULE(positive);
-extern ATTRIB_RULE(positive_or_neg_one);
-extern ATTRIB_RULE(any);
-extern ATTRIB_RULE(decimal_between_zero_and_one);
+
+#define ATTRIB_RULE(rule) inline int iks_attrib_is_ ## rule (const char *value)
+
+/**
+ * Validate boolean
+ * @param value
+ * @return SWTICH_TRUE if boolean
+ */
+ATTRIB_RULE(bool)
+{
+	if (value && *value && (!strcasecmp("true", value) || !strcasecmp("false", value))) {
+		return SWITCH_TRUE;
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if not negative
+ */
+ATTRIB_RULE(not_negative)
+{
+	if (value && *value && switch_is_number(value)) {
+		int value_i = atoi(value);
+		if (value_i >= 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if positive
+ */
+ATTRIB_RULE(positive)
+{
+	if (value && *value && switch_is_number(value)) {
+		int value_i = atoi(value);
+		if (value_i > 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Validate integer
+ * @param value
+ * @return SWTICH_TRUE if positive or -1
+ */
+ATTRIB_RULE(positive_or_neg_one)
+{
+	if (value && *value && switch_is_number(value)) {
+		int value_i = atoi(value);
+		if (value_i == -1 || value_i > 0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
+
+/**
+ * Validate string
+ * @param value
+ * @return SWTICH_TRUE
+ */
+ATTRIB_RULE(any)
+{
+	return SWITCH_TRUE;
+}
+
+/**
+ * Validate decimal
+ * @param value
+ * @return SWTICH_TRUE if 0.0 <= x <= 1.0
+ */
+ATTRIB_RULE(decimal_between_zero_and_one)
+{
+	if (value && *value && switch_is_number(value)) {
+		double value_d = atof(value);
+		if (value_d >= 0.0 || value_d <= 1.0) {
+			return SWITCH_TRUE;
+		}
+	}
+	return SWITCH_FALSE;
+}
 
 #endif
 
