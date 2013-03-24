@@ -43,7 +43,7 @@
 void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *error_type)
 {
 	iks *response = iks_new_iq_error(iq, error_name, error_type);
-	rayo_iks_send(response);
+	rayo_send(response);
 	iks_delete(response);
 }
 
@@ -57,7 +57,7 @@ void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *e
 void rayo_component_send_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail)
 {
 	iks *response = iks_new_iq_error_detailed(iq, error_name, error_type, detail);
-	rayo_iks_send(response);
+	rayo_send(response);
 	iks_delete(response);
 }
 
@@ -72,7 +72,7 @@ void rayo_component_send_start(struct rayo_component *component, iks *iq)
 	iks *ref = iks_insert(response, "ref");
 	iks_insert_attrib(ref, "xmlns", RAYO_NS);
 	iks_insert_attrib(ref, "id", rayo_component_get_ref(component));
-	rayo_iks_send(response);
+	rayo_send(response);
 	iks_delete(response);
 }
 
@@ -119,7 +119,7 @@ iks *rayo_component_create_complete_event(struct rayo_component *component, cons
  */
 void rayo_component_send_complete_event(struct rayo_component *component, iks *response)
 {
-	rayo_iks_send(response);
+	rayo_send(response);
 	iks_delete(response);
 	rayo_component_unlock(component);
 	rayo_component_destroy(component);
