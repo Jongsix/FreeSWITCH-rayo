@@ -106,7 +106,7 @@ typedef iks *(*rayo_component_command_handler)(struct rayo_component *, iks *);
 extern void rayo_call_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
 extern void rayo_mixer_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
 
-extern void rayo_iks_send(iks *msg);
+extern void rayo_send(iks *msg);
 
 #endif
 
