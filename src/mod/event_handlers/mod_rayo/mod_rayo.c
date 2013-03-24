@@ -3610,9 +3610,12 @@ static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *st
 /**
  * Dump rayo actors
  */
-static void dump_api(switch_stream_handle_t *stream)
+static int dump_api(const char *cmd, switch_stream_handle_t *stream)
 {
 	switch_hash_index_t *hi;
+	if (!zstr(cmd)) {
+		return 0;
+	}
 	stream->write_function(stream, "\nACTORS:\n");
 	switch_mutex_lock(globals.actors_mutex);
 	for (hi = switch_core_hash_first(globals.actors); hi; hi = switch_core_hash_next(hi)) {
@@ -3640,6 +3643,8 @@ static void dump_api(switch_stream_handle_t *stream)
 		stream->write_function(stream, "\n");
 	}
 	switch_mutex_unlock(globals.actors_mutex);
+
+	return 1;
 }
 
 /**
@@ -3750,12 +3755,10 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 	iks_parser_delete(p);
 }
 
-#define RAYO_API_SYNTAX "[<jid> <command>]"
-
 /**
  * Send command to rayo actor
  */
-static void command_api(const char *cmd, switch_stream_handle_t *stream)
+static int command_api(const char *cmd, switch_stream_handle_t *stream)
 {
 	struct rayo_client *client = NULL;
 	char *cmd_dup = strdup(cmd);
@@ -3763,8 +3766,8 @@ static void command_api(const char *cmd, switch_stream_handle_t *stream)
 	int argc = switch_separate_string(cmd_dup, ' ', argv, sizeof(argv) / sizeof(argv[0]));
 
 	if (argc != 2) {
-		stream->write_function(stream, "-ERR: USAGE %s\n", RAYO_API_SYNTAX);
-		goto done;
+		free(cmd_dup);
+		return 0;
 	}
 
 	/* set up console client actor to receive response */
@@ -3782,19 +3785,53 @@ static void command_api(const char *cmd, switch_stream_handle_t *stream)
 	}
 	rayo_actor_unlock(client->actor);
 
-done:
 	free(cmd_dup);
+	return 1;
 }
 
+#define RAYO_API_SYNTAX "status | (cmd <jid> <command>)"
 SWITCH_STANDARD_API(rayo_api)
 {
-	if (zstr(cmd)) {
-		dump_api(stream);
-	} else {
-		command_api(cmd, stream);
+	int success = 0;
+	if (!strncmp("status", cmd, 6)) {
+		success = dump_api(cmd + 6, stream);
+	} else if (!strncmp("cmd", cmd, 3)) {
+		success = command_api(cmd + 3, stream);
+	}
+
+	if (!success) {
+		stream->write_function(stream, "-ERR: USAGE %s\n", RAYO_API_SYNTAX);
 	}
 
 	return SWITCH_STATUS_SUCCESS;
+}
+
+switch_status_t list_actors(const char *line, const char *cursor, switch_console_callback_match_t **matches)
+{
+	switch_hash_index_t *hi;
+	void *val;
+	const void *vvar;
+	switch_console_callback_match_t *my_matches = NULL;
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	struct rayo_actor *actor;
+
+	switch_mutex_lock(globals.actors_mutex);
+	for (hi = switch_hash_first(NULL, globals.actors); hi; hi = switch_hash_next(hi)) {
+		switch_hash_this(hi, &vvar, NULL, &val);
+
+		actor = (struct rayo_actor *) val;
+		if (actor->type != RAT_CLIENT) {
+			switch_console_push_match(&my_matches, (const char *) vvar);
+		}
+	}
+	switch_mutex_unlock(globals.actors_mutex);
+
+	if (my_matches) {
+		*matches = my_matches;
+		status = SWITCH_STATUS_SUCCESS;
+	}
+
+	return status;
 }
 
 /**
@@ -3859,6 +3896,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 		return SWITCH_STATUS_TERM;
 	}
 
+	switch_console_set_complete("add rayo status");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors");
+	switch_console_add_complete_func("::rayo::list_actors", list_actors);
+
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -3870,6 +3911,9 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_rayo_shutdown)
 	/* notify threads to stop */
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Notifying of shutdown\n");
 	globals.shutdown = 1;
+
+	switch_console_del_complete_func("::rayo::list_actors");
+	switch_console_set_complete("del rayo");
 
 	/* wait for threads to finish */
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Waiting for server and session threads to stop\n");
