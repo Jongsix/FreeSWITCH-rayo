@@ -63,8 +63,6 @@ struct rayo_actor;
 struct rayo_client;
 struct rayo_call;
 
-typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
-
 /**
  * A rayo actor - this is an entity that can be controlled by a rayo client
  */
@@ -91,6 +89,8 @@ struct rayo_actor {
 	int destroy;
 	/** optional cleanup */
 	rayo_actor_cleanup_fn cleanup_fn;
+	/** optional event handling function */
+	rayo_actor_event_fn event_fn;
 };
 
 typedef void (*rayo_server_command_handler)(struct rayo_client *, iks *);
@@ -194,7 +194,7 @@ static struct {
 	switch_hash_t *actors_by_id;
 	/** synchronizes access to actors */
 	switch_mutex_t *actors_mutex;
-	/** map of DCP JID to session */
+	/** map of DCP JID to client */
 	switch_hash_t *clients;
 	/** synchronizes access to clients map */
 	switch_mutex_t *clients_mutex;
@@ -937,26 +937,21 @@ struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer)
 	return mixer->actor;
 }
 
-#define rayo_actor_create(type, subtype, id, jid, data, size, cleanup) _rayo_actor_create(NULL, type, subtype, id, jid, data, size, cleanup, __FILE__, __LINE__)
-#define rayo_actor_create_with_pool(pool, type, subtype, id, jid, data, size, cleanup) _rayo_actor_create(pool, type, subtype, id, jid, data, size, cleanup, __FILE__, __LINE__)
+#define rayo_actor_create(pool, type, subtype, id, jid, data) _rayo_actor_create(pool, type, subtype, id, jid, data, __FILE__, __LINE__)
 /**
  * Create a rayo actor
+ * @param pool to use
  * @param type of actor (MIXER, CALL, SERVER, COMPONENT)
  * @param subtype of actor (input/output/prompt)
  * @param id internal ID
  * @param jid external ID
- * @param data to allocate
- * @param size of data to allocate
- * @param cleanup optional cleanup function
+ * @param data private data
  */
-static struct rayo_actor *_rayo_actor_create(switch_memory_pool_t *pool, enum rayo_actor_type type, const char *subtype, const char *id, const char *jid, void **data, size_t size, rayo_actor_cleanup_fn cleanup, const char *file, int line)
+static struct rayo_actor *_rayo_actor_create(switch_memory_pool_t *pool, enum rayo_actor_type type, const char *subtype, const char *id, const char *jid, void *data, const char *file, int line)
 {
 	struct rayo_actor *actor = NULL;
 
 	/* create base actor */
-	if (!pool) {
-		switch_core_new_memory_pool(&pool);
-	}
 	actor = switch_core_alloc(pool, sizeof(*actor));
 	actor->type = type;
 	actor->subtype = switch_core_strdup(pool, subtype);
@@ -965,16 +960,10 @@ static struct rayo_actor *_rayo_actor_create(switch_memory_pool_t *pool, enum ra
 		actor->id = switch_core_strdup(pool, id);
 	}
 	actor->jid = switch_core_strdup(pool, jid);
-	if (data && size) {
-		actor->data = switch_core_alloc(pool, size);
-	}
+	actor->data = data;
 	actor->seq = 1;
 	actor->ref_count = 1;
 	actor->destroy = 0;
-	actor->cleanup_fn = cleanup;
-	if (data) {
-		*data = actor->data;
-	}
 	switch_mutex_init(&actor->mutex, SWITCH_MUTEX_NESTED, pool);
 
 	/* add to hash of actors, so commands can route to call */
@@ -988,6 +977,24 @@ static struct rayo_actor *_rayo_actor_create(switch_memory_pool_t *pool, enum ra
 	switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "Create %s\n", actor->jid);
 
 	return actor;
+}
+
+/**
+ * @param actor to add cleanup function to
+ * @param cleanup cleanup function to call on destruction
+ */
+void rayo_actor_set_cleanup_fn(struct rayo_actor *actor, rayo_actor_cleanup_fn cleanup)
+{
+	actor->cleanup_fn = cleanup;
+}
+
+/**
+ * @param actor to add event function to
+ * @param event event function to call when event arrives
+ */
+void rayo_actor_set_event_fn(struct rayo_actor *actor, rayo_actor_event_fn event)
+{
+	actor->event_fn = event;
 }
 
 /**
@@ -1024,8 +1031,8 @@ switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor)
  */
 static struct rayo_call *_rayo_call_create(const char *uuid, const char *file, int line)
 {
+	switch_memory_pool_t *pool;
 	char *call_jid;
-	struct rayo_actor *actor = NULL;
 	struct rayo_call *call = NULL;
 	char uuid_id_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
 
@@ -1035,14 +1042,15 @@ static struct rayo_call *_rayo_call_create(const char *uuid, const char *file, i
 	}
 	call_jid = switch_mprintf("%s@%s", uuid, globals.domain);
 
-	actor = _rayo_actor_create(NULL, RAT_CALL, "", uuid, call_jid, (void **)&call, sizeof(*call), rayo_call_cleanup, file, line);
-
-	/* create call */
+	switch_core_new_memory_pool(&pool);
+	call = switch_core_alloc(pool, sizeof(*call));
+	call->actor = _rayo_actor_create(pool, RAT_CALL, "", uuid, call_jid, call, file, line);
 	call->dcp_jid = "";
 	call->idle_start_time = switch_micro_time_now();
 	call->joined = 0;
-	call->actor = actor;
-	switch_core_hash_init(&call->pcps, actor->pool);
+	switch_core_hash_init(&call->pcps, pool);
+	rayo_actor_set_cleanup_fn(call->actor, rayo_call_cleanup);
+
 	switch_safe_free(call_jid);
 	return call;
 }
@@ -1055,14 +1063,15 @@ static struct rayo_call *_rayo_call_create(const char *uuid, const char *file, i
  */
 static struct rayo_mixer *_rayo_mixer_create(const char *name, const char *file, int line)
 {
-	struct rayo_actor *actor = NULL;
+	switch_memory_pool_t *pool;
 	struct rayo_mixer *mixer = NULL;
 	char *mixer_jid = switch_mprintf("%s@%s", name, globals.domain);
 
-	actor = _rayo_actor_create(NULL, RAT_MIXER, "", name, mixer_jid, (void **)&mixer, sizeof(*mixer), NULL, file, line);
-	switch_core_hash_init(&mixer->members, actor->pool);
-	switch_core_hash_init(&mixer->subscribers, actor->pool);
-	mixer->actor = actor;
+	switch_core_new_memory_pool(&pool);
+	mixer = switch_core_alloc(pool, sizeof(*mixer));
+	mixer->actor = _rayo_actor_create(pool, RAT_MIXER, "", name, mixer_jid, mixer, file, line);
+	switch_core_hash_init(&mixer->members, pool);
+	switch_core_hash_init(&mixer->subscribers, pool);
 	switch_safe_free(mixer_jid);
 
 	return mixer;
@@ -1088,11 +1097,11 @@ static void rayo_component_cleanup(struct rayo_actor *actor)
  */
 struct rayo_component *_rayo_component_create(const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line)
 {
+	switch_memory_pool_t *pool;
 	enum rayo_actor_type actor_type;
 	struct rayo_component *component = NULL;
 	char *ref = switch_mprintf("%s-%d", type, rayo_actor_seq_next(parent));
 	char *jid = switch_mprintf("%s/%s", rayo_actor_get_jid(parent), ref);
-	struct rayo_actor *actor = NULL;
 	if (zstr(id)) {
 		id = jid;
 	}
@@ -1106,12 +1115,14 @@ struct rayo_component *_rayo_component_create(const char *type, const char *id, 
 		return NULL;
 	}
 	rayo_actor_lock(parent);
-	actor = _rayo_actor_create(NULL, actor_type, type, id, jid, (void **)&component, sizeof(*component), rayo_component_cleanup, file, line);
-	component->actor = actor;
-	component->client_jid = switch_core_strdup(actor->pool, client_jid);
-	component->ref = switch_core_strdup(actor->pool, ref);
+	switch_core_new_memory_pool(&pool);
+	component = switch_core_alloc(pool, sizeof(*component));
+	component->actor = _rayo_actor_create(pool, actor_type, type, id, jid, component, file, line);
+	component->client_jid = switch_core_strdup(pool, client_jid);
+	component->ref = switch_core_strdup(pool, ref);
 	component->data = NULL;
 	component->parent = parent;
+	rayo_actor_set_cleanup_fn(component->actor, rayo_component_cleanup);
 
 	switch_safe_free(ref);
 	switch_safe_free(jid);
@@ -2083,6 +2094,21 @@ static void on_iq_set_xmpp_session(struct rayo_client *rclient, iks *node)
 }
 
 /**
+ * Handle event to deliver to rayo client
+ */
+static void rayo_client_route_event(struct rayo_actor *actor, switch_event_t *event)
+{
+	struct rayo_client *rclient = (struct rayo_client *)actor->data;
+	/* route event to client */
+	switch_event_t *dup_event = NULL;
+	switch_event_dup(&dup_event, event);
+	if (switch_queue_trypush(rclient->event_queue, dup_event) != SWITCH_STATUS_SUCCESS) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "failed to deliver call event to %s!\n", rayo_actor_get_jid(actor));
+		switch_event_destroy(&dup_event);
+	}
+}
+
+/**
  * Handle <iq><bind> request
  * @param rclient the Rayo client
  * @param node the <iq> node
@@ -2110,8 +2136,8 @@ static void on_iq_set_xmpp_bind(struct rayo_client *rclient, iks *node)
 		jid = switch_core_sprintf(rclient->pool, "%s/%s", rclient->jid, resource_id);
 
 		/* client resource is now routable */
-		rclient->actor = rayo_actor_create_with_pool(rclient->pool, RAT_CLIENT, "", jid, jid, NULL, 0, NULL);
-		rclient->actor->data = rclient;
+		rclient->actor = rayo_actor_create(rclient->pool, RAT_CLIENT, "", jid, jid, rclient);
+		rayo_actor_set_event_fn(rclient->actor, rayo_client_route_event);
 
 		switch_mutex_lock(globals.clients_mutex);
 		switch_core_hash_insert(globals.clients, rayo_client_get_jid(rclient), rclient);
@@ -2665,28 +2691,13 @@ static void route_call_event(switch_event_t *event)
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "%s rayo event %s\n", dcp_jid, switch_event_name(event->event_id));
 
 		actor = rayo_actor_locate(dcp_jid);
-		if (actor) {
-			switch (actor->type) {
-				case RAT_CLIENT: {
-					struct rayo_client *rclient = (struct rayo_client *)actor->data;
-					/* route event to client */
-					switch_event_t *dup_event = NULL;
-					switch_event_dup(&dup_event, event);
-					if (switch_queue_trypush(rclient->event_queue, dup_event) != SWITCH_STATUS_SUCCESS) {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_CRIT, "failed to deliver call event to %s!\n", dcp_jid);
-						switch_event_destroy(&dup_event);
-					}
-					break;
-				}
-				default:
-					/* ignore event */
-					break;
-			}
-			rayo_actor_unlock(actor);
+		if (actor && actor->event_fn) {
+			actor->event_fn(actor, event);
 		} else {
 			/* TODO orphaned call... maybe allow events to queue so they can be delivered on reconnect? */
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Orphaned call event %s to %s\n", switch_event_name(event->event_id), dcp_jid);
 		}
+		rayo_actor_unlock(actor);
 	}
 }
 
@@ -3224,7 +3235,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
  */
 static switch_status_t rayo_server_create(const char *addr, const char *port)
 {
-	struct rayo_actor *actor = NULL;
+	switch_memory_pool_t *pool;
 	struct rayo_server *new_server = NULL;
 	switch_thread_t *thread;
 	switch_threadattr_t *thd_attr = NULL;
@@ -3233,16 +3244,17 @@ static switch_status_t rayo_server_create(const char *addr, const char *port)
 		return SWITCH_STATUS_FALSE;
 	}
 
-	actor = rayo_actor_create(RAT_SERVER, "", addr, addr, (void **)&new_server, sizeof(*new_server), NULL);
-	new_server->addr = switch_core_strdup(actor->pool, addr);
+	switch_core_new_memory_pool(&pool);
+	new_server = switch_core_alloc(pool, sizeof(*new_server));
+	new_server->actor = rayo_actor_create(pool, RAT_SERVER, "", addr, addr, new_server);
+	new_server->addr = switch_core_strdup(pool, addr);
 	new_server->port = zstr(port) ? IKS_JABBER_PORT : atoi(port);
-	new_server->actor = actor;
 
 	/* start the server thread */
-	switch_threadattr_create(&thd_attr, actor->pool);
+	switch_threadattr_create(&thd_attr, pool);
 	switch_threadattr_detach_set(thd_attr, 1);
 	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-	switch_thread_create(&thread, thd_attr, rayo_server_thread, new_server, actor->pool);
+	switch_thread_create(&thread, thd_attr, rayo_server_thread, new_server, pool);
 
 	return SWITCH_STATUS_SUCCESS;
 }
