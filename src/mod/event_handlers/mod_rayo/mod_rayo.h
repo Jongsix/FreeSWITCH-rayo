@@ -48,6 +48,7 @@ struct rayo_component;
  * Type of actor
  */
 enum rayo_actor_type {
+	RAT_CLIENT,
 	RAT_SERVER,
 	RAT_CALL,
 	RAT_MIXER,
