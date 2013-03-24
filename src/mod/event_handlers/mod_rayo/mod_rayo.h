@@ -56,10 +56,15 @@ enum rayo_actor_type {
 	RAT_MIXER_COMPONENT
 };
 
+typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
+typedef void (* rayo_actor_event_fn)(struct rayo_actor *, switch_event_t *event);
+
 extern const char *rayo_actor_get_id(struct rayo_actor *actor);
 extern const char *rayo_actor_get_jid(struct rayo_actor *actor);
 extern switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor);
 extern int rayo_actor_seq_next(struct rayo_actor *actor);
+extern void rayo_actor_set_cleanup_fn(struct rayo_actor *actor, rayo_actor_cleanup_fn cleanup);
+extern void rayo_actor_set_event_fn(struct rayo_actor *actor, rayo_actor_event_fn event);
 
 extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
 #define rayo_call_get_jid(call) rayo_actor_get_jid(rayo_call_get_actor(call))
