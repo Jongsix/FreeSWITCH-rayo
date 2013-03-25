@@ -218,6 +218,8 @@ static struct {
 	char *mixer_conf_profile;
 	/** to URI prefixes mapped to gateways */
 	switch_hash_t *dial_gateways;
+	/** console command aliases */
+	switch_hash_t *cmd_aliases;
 } globals;
 
 /**
@@ -3713,6 +3715,13 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 {
 	iks *command = NULL;
 	iksparser *p = iks_dom_new(&command);
+
+	/* check if aliased */
+	const char *alias = switch_core_hash_find(globals.cmd_aliases, command_str);
+	if (!zstr(alias)) {
+		command_str = alias;
+	}
+
 	if (iks_parse(p, command_str, 0, 1) == IKS_OK && command) {
 		char *str;
 		iks *iq, *l_iq = NULL;
@@ -3856,6 +3865,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_core_hash_init(&globals.actors_by_id, pool);
 	switch_mutex_init(&globals.actors_mutex, SWITCH_MUTEX_NESTED, pool);
 	switch_core_hash_init(&globals.dial_gateways, pool);
+	switch_core_hash_init(&globals.cmd_aliases, pool);
 
 	/* server commands */
 	rayo_server_command_handler_add("set:"IKS_NS_XMPP_BIND":bind", on_iq_set_xmpp_bind);
@@ -3896,7 +3906,34 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 
 	switch_console_set_complete("add rayo status");
 	switch_console_set_complete("add rayo cmd ::rayo::list_actors");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors ping");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors answer");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors hangup");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors stop");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors pause");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors resume");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors speed-up");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors speed-down");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors volume-up");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors volume-down");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors record");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors record_pause");
+	switch_console_set_complete("add rayo cmd ::rayo::list_actors record_resume");
 	switch_console_add_complete_func("::rayo::list_actors", list_actors);
+
+	switch_core_hash_insert(globals.cmd_aliases, "ping", "<iq type=\"get\"><ping xmlns=\"urn:xmpp:ping\"/></iq>");
+	switch_core_hash_insert(globals.cmd_aliases, "answer", "<answer xmlns=\"urn:xmpp:rayo:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "hangup", "<hangup xmlns=\"urn:xmpp:rayo:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "stop", "<stop xmlns=\"urn:xmpp:rayo:ext:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "pause", "<pause xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "resume", "<resume xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "speed-up", "<speed-up xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "speed-down", "<speed-down xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "volume-up", "<volume-up xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "volume-down", "<volume-down xmlns=\"urn:xmpp:rayo:output:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "record", "<record xmlns=\"urn:xmpp:rayo:record:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "record_pause", "<pause xmlns=\"urn:xmpp:rayo:record:1\"/>");
+	switch_core_hash_insert(globals.cmd_aliases, "record_resume", "<resume xmlns=\"urn:xmpp:rayo:record:1\"/>");
 
 	return SWITCH_STATUS_SUCCESS;
 }
