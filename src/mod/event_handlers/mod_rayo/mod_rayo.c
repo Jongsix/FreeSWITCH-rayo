@@ -3616,7 +3616,6 @@ static int dump_api(const char *cmd, switch_stream_handle_t *stream)
 	if (!zstr(cmd)) {
 		return 0;
 	}
-	stream->write_function(stream, "\nACTORS:\n");
 	switch_mutex_lock(globals.actors_mutex);
 	for (hi = switch_core_hash_first(globals.actors); hi; hi = switch_core_hash_next(hi)) {
 		struct rayo_actor *actor = NULL;
@@ -3625,12 +3624,11 @@ static int dump_api(const char *cmd, switch_stream_handle_t *stream)
 		switch_core_hash_this(hi, &key, NULL, &val);
 		actor = (struct rayo_actor *)val;
 		switch_assert(actor);
-		stream->write_function(stream, "\t");
+		stream->write_function(stream, "        ");
 		rayo_actor_dump(actor, stream);
 		stream->write_function(stream, "\n");
 	}
 
-	stream->write_function(stream, "\nDEAD ACTORS:\n");
 	for (hi = switch_core_hash_first(globals.destroy_actors); hi; hi = switch_core_hash_next(hi)) {
 		struct rayo_actor *actor = NULL;
 		const void *key;
@@ -3638,7 +3636,7 @@ static int dump_api(const char *cmd, switch_stream_handle_t *stream)
 		switch_core_hash_this(hi, &key, NULL, &val);
 		actor = (struct rayo_actor *)val;
 		switch_assert(actor);
-		stream->write_function(stream, "\t");
+		stream->write_function(stream, "(DEAD)  ");
 		rayo_actor_dump(actor, stream);
 		stream->write_function(stream, "\n");
 	}
@@ -3778,7 +3776,7 @@ static int command_api(const char *cmd, switch_stream_handle_t *stream)
 
 	/* wait for response */
 	while (!client->response) {
-		switch_sleep(100 * 1000);
+		switch_sleep(20 * 1000);
 	}
 	if (client->response) {
 		stream->write_function(stream, "%s\n", client->response);
