@@ -27,12 +27,27 @@
  * rayo_components.c -- Rayo component interface
  *
  */
-
 #include "rayo_components.h"
 
 #include <switch.h>
 #include "mod_rayo.h"
 #include "iks_helpers.h"
+
+/**
+ * Get access to Rayo component data.
+ * @param id the component internal ID
+ * @return the component or NULL. Call rayo_component_unlock() when done with component pointer.
+ */
+struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line)
+{
+	struct rayo_actor *actor = _rayo_actor_locate_by_id(id, file, line);
+	if (actor && (actor->type == RAT_MIXER_COMPONENT || actor->type == RAT_CALL_COMPONENT)) {
+		return RAYO_COMPONENT(actor);
+	} else if (actor) {
+		rayo_actor_unlock(actor);
+	}
+	return NULL;
+}
 
 /**
  * Send IQ error to controlling client from call
@@ -71,7 +86,7 @@ void rayo_component_send_start(struct rayo_component *component, iks *iq)
 	iks *response = iks_new_iq_result(iq);
 	iks *ref = iks_insert(response, "ref");
 	iks_insert_attrib(ref, "xmlns", RAYO_NS);
-	iks_insert_attrib(ref, "id", rayo_component_get_ref(component));
+	iks_insert_attrib(ref, "id", component->ref);
 	rayo_send(response);
 	iks_delete(response);
 }
@@ -88,8 +103,8 @@ iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *c
 {
 	iks *response = iks_new("presence");
 	iks *x;
-	iks_insert_attrib(response, "from", rayo_component_get_jid(component));
-	iks_insert_attrib(response, "to", rayo_component_get_client_jid(component));
+	iks_insert_attrib(response, "from", RAYO_JID(component));
+	iks_insert_attrib(response, "to", component->client_jid);
 	iks_insert_attrib(response, "type", "unavailable");
 	x = iks_insert(response, "complete");
 	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
@@ -121,8 +136,8 @@ void rayo_component_send_complete_event(struct rayo_component *component, iks *r
 {
 	rayo_send(response);
 	iks_delete(response);
-	rayo_component_unlock(component);
-	rayo_component_destroy(component);
+	RAYO_UNLOCK(component);
+	RAYO_DESTROY(component);
 }
 
 /**
@@ -151,7 +166,7 @@ void rayo_component_send_complete_with_metadata_string(struct rayo_component *co
 	if (iks_parse(p, meta, 0, 1) != IKS_OK) {
 		/* unexpected ... */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "%s Failed to parse metadata for complete event: %s\n",
-			rayo_component_get_jid(component), meta);
+			RAYO_JID(component), meta);
 		/* send without... */
 		rayo_component_send_complete(component, reason, reason_namespace);
 	} else {
@@ -219,7 +234,7 @@ void rayo_component_api_execute_async(struct rayo_component *component, const ch
 	bg_cmd->component = component;
 
 	/* create thread */
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s BGAPI START\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s BGAPI START\n", RAYO_JID(component));
 	switch_threadattr_create(&thd_attr, pool);
 	switch_threadattr_detach_set(thd_attr, 1);
 	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);

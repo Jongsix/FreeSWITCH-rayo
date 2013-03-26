@@ -33,6 +33,8 @@
 #include <switch.h>
 #include <iksemel.h>
 
+#define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
+
 #define RAYO_VERSION "1"
 #define RAYO_BASE "urn:xmpp:rayo:"
 
@@ -43,6 +45,9 @@ struct rayo_actor;
 struct rayo_call;
 struct rayo_mixer;
 struct rayo_component;
+
+typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
+typedef void (* rayo_actor_event_fn)(struct rayo_actor *, switch_event_t *event);
 
 /**
  * Type of actor
@@ -56,45 +61,80 @@ enum rayo_actor_type {
 	RAT_MIXER_COMPONENT
 };
 
-typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
-typedef void (* rayo_actor_event_fn)(struct rayo_actor *, switch_event_t *event);
+/**
+ * A rayo actor - this is an entity that can be controlled by a rayo client
+ */
+struct rayo_actor {
+	/** Type of actor */
+	enum rayo_actor_type type;
+	/** Sub-type of actor */
+	char *subtype;
+	/** Internal ID */
+	char *id;
+	/** actor JID */
+	char *jid;
+	/** Actor pool */
+	switch_memory_pool_t *pool;
+	/** synchronizes access to this actor */
+	switch_mutex_t *mutex;
+	/** an atomically incrementing sequence for this actor */
+	int seq;
+	/** number of users of this actor */
+	int ref_count;
+	/** destroy flag */
+	int destroy;
+	/** optional cleanup */
+	rayo_actor_cleanup_fn cleanup_fn;
+	/** optional event handling function */
+	rayo_actor_event_fn event_fn;
+};
 
-extern const char *rayo_actor_get_id(struct rayo_actor *actor);
-extern const char *rayo_actor_get_jid(struct rayo_actor *actor);
-extern switch_memory_pool_t *rayo_actor_get_pool(struct rayo_actor *actor);
+/**
+ * A Rayo component
+ */
+struct rayo_component {
+	/** base actor class */
+	struct rayo_actor base;
+	/** component type (input/output/prompt/etc) */
+	const char *type;
+	/** parent to this component */
+	struct rayo_actor *parent;
+	/** owning client JID */
+	const char *client_jid;
+	/** external ref */
+	const char *ref;
+};
+
+#define RAYO_COMPONENT(subclass) ((struct rayo_component *)subclass)
+
+#define rayo_actor_locate(jid) _rayo_actor_locate(jid, __FILE__, __LINE__)
+extern struct rayo_actor *_rayo_actor_locate(const char *jid, const char *file, int line);
+#define rayo_actor_locate_by_id(id) _rayo_actor_locate_by_id(id, __FILE__, __LINE__)
+extern struct rayo_actor *_rayo_actor_locate_by_id(const char *id, const char *file, int line);
 extern int rayo_actor_seq_next(struct rayo_actor *actor);
 extern void rayo_actor_set_cleanup_fn(struct rayo_actor *actor, rayo_actor_cleanup_fn cleanup);
 extern void rayo_actor_set_event_fn(struct rayo_actor *actor, rayo_actor_event_fn event);
+#define rayo_actor_rdlock(actor) _rayo_actor_rdlock(actor, __FILE__, __LINE__)
+extern void _rayo_actor_rdlock(struct rayo_actor *actor, const char *file, int line);
+#define rayo_actor_unlock(actor) _rayo_actor_unlock(actor, __FILE__, __LINE__)
+extern void _rayo_actor_unlock(struct rayo_actor *actor, const char *file, int line);
+#define rayo_actor_destroy(actor) _rayo_actor_destroy(actor, __FILE__, __LINE__)
+extern void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int line);
+#define RAYO_ACTOR(x) ((struct rayo_actor *)x)
+#define RAYO_JID(x) RAYO_ACTOR(x)->jid
+#define RAYO_ID(x) RAYO_ACTOR(x)->id
+#define RAYO_POOL(x) RAYO_ACTOR(x)->pool
+#define RAYO_RDLOCK(x) rayo_actor_rdlock(RAYO_ACTOR(x))
+#define RAYO_UNLOCK(x) rayo_actor_unlock(RAYO_ACTOR(x))
+#define RAYO_DESTROY(x) rayo_actor_destroy(RAYO_ACTOR(x))
 
-extern struct rayo_actor *rayo_call_get_actor(struct rayo_call *call);
-#define rayo_call_get_jid(call) rayo_actor_get_jid(rayo_call_get_actor(call))
+
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
-#define rayo_call_get_uuid(call) rayo_actor_get_id(rayo_call_get_actor(call))
-#define rayo_call_get_pool(call) rayo_actor_get_pool(rayo_call_get_actor(call))
 
-extern struct rayo_actor *rayo_mixer_get_actor(struct rayo_mixer *mixer);
-#define rayo_mixer_get_name(mixer) rayo_actor_get_id(rayo_mixer_get_actor(mixer))
-#define rayo_mixer_get_jid(mixer) rayo_actor_get_jid(rayo_mixer_get_actor(mixer))
-#define rayo_mixer_get_pool(mixer) rayo_actor_get_pool(rayo_mixer_get_actor(mixer))
+#define rayo_mixer_get_name(mixer) RAYO_ID(mixer)
 
-extern struct rayo_actor *rayo_component_get_actor(struct rayo_component *component);
-#define rayo_component_locate(id) _rayo_component_locate(id, __FILE__, __LINE__)
-extern struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line);
-#define rayo_component_unlock(component) _rayo_component_unlock(component, __FILE__, __LINE__)
-extern void _rayo_component_unlock(struct rayo_component *component, const char *file, int line);
-#define rayo_component_create(type, id, parent, client_jid) _rayo_component_create(type, id, parent, client_jid, __FILE__, __LINE__)
-extern struct rayo_component *_rayo_component_create(const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
-#define rayo_component_destroy(component) _rayo_component_destroy(component, __FILE__, __LINE__)
-extern void _rayo_component_destroy(struct rayo_component *component, const char *file, int line);
-#define rayo_component_get_id(component) rayo_actor_get_id(rayo_component_get_actor(component))
-extern const char *rayo_component_get_ref(struct rayo_component *component);
-#define rayo_component_get_jid(component) rayo_actor_get_jid(rayo_component_get_actor(component))
-extern const char *rayo_component_get_parent_id(struct rayo_component *component);
-extern enum rayo_actor_type rayo_component_get_parent_type(struct rayo_component *component);
-extern const char *rayo_component_get_client_jid(struct rayo_component *component);
-#define rayo_component_get_pool(component) rayo_actor_get_pool(rayo_component_get_actor(component))
-extern void *rayo_component_get_data(struct rayo_component *component);
-extern void rayo_component_set_data(struct rayo_component *component, void *data);
+#define rayo_component_init(component, pool, type, id, parent, client_jid) _rayo_component_init(component, pool, type, id, parent, client_jid, __FILE__, __LINE__)
+extern struct rayo_component *_rayo_component_init(struct rayo_component *component, switch_memory_pool_t *pool, const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
 
 typedef iks *(*rayo_call_command_handler)(struct rayo_call *, switch_core_session_t *session, iks *);
 extern void rayo_call_command_handler_add(const char *name, rayo_call_command_handler fn);

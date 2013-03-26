@@ -79,4 +79,10 @@ extern iks *rayo_component_create_complete_event_with_metadata(struct rayo_compo
 
 extern void rayo_component_api_execute_async(struct rayo_component *component, const char *cmd, const char *args);
 
+extern struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid);
+extern void start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq);
+
+#define rayo_component_locate(id) _rayo_component_locate(id, __FILE__, __LINE__)
+extern struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line);
+
 #endif
