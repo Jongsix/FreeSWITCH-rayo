@@ -107,27 +107,24 @@ struct rayo_component {
 
 #define RAYO_COMPONENT(subclass) ((struct rayo_component *)subclass)
 
-#define rayo_actor_locate(jid) _rayo_actor_locate(jid, __FILE__, __LINE__)
-extern struct rayo_actor *_rayo_actor_locate(const char *jid, const char *file, int line);
-#define rayo_actor_locate_by_id(id) _rayo_actor_locate_by_id(id, __FILE__, __LINE__)
-extern struct rayo_actor *_rayo_actor_locate_by_id(const char *id, const char *file, int line);
+extern struct rayo_actor *rayo_actor_locate(const char *jid, const char *file, int line);
+extern struct rayo_actor *rayo_actor_locate_by_id(const char *id, const char *file, int line);
 extern int rayo_actor_seq_next(struct rayo_actor *actor);
-extern void rayo_actor_set_cleanup_fn(struct rayo_actor *actor, rayo_actor_cleanup_fn cleanup);
 extern void rayo_actor_set_event_fn(struct rayo_actor *actor, rayo_actor_event_fn event);
-#define rayo_actor_rdlock(actor) _rayo_actor_rdlock(actor, __FILE__, __LINE__)
-extern void _rayo_actor_rdlock(struct rayo_actor *actor, const char *file, int line);
-#define rayo_actor_unlock(actor) _rayo_actor_unlock(actor, __FILE__, __LINE__)
-extern void _rayo_actor_unlock(struct rayo_actor *actor, const char *file, int line);
-#define rayo_actor_destroy(actor) _rayo_actor_destroy(actor, __FILE__, __LINE__)
-extern void _rayo_actor_destroy(struct rayo_actor *actor, const char *file, int line);
+extern void rayo_actor_rdlock(struct rayo_actor *actor, const char *file, int line);
+extern void rayo_actor_unlock(struct rayo_actor *actor, const char *file, int line);
+extern void rayo_actor_destroy(struct rayo_actor *actor, const char *file, int line);
+#define RAYO_LOCATE(jid) rayo_actor_locate(jid, __FILE__, __LINE__)
+#define RAYO_LOCATE_BY_ID(id) rayo_actor_locate_by_id(id, __FILE__, __LINE__)
+#define RAYO_SET_EVENT_FN(actor, event) rayo_actor_set_event_fn(RAYO_ACTOR(actor), event)
 #define RAYO_ACTOR(x) ((struct rayo_actor *)x)
 #define RAYO_JID(x) RAYO_ACTOR(x)->jid
 #define RAYO_ID(x) RAYO_ACTOR(x)->id
 #define RAYO_POOL(x) RAYO_ACTOR(x)->pool
-#define RAYO_RDLOCK(x) rayo_actor_rdlock(RAYO_ACTOR(x))
-#define RAYO_UNLOCK(x) rayo_actor_unlock(RAYO_ACTOR(x))
-#define RAYO_DESTROY(x) rayo_actor_destroy(RAYO_ACTOR(x))
-
+#define RAYO_RDLOCK(x) rayo_actor_rdlock(RAYO_ACTOR(x), __FILE__, __LINE__)
+#define RAYO_UNLOCK(x) rayo_actor_unlock(RAYO_ACTOR(x), __FILE__, __LINE__)
+#define RAYO_DESTROY(x) rayo_actor_destroy(RAYO_ACTOR(x), __FILE__, __LINE__)
+#define RAYO_SEQ_NEXT(x) rayo_actor_seq_next(RAYO_ACTOR(x))
 
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 
