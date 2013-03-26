@@ -45,6 +45,11 @@
 
 struct input_handler;
 
+static struct {
+	/** grammar parser */
+	struct srgs_parser *parser;
+} globals;
+
 /**
  * Input component state
  */
@@ -57,6 +62,8 @@ struct input_component {
 	int num_digits;
 	/** The collected digits */
 	char digits[MAX_DTMF + 1];
+	/** grammar to match */
+	struct srgs_grammar *grammar;
 	/** time when last digit was received */
 	switch_time_t last_digit_time;
 	/** timeout before first digit is received */
@@ -79,8 +86,6 @@ struct input_component {
  * Call input state
  */
 struct input_handler {
-	/** The grammar parser */
-	struct srgs_parser *parser;
 	/** media bug to monitor frames / control input lifecycle */
 	switch_media_bug_t *bug;
 	/** active input component - TODO multiple inputs */
@@ -108,7 +113,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		component->last_digit_time = switch_micro_time_now();
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", component->digits);
 
-		match = srgs_match(handler->parser, component->digits);
+		match = srgs_grammar_match(component->grammar, component->digits);
 
 		switch (match) {
 			case SMT_MATCH_PARTIAL: {
@@ -248,7 +253,6 @@ static int start_call_input(struct input_component *component, switch_core_sessi
 	if (!handler) {
 		/* create input component */
 		handler = switch_core_session_alloc(session, sizeof(*handler));
-		handler->parser = srgs_parser_new(switch_core_session_get_uuid(session)); /* TODO cleanup on call hangup */
 		switch_mutex_init(&handler->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 		switch_channel_set_private(switch_core_session_get_channel(session), RAYO_INPUT_COMPONENT_PRIVATE_VAR, handler);
 	}
@@ -262,7 +266,7 @@ static int start_call_input(struct input_component *component, switch_core_sessi
 	component->handler = handler;
 
 	/* parse the grammar */
-	if (!srgs_parse(handler->parser, iks_find_cdata(input, "grammar"))) {
+	if (!(component->grammar = srgs_parse(globals.parser, iks_find_cdata(input, "grammar")))) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
 		RAYO_UNLOCK(component);
@@ -288,7 +292,7 @@ static int start_call_input(struct input_component *component, switch_core_sessi
 		const char *jsgf_path;
 		char *grammar = NULL;
 		component->speech_mode = 1;
-		jsgf_path = srgs_to_jsgf_file(handler->parser, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
+		jsgf_path = srgs_grammar_to_jsgf_file(component->grammar, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
 		if (!jsgf_path) {
 			rayo_component_send_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Grammar error");
 			RAYO_UNLOCK(component);
@@ -580,6 +584,8 @@ switch_status_t rayo_input_component_load(void)
 	srgs_init();
 	nlsml_init();
 
+	globals.parser = srgs_parser_new(NULL);
+
 	rayo_call_command_handler_add("set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_call_component_command_handler_add("input", "set:"RAYO_EXT_NS":stop", stop_call_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
@@ -597,6 +603,7 @@ switch_status_t rayo_input_component_load(void)
  */
 switch_status_t rayo_input_component_shutdown(void)
 {
+	srgs_parser_destroy(globals.parser);
 	switch_event_unbind_callback(on_detected_speech_event);
 	return SWITCH_STATUS_SUCCESS;
 }

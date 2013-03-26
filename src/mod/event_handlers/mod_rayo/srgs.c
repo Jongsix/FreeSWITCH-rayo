@@ -36,9 +36,9 @@
 #define MAX_RECURSION 100
 
 /** function to handle tag attributes */
-typedef int (* tag_attribs_fn)(struct srgs_parser *, char **);
+typedef int (* tag_attribs_fn)(struct srgs_grammar *, char **);
 /** function to handle tag CDATA */
-typedef int (* tag_cdata_fn)(struct srgs_parser *, char *, size_t);
+typedef int (* tag_cdata_fn)(struct srgs_grammar *, char *, size_t);
 
 /**
  * Tag definition
@@ -156,6 +156,12 @@ struct srgs_node {
  * A parsed grammar
  */
 struct srgs_grammar {
+	/** grammar memory pool */
+	switch_memory_pool_t *pool;
+	/** current node being parsed */
+	struct srgs_node *cur;
+	/** rule names mapped to node */
+	switch_hash_t *rules;
 	/** grammar encoding */
 	char *encoding;
 	/** grammar language */
@@ -174,6 +180,10 @@ struct srgs_grammar {
 	char *jsgf;
 	/** grammar as JSGF file */
 	char *jsgf_file_name;
+	/** synchronizes access to this grammar */
+	switch_mutex_t *mutex;
+	/** optional uuid for logging */
+	const char *uuid;
 };
 
 /**
@@ -182,14 +192,10 @@ struct srgs_grammar {
 struct srgs_parser {
 	/** parser memory pool */
 	switch_memory_pool_t *pool;
-	/** The current parsed grammar */
-	struct srgs_grammar *grammar;
-	/** current node being parsed */
-	struct srgs_node *cur;
 	/** grammar cache */
 	switch_hash_t *cache;
-	/** rule names mapped to node */
-	switch_hash_t *rules;
+	/** cache mutex */
+	switch_mutex_t *mutex;
 	/** optional uuid for logging */
 	const char *uuid;
 };
@@ -252,22 +258,22 @@ static void sn_log_node_open(struct srgs_node *node)
 		case SNT_TAG:
 		case SNT_ONE_OF:
 		case SNT_GRAMMAR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<%s>\n", node->name);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<%s>\n", node->name);
 			return;
 		case SNT_RULE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<rule id='%s' scope='%s'>\n", node->value.rule.id, node->value.rule.is_public ? "public" : "private");
 			return;
 		case SNT_ITEM:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<item repeat='%i'>\n", node->value.item.repeat_min);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<item repeat='%i'>\n", node->value.item.repeat_min);
 			return;
 		case SNT_UNRESOLVED_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref (unresolved) uri='%s'\n", node->value.ref.uri);
 			return;
 		case SNT_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "<ruleref uri='#%s'>\n", node->value.ref.node->value.rule.id);
 			return;
 		case SNT_STRING:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s\n", node->value.string);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "%s\n", node->value.string);
 			return;
 	}
 }
@@ -290,10 +296,10 @@ static void sn_log_node_close(struct srgs_node *node)
 		case SNT_META:
 		case SNT_METADATA:
 		case SNT_ANY:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "</%s>\n", node->name);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</%s>\n", node->name);
 			return;
 		case SNT_UNRESOLVED_REF:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "</ruleref (unresolved)>\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "</ruleref (unresolved)>\n");
 			return;
 		case SNT_STRING:
 			return;
@@ -417,65 +423,65 @@ static struct tag_def *add_root_tag_def(const char *tag, tag_attribs_fn attribs_
  * @param atts the attributes
  * @return IKS_OK if OK IKS_BADXML on parse failure
  */
-static int process_tag(struct srgs_parser *parser, const char *name, char **atts)
+static int process_tag(struct srgs_grammar *grammar, const char *name, char **atts)
 {
-	struct srgs_node *cur = parser->cur;
+	struct srgs_node *cur = grammar->cur;
 	if (cur->tag_def->is_root && cur->parent == NULL) {
 		/* no parent for ROOT tags */
-		return cur->tag_def->attribs_fn(parser, atts);
+		return cur->tag_def->attribs_fn(grammar, atts);
 	} else if (!cur->tag_def->is_root && cur->parent) {
 		/* check if this child is allowed by parent node */
 		struct tag_def *parent_def = cur->parent->tag_def;
 		if (switch_core_hash_find(parent_def->children_tags, "ANY") ||
 			switch_core_hash_find(parent_def->children_tags, name)) {
-			return cur->tag_def->attribs_fn(parser, atts);
+			return cur->tag_def->attribs_fn(grammar, atts);
 		} else {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> cannot be a child of <%s>\n", name, cur->parent->name);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<%s> cannot be a child of <%s>\n", name, cur->parent->name);
 		}
 	} else if (cur->tag_def->is_root && cur->parent != NULL) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> must be the root element\n", name);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<%s> must be the root element\n", name);
 	} else {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<%s> cannot be a root element\n", name);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<%s> cannot be a root element\n", name);
 	}
 	return IKS_BADXML;
 }
 
 /**
  * Handle tag attributes that are ignored
- * @param parser the parser
+ * @param grammar the grammar
  * @param atts the attributes
  * @return IKS_OK
  */
-static int process_attribs_ignore(struct srgs_parser *parser, char **atts)
+static int process_attribs_ignore(struct srgs_grammar *grammar, char **atts)
 {
 	return IKS_OK;
 }
 
 /**
  * Handle CDATA that is ignored
- * @param parser the parser
+ * @param grammar the grammar
  * @param data the CDATA
  * @param len the CDATA length
  * @return IKS_OK
  */
-static int process_cdata_ignore(struct srgs_parser *parser, char *data, size_t len)
+static int process_cdata_ignore(struct srgs_grammar *grammar, char *data, size_t len)
 {
 	return IKS_OK;
 }
 
 /**
  * Handle CDATA that is not allowed
- * @param parser the parser
+ * @param grammar the grammar
  * @param data the CDATA
  * @param len the CDATA length
  * @return IKS_BADXML if any printable characters
  */
-static int process_cdata_bad(struct srgs_parser *parser, char *data, size_t len)
+static int process_cdata_bad(struct srgs_grammar *grammar, char *data, size_t len)
 {
 	int i;
 	for (i = 0; i < len; i++) {
 		if (isgraph(data[i])) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", parser->cur->name);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Unexpected CDATA for <%s>\n", grammar->cur->name);
 			return IKS_BADXML;
 		}
 	}
@@ -484,13 +490,13 @@ static int process_cdata_bad(struct srgs_parser *parser, char *data, size_t len)
 
 /**
  * Process <rule> attributes
- * @param parser the parser state
+ * @param grammar the grammar state
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_rule(struct srgs_parser *parser, char **atts)
+static int process_rule(struct srgs_grammar *grammar, char **atts)
 {
-	struct srgs_node *rule = parser->cur;
+	struct srgs_node *rule = grammar->cur;
 	rule->value.rule.is_public = 0;
 	rule->value.rule.id = NULL;
 	if (atts) {
@@ -500,7 +506,7 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 				rule->value.rule.is_public = !zstr(atts[i + 1]) && !strcmp("public", atts[i + 1]);
 			} else if (!strcmp("id", atts[i])) {
 				if (!zstr(atts[i + 1])) {
-					rule->value.rule.id = switch_core_strdup(parser->pool, atts[i + 1]);
+					rule->value.rule.id = switch_core_strdup(grammar->pool, atts[i + 1]);
 				}
 			}
 			i += 2;
@@ -508,43 +514,43 @@ static int process_rule(struct srgs_parser *parser, char **atts)
 	}
 
 	if (zstr(rule->value.rule.id)) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Missing rule ID: %s\n", rule->value.rule.id);
 		return IKS_BADXML;
 	}
 
-	if (switch_core_hash_find(parser->rules, rule->value.rule.id)) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id);
+	if (switch_core_hash_find(grammar->rules, rule->value.rule.id)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Duplicate rule ID: %s\n", rule->value.rule.id);
 		return IKS_BADXML;
 	}
-	switch_core_hash_insert(parser->rules, rule->value.rule.id, rule);
+	switch_core_hash_insert(grammar->rules, rule->value.rule.id, rule);
 
 	return IKS_OK;
 }
 
 /**
  * Process <ruleref> attributes
- * @param parser the parser state
+ * @param grammar the grammar state
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_ruleref(struct srgs_parser *parser, char **atts)
+static int process_ruleref(struct srgs_grammar *grammar, char **atts)
 {
-	struct srgs_node *ruleref = parser->cur;
+	struct srgs_node *ruleref = grammar->cur;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
 			if (!strcmp("uri", atts[i])) {
 				char *uri = atts[i + 1];
 				if (zstr(uri)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Empty <ruleref> uri\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Empty <ruleref> uri\n");
 					return IKS_BADXML;
 				}
 				/* only allow local reference */
 				if (uri[0] != '#' || strlen(uri) < 2) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Only local rule refs allowed\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Only local rule refs allowed\n");
 					return IKS_BADXML;
 				}
-				ruleref->value.ref.uri = switch_core_strdup(parser->pool, uri);
+				ruleref->value.ref.uri = switch_core_strdup(grammar->pool, uri);
 				return IKS_OK;
 			}
 			i += 2;
@@ -555,13 +561,13 @@ static int process_ruleref(struct srgs_parser *parser, char **atts)
 
 /**
  * Process <item> attributes
- * @param parser the parser state
+ * @param grammar the grammar state
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_item(struct srgs_parser *parser, char **atts)
+static int process_item(struct srgs_grammar *grammar, char **atts)
 {
-	struct srgs_node *item = parser->cur;
+	struct srgs_node *item = grammar->cur;
 	item->value.item.repeat_min = 1;
 	item->value.item.repeat_max = 1;
 	item->value.item.weight = NULL;
@@ -572,27 +578,27 @@ static int process_item(struct srgs_parser *parser, char **atts)
 				/* repeats of 0 are not supported by this code */
 				char *repeat = atts[i + 1];
 				if (zstr(repeat)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Empty <item> repeat atribute\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Empty <item> repeat atribute\n");
 					return IKS_BADXML;
 				}
 				if (switch_is_number(repeat)) {
 					/* single number */
 					int repeat_val = atoi(repeat);
 					if (repeat_val < 1) {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat must be >= 0\n");
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<item> repeat must be >= 0\n");
 						return IKS_BADXML;
 					}
 					item->value.item.repeat_min = repeat_val;
 					item->value.item.repeat_max = repeat_val;
 				} else {
 					/* range */
-					char *min = switch_core_strdup(parser->pool, repeat);
+					char *min = switch_core_strdup(grammar->pool, repeat);
 					char *max = strchr(min, '-');
 					if (max) {
 						*max = '\0';
 						max++;
 					} else {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat must be a number or range\n");
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<item> repeat must be a number or range\n");
 						return IKS_BADXML;
 					}
 					if (switch_is_number(min) && (switch_is_number(max) || zstr(max))) {
@@ -601,23 +607,23 @@ static int process_item(struct srgs_parser *parser, char **atts)
 						/* max must be >= min and > 0
 						   min must be >= 0 */
 						if ((max_val <= 0) || (max_val < min_val) || (min_val < 0)) {
-							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat range invalid\n");
+							switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<item> repeat range invalid\n");
 							return IKS_BADXML;
 						}
 						item->value.item.repeat_min = min_val;
 						item->value.item.repeat_max = max_val;
 					} else {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> repeat range is not a number\n");
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<item> repeat range is not a number\n");
 						return IKS_BADXML;
 					}
 				}
 			} else if (!strcmp("weight", atts[i])) {
 				const char *weight = atts[i + 1];
 				if (zstr(weight) || !switch_is_number(weight) || atof(weight) < 0) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<item> weight is not a number >= 0\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<item> weight is not a number >= 0\n");
 					return IKS_BADXML;
 				}
-				item->value.item.weight = switch_core_strdup(parser->pool, weight);
+				item->value.item.weight = switch_core_strdup(grammar->pool, weight);
 			}
 			i += 2;
 		}
@@ -627,48 +633,48 @@ static int process_item(struct srgs_parser *parser, char **atts)
 
 /**
  * Process <grammar> attributes
- * @param parser the parser state
+ * @param grammar the grammar state
  * @param atts the attributes
  * @return IKS_OK if ok
  */
-static int process_grammar(struct srgs_parser *parser, char **atts)
+static int process_grammar(struct srgs_grammar *grammar, char **atts)
 {
-	if (parser->grammar->root) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Only one <grammar> tag allowed\n");
+	if (grammar->root) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Only one <grammar> tag allowed\n");
 		return IKS_BADXML;
 	}
-	parser->grammar->root = parser->cur;
+	grammar->root = grammar->cur;
 	if (atts) {
 		int i = 0;
 		while (atts[i]) {
 			if (!strcmp("mode", atts[i])) {
 				char *mode = atts[i + 1];
 				if (zstr(mode)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> mode is missing\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<grammar> mode is missing\n");
 					return IKS_BADXML;
 				}
-				parser->grammar->digit_mode = !strcasecmp(mode, "dtmf");
+				grammar->digit_mode = !strcasecmp(mode, "dtmf");
 			} else if(!strcmp("encoding", atts[i])) {
 				char *encoding = atts[i + 1];
 				if (zstr(encoding)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> encoding is empty\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<grammar> encoding is empty\n");
 					return IKS_BADXML;
 				}
-				parser->grammar->encoding = switch_core_strdup(parser->pool, encoding);
+				grammar->encoding = switch_core_strdup(grammar->pool, encoding);
 			} else if (!strcmp("language", atts[i])) {
 				char *language = atts[i + 1];
 				if (zstr(language)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> language is empty\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<grammar> language is empty\n");
 					return IKS_BADXML;
 				}
-				parser->grammar->language = switch_core_strdup(parser->pool, language);
+				grammar->language = switch_core_strdup(grammar->pool, language);
 			} else if (!strcmp("root", atts[i])) {
 				char *root = atts[i + 1];
 				if (zstr(root)) {
-					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "<grammar> root is empty\n");
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "<grammar> root is empty\n");
 					return IKS_BADXML;
 				}
-				parser->cur->value.root = switch_core_strdup(parser->pool, root);
+				grammar->cur->value.root = switch_core_strdup(grammar->pool, root);
 			}
 			i += 2;
 		}
@@ -682,22 +688,22 @@ static int process_grammar(struct srgs_parser *parser, char **atts)
 static int tag_hook(void *user_data, char *name, char **atts, int type)
 {
 	int result = IKS_OK;
-	struct srgs_parser *parser = (struct srgs_parser *)user_data;
+	struct srgs_grammar *grammar = (struct srgs_grammar *)user_data;
 
 	if (type == IKS_OPEN || type == IKS_SINGLE) {
 		enum srgs_node_type ntype = string_to_node_type(name);
-		parser->cur = sn_insert(parser->pool, parser->cur, name, ntype);
-		parser->cur->tag_def = switch_core_hash_find(globals.tag_defs, name);
-		if (!parser->cur->tag_def) {
-			parser->cur->tag_def = switch_core_hash_find(globals.tag_defs, "ANY");
+		grammar->cur = sn_insert(grammar->pool, grammar->cur, name, ntype);
+		grammar->cur->tag_def = switch_core_hash_find(globals.tag_defs, name);
+		if (!grammar->cur->tag_def) {
+			grammar->cur->tag_def = switch_core_hash_find(globals.tag_defs, "ANY");
 		}
-		result = process_tag(parser, name, atts);
-		sn_log_node_open(parser->cur);
+		result = process_tag(grammar, name, atts);
+		sn_log_node_open(grammar->cur);
 	}
 
 	if (type == IKS_CLOSE || type == IKS_SINGLE) {
-		sn_log_node_close(parser->cur);
-		parser->cur = parser->cur->parent;
+		sn_log_node_close(grammar->cur);
+		grammar->cur = grammar->cur->parent;
 	}
 
 	return result;
@@ -705,27 +711,27 @@ static int tag_hook(void *user_data, char *name, char **atts, int type)
 
 /**
  * Process CDATA grammar tokens
- * @param parser the parser
+ * @param grammar the grammar
  * @param data the CDATA
  * @param len the CDATA length
  * @return IKS_OK
  */
-static int process_cdata_tokens(struct srgs_parser *parser, char *data, size_t len)
+static int process_cdata_tokens(struct srgs_grammar *grammar, char *data, size_t len)
 {
-	struct srgs_node *string = parser->cur;
+	struct srgs_node *string = grammar->cur;
 	int i;
-	if (parser->grammar->digit_mode) {
+	if (grammar->digit_mode) {
 		for (i = 0; i < len; i++) {
 			if (isdigit(data[i]) || data[i] == '#' || data[i] == '*') {
-				char *digit = switch_core_alloc(parser->pool, sizeof(char) * 2);
+				char *digit = switch_core_alloc(grammar->pool, sizeof(char) * 2);
 				digit[0] = data[i];
 				digit[1] = '\0';
-				string = sn_insert_string(parser->pool, string, digit);
+				string = sn_insert_string(grammar->pool, string, digit);
 				sn_log_node_open(string);
 			}
 		}
 	} else {
-		char *data_dup = switch_core_alloc(parser->pool, sizeof(char) * (len + 1));
+		char *data_dup = switch_core_alloc(grammar->pool, sizeof(char) * (len + 1));
 		char *start = data_dup;
 		char *end = start + len - 1;
 		memcpy(data_dup, data, len);
@@ -738,7 +744,7 @@ static int process_cdata_tokens(struct srgs_parser *parser, char *data, size_t l
 				*end = '\0';
 			}
 			if (!zstr(start)) {
-				string = sn_insert_string(parser->pool, string, start);
+				string = sn_insert_string(grammar->pool, string, start);
 			}
 		}
 	}
@@ -747,26 +753,62 @@ static int process_cdata_tokens(struct srgs_parser *parser, char *data, size_t l
 
 /**
  * Process cdata
- * @param user_data the parser
+ * @param user_data the grammar
  * @param data the CDATA
  * @param len the CDATA length
  * @return IKS_OK
  */
 static int cdata_hook(void *user_data, char *data, size_t len)
 {
-	struct srgs_parser *parser = (struct srgs_parser *)user_data;
-	if (!parser) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing parser\n");
+	struct srgs_grammar *grammar = (struct srgs_grammar *)user_data;
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing grammar\n");
 		return IKS_BADXML;
 	}
-	if (parser->cur) {
-		if (parser->cur->tag_def) {
-			return parser->cur->tag_def->cdata_fn(parser, data, len);
+	if (grammar->cur) {
+		if (grammar->cur->tag_def) {
+			return grammar->cur->tag_def->cdata_fn(grammar, data, len);
 		}
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing definition for <%s>\n", parser->cur->name);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Missing definition for <%s>\n", grammar->cur->name);
 		return IKS_BADXML;
 	}
 	return IKS_OK;
+}
+
+/**
+ * Create a new parsed grammar
+ * @param parser
+ * @return the grammar
+ */
+struct srgs_grammar *srgs_grammar_new(struct srgs_parser *parser)
+{
+	switch_memory_pool_t *pool = NULL;
+	struct srgs_grammar *grammar = NULL;
+	switch_core_new_memory_pool(&pool);
+	grammar = switch_core_alloc(pool, sizeof (*grammar));
+	grammar->pool = pool;
+	grammar->root = NULL;
+	grammar->cur = NULL;
+	grammar->uuid = (parser && !zstr(parser->uuid)) ? switch_core_strdup(pool, parser->uuid) : "";
+	switch_core_hash_init(&grammar->rules, pool);
+	switch_mutex_init(&grammar->mutex, SWITCH_MUTEX_NESTED, pool);
+	return grammar;
+}
+
+/**
+ * Destroy a parsed grammar
+ * @param grammar the grammar
+ */
+static void srgs_grammar_destroy(struct srgs_grammar *grammar)
+{
+	switch_memory_pool_t *pool = grammar->pool;
+	if (grammar->compiled_regex) {
+		pcre_free(grammar->compiled_regex);
+	}
+	if (grammar->jsgf_file_name) {
+		switch_file_remove(grammar->jsgf_file_name, pool);
+	}
+	switch_core_destroy_memory_pool(&pool);
 }
 
 /**
@@ -782,9 +824,9 @@ struct srgs_parser *srgs_parser_new(const char *uuid)
 	if (pool) {
 		parser = switch_core_alloc(pool, sizeof(*parser));
 		parser->pool = pool;
-		parser->uuid = zstr(uuid) ? "" : uuid;
+		parser->uuid = zstr(uuid) ? "" : switch_core_strdup(pool, uuid);
 		switch_core_hash_init(&parser->cache, pool);
-		switch_core_hash_init(&parser->rules, pool);
+		switch_mutex_init(&parser->mutex, SWITCH_MUTEX_NESTED, pool);
 	}
 	return parser;
 }
@@ -806,24 +848,19 @@ void srgs_parser_destroy(struct srgs_parser *parser)
 		switch_core_hash_this(hi, &key, NULL, &val);
 		grammar = (struct srgs_grammar *)val;
 		switch_assert(grammar);
-		if (grammar->compiled_regex) {
-			pcre_free(grammar->compiled_regex);
-		}
-		if (grammar->jsgf_file_name) {
-			switch_file_remove(grammar->jsgf_file_name, pool);
-		}
+		srgs_grammar_destroy(grammar);
 	}
 	switch_core_destroy_memory_pool(&pool);
 }
 
 /**
  * Create regexes
- * @param parser the parser
+ * @param grammar the grammar
  * @param node root node
  * @param stream set to NULL
  * @return 1 if successful
  */
-static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, switch_stream_handle_t *stream)
+static int create_regexes(struct srgs_grammar *grammar, struct srgs_node *node, switch_stream_handle_t *stream)
 {
 	sn_log_node_open(node);
 	switch (node->type) {
@@ -831,11 +868,11 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 			if (node->child) {
 				int num_rules = 0;
 				struct srgs_node *child = node->child;
-				if (parser->grammar->root_rule) {
-					if (!create_regexes(parser, parser->grammar->root_rule, NULL)) {
+				if (grammar->root_rule) {
+					if (!create_regexes(grammar, grammar->root_rule, NULL)) {
 						return 0;
 					}
-					parser->grammar->regex = switch_core_sprintf(parser->pool, "^%s$", parser->grammar->root_rule->value.rule.regex);
+					grammar->regex = switch_core_sprintf(grammar->pool, "^%s$", grammar->root_rule->value.rule.regex);
 				} else {
 					switch_stream_handle_t new_stream = { 0 };
 					SWITCH_STANDARD_STREAM(new_stream);
@@ -845,7 +882,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 						new_stream.write_function(&new_stream, "%s", "^");
 					}
 					for (; child; child = child->next) {
-						if (!create_regexes(parser, child, &new_stream)) {
+						if (!create_regexes(grammar, child, &new_stream)) {
 							switch_safe_free(new_stream.data);
 							return 0;
 						}
@@ -862,10 +899,10 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 					} else {
 						new_stream.write_function(&new_stream, "%s", "$");
 					}
-					parser->grammar->regex = switch_core_strdup(parser->pool, new_stream.data);
+					grammar->regex = switch_core_strdup(grammar->pool, new_stream.data);
 					switch_safe_free(new_stream.data);
 				}
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", parser->grammar->regex);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_DEBUG, "document regex = %s\n", grammar->regex);
 			}
 			break;
 		case SNT_RULE:
@@ -876,14 +913,14 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				switch_stream_handle_t new_stream = { 0 };
 				SWITCH_STANDARD_STREAM(new_stream);
 				for (; item; item = item->next) {
-					if (!create_regexes(parser, item, &new_stream)) {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s regex failed = %s\n", node->value.rule.id, node->value.rule.regex);
+					if (!create_regexes(grammar, item, &new_stream)) {
+						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_DEBUG, "%s regex failed = %s\n", node->value.rule.id, node->value.rule.regex);
 						switch_safe_free(new_stream.data);
 						return 0;
 					}
 				}
-				node->value.rule.regex = switch_core_strdup(parser->pool, new_stream.data);
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s regex = %s\n", node->value.rule.id, node->value.rule.regex);
+				node->value.rule.regex = switch_core_strdup(grammar->pool, new_stream.data);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_DEBUG, "%s regex = %s\n", node->value.rule.id, node->value.rule.regex);
 				switch_safe_free(new_stream.data);
 			}
 			break;
@@ -911,7 +948,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 				}
 			}
 			if (node->child) {
-				if (!create_regexes(parser, node->child, stream)) {
+				if (!create_regexes(grammar, node->child, stream)) {
 					return 0;
 				}
 			}
@@ -924,7 +961,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 					stream->write_function(stream, "%s", "(?:");
 				}
 				for(; item; item = item->next) {
-					if (!create_regexes(parser, item, stream)) {
+					if (!create_regexes(grammar, item, stream)) {
 						return 0;
 					}
 				}
@@ -957,7 +994,7 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 					if (item != node->child) {
 						stream->write_function(stream, "%s", "|");
 					}
-					if (!create_regexes(parser, item, stream)) {
+					if (!create_regexes(grammar, item, stream)) {
 						return 0;
 					}
 				}
@@ -969,8 +1006,8 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 		case SNT_REF: {
 			struct srgs_node *rule = node->value.ref.node;
 			if (!rule->value.rule.regex) {
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "ruleref: create %s regex\n", rule->value.rule.id);
-				if (!create_regexes(parser, rule, NULL)) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_DEBUG, "ruleref: create %s regex\n", rule->value.rule.id);
+				if (!create_regexes(grammar, rule, NULL)) {
 					return 0;
 				}
 			}
@@ -992,64 +1029,62 @@ static int create_regexes(struct srgs_parser *parser, struct srgs_node *node, sw
 /**
  * Compile regex
  */
-static pcre *get_compiled_regex(struct srgs_parser *parser)
+static pcre *get_compiled_regex(struct srgs_grammar *grammar)
 {
 	int erroffset = 0;
 	const char *errptr = "";
 	int options = 0;
 	const char *regex;
 
-	if (!parser) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "parser is NULL!\n");
-		return NULL;
-	}
-	if (!parser->grammar) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
 		return NULL;
 	}
 
-	if (!parser->grammar->compiled_regex && (regex = srgs_to_regex(parser))) {
-		if (!(parser->grammar->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL))) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
+	switch_mutex_lock(grammar->mutex);
+	if (!grammar->compiled_regex && (regex = srgs_grammar_to_regex(grammar))) {
+		if (!(grammar->compiled_regex = pcre_compile(regex, options, &errptr, &erroffset, NULL))) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_WARNING, "Failed to compile grammar regex: %s\n", regex);
 		}
 	}
-	return parser->grammar->compiled_regex;
+	switch_mutex_unlock(grammar->mutex);
+	return grammar->compiled_regex;
 }
 
 /**
  * Resolve all unresolved references and detect loops.
- * @param parser the parser
+ * @param grammar the grammar
  * @param node the current node
  * @param level the recursion level
  */
-static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int level)
+static int resolve_refs(struct srgs_grammar *grammar, struct srgs_node *node, int level)
 {
 	sn_log_node_open(node);
 	if (node->visited) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Loop detected.\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Loop detected.\n");
 		return 0;
 	}
 	node->visited = 1;
 
 	if (level > MAX_RECURSION) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Recursion too deep.\n");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Recursion too deep.\n");
 		return 0;
 	}
 
 	if (node->type == SNT_GRAMMAR && node->value.root) {
-		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(parser->rules, node->value.root);
+		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(grammar->rules, node->value.root);
 		if (!rule) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Root rule not found: %s\n", node->value.root);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Root rule not found: %s\n", node->value.root);
 			return 0;
 		}
-		parser->grammar->root_rule = rule;
+		grammar->root_rule = rule;
 	}
 
 	if (node->type == SNT_UNRESOLVED_REF) {
 		/* resolve reference to local rule- drop first character # from URI */
-		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(parser->rules, node->value.ref.uri + 1);
+		struct srgs_node *rule = (struct srgs_node *)switch_core_hash_find(grammar->rules, node->value.ref.uri + 1);
 		if (!rule) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Local rule not found: %s\n", node->value.ref.uri);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_INFO, "Local rule not found: %s\n", node->value.ref.uri);
 			return 0;
 		}
 
@@ -1060,7 +1095,7 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
 
 	/* travel through rule to detect loops */
 	if (node->type == SNT_REF) {
-		if (!resolve_refs(parser, node->value.ref.node, level + 1)) {
+		if (!resolve_refs(grammar, node->value.ref.node, level + 1)) {
 			return 0;
 		}
 	}
@@ -1069,7 +1104,7 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
 	if (node->child) {
 		struct srgs_node *child = node->child;
 		for (; child; child = child->next) {
-			if (!resolve_refs(parser, child, level + 1)) {
+			if (!resolve_refs(grammar, child, level + 1)) {
 				return 0;
 			}
 		}
@@ -1084,36 +1119,34 @@ static int resolve_refs(struct srgs_parser *parser, struct srgs_node *node, int 
  * Parse the document into rules to match
  * @param parser the parser
  * @param document the document to parse
- * @return true if successful
+ * @return the parsed grammar if successful
  */
-int srgs_parse(struct srgs_parser *parser, const char *document)
+struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document)
 {
 	struct srgs_grammar *grammar = NULL;
 	if (!parser) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "NULL parser!!\n");
-		return 0;
+		return NULL;
 	}
 
 	if (zstr(document)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Missing grammar document\n");
-		return 0;
+		return NULL;
 	}
 
 	/* check for cached grammar */
+	switch_mutex_lock(parser->mutex);
 	grammar = (struct srgs_grammar *)switch_core_hash_find(parser->cache, document);
 	if (!grammar) {
 		int result = 0;
-		iksparser *p = iks_sax_new(parser, tag_hook, cdata_hook);
+		iksparser *p;
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Parsing new grammar\n");
-		grammar = switch_core_alloc(parser->pool, sizeof (*grammar));
-		parser->grammar = grammar;
-		parser->grammar->root = NULL;
-		parser->cur = NULL;
-		switch_core_hash_delete_multi(parser->rules, NULL, NULL);
+		grammar = srgs_grammar_new(parser);
+		p = iks_sax_new(grammar, tag_hook, cdata_hook);
 		if (iks_parse(p, document, 0, 1) == IKS_OK) {
-			if (parser->grammar->root) {
+			if (grammar->root) {
 				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Resolving references\n");
-				if (resolve_refs(parser, parser->grammar->root, 0)) {
+				if (resolve_refs(grammar, grammar->root, 0)) {
 					result = 1;
 				}
 			} else {
@@ -1122,37 +1155,41 @@ int srgs_parse(struct srgs_parser *parser, const char *document)
 		}
 		iks_parser_delete(p);
 		if (result) {
-			switch_core_hash_insert(parser->cache, document, parser->grammar);
+			switch_core_hash_insert(parser->cache, document, grammar);
 		} else {
+			if (grammar) {
+				srgs_grammar_destroy(grammar);
+				grammar = NULL;
+			}
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "Failed to parse grammar\n");
-			return 0;
 		}
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "Using cached grammar\n");
-		parser->grammar = grammar;
 	}
-	return 1;
+	switch_mutex_unlock(parser->mutex);
+
+	return grammar;
 }
 
 /**
  * Find a match
- * @param parser the parser
+ * @param grammar the grammar to match
  * @param input the input to compare
  * @return the match result
  */
-enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
+enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char *input)
 {
 	int result = 0;
 	int ovector[30];
 	int workspace[1024];
-	pcre *compiled_regex = get_compiled_regex(parser);
+	pcre *compiled_regex = get_compiled_regex(grammar);
 	if (!compiled_regex) {
 		return SMT_NO_MATCH;
 	}
 	result = pcre_dfa_exec(compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
 		ovector, sizeof(ovector) / sizeof(ovector[0]),
 		workspace, sizeof(workspace) / sizeof(workspace[0]));
-	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "match = %i\n", result);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match = %i\n", result);
 	if (result > 0) {
 		return SMT_MATCH;
 	}
@@ -1167,16 +1204,19 @@ enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input)
  * @param parser the parser
  * @return the regex or NULL
  */
-const char *srgs_to_regex(struct srgs_parser *parser)
+const char *srgs_grammar_to_regex(struct srgs_grammar *grammar)
 {
-	if (!parser || !parser->grammar) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_INFO, "parser or grammar is NULL!\n");
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "grammar is NULL!\n");
 		return NULL;
 	}
-	if (!parser->grammar->regex && !create_regexes(parser, parser->grammar->root, NULL)) {
+	switch_mutex_lock(grammar->mutex);
+	if (!grammar->regex && !create_regexes(grammar, grammar->root, NULL)) {
+		switch_mutex_unlock(grammar->mutex);
 		return NULL;
 	}
-	return parser->grammar->regex;
+	switch_mutex_unlock(grammar->mutex);
+	return grammar->regex;
 }
 
 /**
@@ -1186,7 +1226,7 @@ const char *srgs_to_regex(struct srgs_parser *parser)
  * @param stream set to NULL
  * @return 1 if successful
  */
-static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switch_stream_handle_t *stream)
+static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, switch_stream_handle_t *stream)
 {
 	sn_log_node_open(node);
 	switch (node->type) {
@@ -1197,10 +1237,10 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 				SWITCH_STANDARD_STREAM(new_stream);
 
 				new_stream.write_function(&new_stream, "#JSGF V1.0");
-				if (!zstr(parser->grammar->encoding)) {
-					new_stream.write_function(&new_stream, " %s", parser->grammar->encoding);
-					if (!zstr(parser->grammar->language)) {
-						new_stream.write_function(&new_stream, " %s", parser->grammar->language);
+				if (!zstr(grammar->encoding)) {
+					new_stream.write_function(&new_stream, " %s", grammar->encoding);
+					if (!zstr(grammar->language)) {
+						new_stream.write_function(&new_stream, " %s", grammar->language);
 					}
 				}
 
@@ -1209,8 +1249,8 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					"public ");
 
 				/* output root rule */
-				if (parser->grammar->root_rule) {
-					if (!create_jsgf(parser, parser->grammar->root_rule, &new_stream)) {
+				if (grammar->root_rule) {
+					if (!create_jsgf(grammar, grammar->root_rule, &new_stream)) {
 						switch_safe_free(new_stream.data);
 						return 0;
 					}
@@ -1239,8 +1279,8 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					} else {
 						for (child = node->child; child; child = child->next) {
 							if (child->type == SNT_RULE && child->value.rule.is_public) {
-								parser->grammar->root_rule = child;
-								if (!create_jsgf(parser, child, &new_stream)) {
+								grammar->root_rule = child;
+								if (!create_jsgf(grammar, child, &new_stream)) {
 									switch_safe_free(new_stream.data);
 									return 0;
 								} else {
@@ -1253,16 +1293,16 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 
 				/* output all rule definitions */
 				for (child = node->child; child; child = child->next) {
-					if (child->type == SNT_RULE && child != parser->grammar->root_rule) {
-						if (!create_jsgf(parser, child, &new_stream)) {
+					if (child->type == SNT_RULE && child != grammar->root_rule) {
+						if (!create_jsgf(grammar, child, &new_stream)) {
 							switch_safe_free(new_stream.data);
 							return 0;
 						}
 					}
 				}
-				parser->grammar->jsgf = switch_core_strdup(parser->pool, new_stream.data);
+				grammar->jsgf = switch_core_strdup(grammar->pool, new_stream.data);
 				switch_safe_free(new_stream.data);
-				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "document jsgf = %s\n", parser->grammar->jsgf);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "document jsgf = %s\n", grammar->jsgf);
 			}
 			break;
 		case SNT_RULE:
@@ -1270,8 +1310,8 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 				struct srgs_node *item = node->child;
 				stream->write_function(stream, "<%s> =", node->value.rule.id);
 				for (; item; item = item->next) {
-					if (!create_jsgf(parser, item, stream)) {
-						switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_DEBUG, "%s jsgf rule failed\n", node->value.rule.id);
+					if (!create_jsgf(grammar, item, stream)) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s jsgf rule failed\n", node->value.rule.id);
 						return 0;
 					}
 				}
@@ -1309,7 +1349,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 			}
 			//stream->write_function(stream, "\"");
 			if (node->child) {
-				if (!create_jsgf(parser, node->child, stream)) {
+				if (!create_jsgf(grammar, node->child, stream)) {
 					return 0;
 				}
 			}
@@ -1322,7 +1362,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 					/* optional item */
 					stream->write_function(stream, " [");
 					for(item = node->child; item; item = item->next) {
-						if (!create_jsgf(parser, item, stream)) {
+						if (!create_jsgf(grammar, item, stream)) {
 							return 0;
 						}
 					}
@@ -1335,7 +1375,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 							stream->write_function(stream, " (");
 						}
 						for(item = node->child; item; item = item->next) {
-							if (!create_jsgf(parser, item, stream)) {
+							if (!create_jsgf(grammar, item, stream)) {
 								return 0;
 							}
 						}
@@ -1349,7 +1389,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 						for (;i < node->value.item.repeat_max; i++) {
 							stream->write_function(stream, " [");
 							for(item = node->child; item; item = item->next) {
-								if (!create_jsgf(parser, item, stream)) {
+								if (!create_jsgf(grammar, item, stream)) {
 									return 0;
 								}
 							}
@@ -1370,7 +1410,7 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 						stream->write_function(stream, " |");
 					}
 					stream->write_function(stream, " (");
-					if (!create_jsgf(parser, item, stream)) {
+					if (!create_jsgf(grammar, item, stream)) {
 						return 0;
 					}
 					stream->write_function(stream, " )");
@@ -1396,64 +1436,63 @@ static int create_jsgf(struct srgs_parser *parser, struct srgs_node *node, switc
 
 /**
  * Generate JSGF from SRGS document.  Call this after parsing SRGS document.
- * @param parser the parser
+ * @param grammar the grammar
  * @return the JSGF document or NULL
  */
-const char *srgs_to_jsgf(struct srgs_parser *parser)
+const char *srgs_grammar_to_jsgf(struct srgs_grammar *grammar)
 {
-	if (!parser) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "parser is NULL!\n");
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "grammar is NULL!\n");
 		return NULL;
 	}
-	if (!parser->grammar) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
+	switch_mutex_lock(grammar->mutex);
+	if (!grammar->jsgf && !create_jsgf(grammar, grammar->root, NULL)) {
+		switch_mutex_unlock(grammar->mutex);
 		return NULL;
 	}
-	if (!parser->grammar->jsgf && !create_jsgf(parser, parser->grammar->root, NULL)) {
-		return NULL;
-	}
-	return parser->grammar->jsgf;
+	switch_mutex_unlock(grammar->mutex);
+	return grammar->jsgf;
 }
 
 /**
  * Generate JSGF file from SRGS document.  Call this after parsing SRGS document.
- * @param parser the parser
+ * @param grammar the grammar
  * @param basedir the base path to use if file does not already exist
  * @param ext the extension to use
  * @return the path or NULL
  */
-const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir, const char *ext)
+const char *srgs_grammar_to_jsgf_file(struct srgs_grammar *grammar, const char *basedir, const char *ext)
 {
-	if (!parser) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "parser is NULL!\n");
+	if (!grammar) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(grammar->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
 		return NULL;
 	}
-	if (!parser->grammar) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_CRIT, "grammar is NULL!\n");
-		return NULL;
-	}
-	if (!parser->grammar->jsgf_file_name) {
+	switch_mutex_lock(grammar->mutex);
+	if (!grammar->jsgf_file_name) {
 		char file_name_buf[SWITCH_UUID_FORMATTED_LENGTH + 1];
 		switch_file_t *file;
 		switch_size_t len;
-		const char *jsgf = srgs_to_jsgf(parser);
+		const char *jsgf = srgs_grammar_to_jsgf(grammar);
                 switch_uuid_str(file_name_buf, sizeof(file_name_buf));
-		parser->grammar->jsgf_file_name = switch_core_sprintf(parser->pool, "%s%s%s.%s", basedir, SWITCH_PATH_SEPARATOR, file_name_buf, ext);
+		grammar->jsgf_file_name = switch_core_sprintf(grammar->pool, "%s%s%s.%s", basedir, SWITCH_PATH_SEPARATOR, file_name_buf, ext);
 		if (!jsgf) {
+			switch_mutex_unlock(grammar->mutex);
 			return NULL;
 		}
 
 		/* write grammar to file */
-		if (switch_file_open(&file, parser->grammar->jsgf_file_name, SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_CREATE, SWITCH_FPROT_OS_DEFAULT, parser->pool) != SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(parser->uuid), SWITCH_LOG_WARNING, "Failed to create jsgf file: %s!\n", parser->grammar->jsgf_file_name);
-			parser->grammar->jsgf_file_name = NULL;
+		if (switch_file_open(&file, grammar->jsgf_file_name, SWITCH_FOPEN_WRITE | SWITCH_FOPEN_TRUNCATE | SWITCH_FOPEN_CREATE, SWITCH_FPROT_OS_DEFAULT, grammar->pool) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create jsgf file: %s!\n", grammar->jsgf_file_name);
+			grammar->jsgf_file_name = NULL;
+			switch_mutex_unlock(grammar->mutex);
 			return NULL;
 		}
 		len = strlen(jsgf);
 		switch_file_write(file, jsgf, &len);
 		switch_file_close(file);
 	}
-	return parser->grammar->jsgf_file_name;
+	switch_mutex_unlock(grammar->mutex);
+	return grammar->jsgf_file_name;
 }
 
 /**
