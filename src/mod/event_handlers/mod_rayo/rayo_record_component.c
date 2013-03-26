@@ -118,7 +118,7 @@ static void complete_record(struct rayo_component *component, const char *reason
 static void on_call_record_stop_event(switch_event_t *event)
 {
 	const char *file_path = switch_event_get_header(event, "Record-File-Path");
-	struct rayo_component *component = rayo_component_locate(file_path);
+	struct rayo_component *component = RAYO_COMPONENT_LOCATE(file_path);
 
 	if (component) {
 		RECORD_COMPONENT(component)->duration_ms += (switch_micro_time_now() - RECORD_COMPONENT(component)->start_time) / 1000;
@@ -334,7 +334,7 @@ static void on_mixer_record_event(switch_event_t *event)
 {
 	const char *file_path = switch_event_get_header(event, "Path");
 	const char *action = switch_event_get_header(event, "Action");
-	struct rayo_component *component = rayo_component_locate(file_path);
+	struct rayo_component *component = RAYO_COMPONENT_LOCATE(file_path);
 
 	if (component) {
 		struct record_component *record = RECORD_COMPONENT(component);

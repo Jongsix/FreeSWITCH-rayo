@@ -385,7 +385,7 @@ static void on_detected_speech_event(switch_event_t *event)
 	if (!strcasecmp("detected-speech", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
 		char *component_id = switch_mprintf("%s-input", uuid);
-		struct rayo_component *component = rayo_component_locate(component_id);
+		struct rayo_component *component = RAYO_COMPONENT_LOCATE(component_id);
 		switch_safe_free(component_id);
 		if (component) {
 			const char *result = switch_event_get_body(event);
@@ -421,7 +421,7 @@ static void on_detected_speech_event(switch_event_t *event)
 	} else if (!strcasecmp("closed", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
 		char *component_id = switch_mprintf("%s-input", uuid);
-		struct rayo_component *component = rayo_component_locate(component_id);
+		struct rayo_component *component = RAYO_COMPONENT_LOCATE(component_id);
 		switch_safe_free(component_id);
 		if (component) {
 			char *channel_state = switch_event_get_header(event, "Channel-State");
