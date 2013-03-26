@@ -94,24 +94,30 @@ void rayo_component_send_start(struct rayo_component *component, iks *iq)
 /**
  * Create component complete event
  * @param component the component
- * @param reason the completion reason
+ * @param reason_str the completion reason
  * @param reason_namespace the completion reason namespace
- * @param meta metadata to add as child of reason
+ * @param meta metadata to add as child
+ * @param child_of_complete if true metadata is child of complete instead of reason
  * @return the event
  */
-iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *component, const char *reason, const char *reason_namespace, iks *meta)
+iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *component, const char *reason_str, const char *reason_namespace, iks *meta, int child_of_complete)
 {
 	iks *response = iks_new("presence");
-	iks *x;
+	iks *complete;
+	iks *reason;
 	iks_insert_attrib(response, "from", RAYO_JID(component));
 	iks_insert_attrib(response, "to", component->client_jid);
 	iks_insert_attrib(response, "type", "unavailable");
-	x = iks_insert(response, "complete");
-	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
-	x = iks_insert(x, reason);
-	iks_insert_attrib(x, "xmlns", reason_namespace);
+	complete = iks_insert(response, "complete");
+	iks_insert_attrib(complete, "xmlns", RAYO_EXT_NS);
+	reason = iks_insert(complete, reason_str);
+	iks_insert_attrib(reason, "xmlns", reason_namespace);
 	if (meta) {
-		x = iks_insert_node(x, meta);
+		if (child_of_complete) {
+			iks_insert_node(complete, meta);
+		} else {
+			iks_insert_node(reason, meta);
+		}
 	}
 
 	return response;
@@ -126,7 +132,7 @@ iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *c
  */
 iks *rayo_component_create_complete_event(struct rayo_component *component, const char *reason, const char *reason_namespace)
 {
-	return rayo_component_create_complete_event_with_metadata(component, reason, reason_namespace, NULL);
+	return rayo_component_create_complete_event_with_metadata(component, reason, reason_namespace, NULL, 0);
 }
 
 /**
@@ -151,15 +157,15 @@ void rayo_component_send_complete(struct rayo_component *component, const char *
 /**
  * Send rayo complete
  */
-void rayo_component_send_complete_with_metadata(struct rayo_component *component, const char *reason, const char *reason_namespace, iks *meta)
+void rayo_component_send_complete_with_metadata(struct rayo_component *component, const char *reason, const char *reason_namespace, iks *meta, int child_of_complete)
 {
-	rayo_component_send_complete_event(component, rayo_component_create_complete_event_with_metadata(component, reason, reason_namespace, meta));
+	rayo_component_send_complete_event(component, rayo_component_create_complete_event_with_metadata(component, reason, reason_namespace, meta, child_of_complete));
 }
 
 /**
  * Send rayo complete
  */
-void rayo_component_send_complete_with_metadata_string(struct rayo_component *component, const char *reason, const char *reason_namespace, const char *meta)
+void rayo_component_send_complete_with_metadata_string(struct rayo_component *component, const char *reason, const char *reason_namespace, const char *meta, int child_of_complete)
 {
 	iks *meta_xml = NULL;
 	iksparser *p = iks_dom_new(&meta_xml);
@@ -170,7 +176,7 @@ void rayo_component_send_complete_with_metadata_string(struct rayo_component *co
 		/* send without... */
 		rayo_component_send_complete(component, reason, reason_namespace);
 	} else {
-		rayo_component_send_complete_with_metadata(component, reason, reason_namespace, meta_xml);
+		rayo_component_send_complete_with_metadata(component, reason, reason_namespace, meta_xml, child_of_complete);
 	}
 	if (meta_xml) {
 		iks_delete(meta_xml);

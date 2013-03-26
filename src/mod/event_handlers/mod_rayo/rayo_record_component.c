@@ -99,11 +99,11 @@ static void complete_record(struct rayo_component *component, const char *reason
 
 	/* send complete event to client */
 	recording = iks_new("recording");
-	iks_insert_attrib(recording, "xmlns", RAYO_EXT_NS);
+	iks_insert_attrib(recording, "xmlns", RAYO_RECORD_COMPLETE_NS);
 	iks_insert_attrib(recording, "uri", uri);
 	iks_insert_attrib_printf(recording, "duration", "%i", RECORD_COMPONENT(component)->duration_ms);
 	iks_insert_attrib_printf(recording, "size", "%"SWITCH_SIZE_T_FMT, file_size);
-	rayo_component_send_complete_with_metadata(component, reason, reason_namespace, recording);
+	rayo_component_send_complete_with_metadata(component, reason, reason_namespace, recording, 1);
 	iks_delete(recording);
 
 	RAYO_UNLOCK(component);
