@@ -129,7 +129,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				handler->component = NULL;
 				switch_core_media_bug_remove(session, &handler->bug);
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", component->digits);
-				rayo_component_send_complete_with_metadata(RAYO_COMPONENT(component), INPUT_MATCH, result);
+				rayo_component_send_complete_with_metadata(RAYO_COMPONENT(component), INPUT_MATCH, result, 0);
 				iks_delete(result);
 				break;
 			}
@@ -401,7 +401,7 @@ static void on_detected_speech_event(switch_event_t *event)
 					rayo_component_send_complete(component, INPUT_INITIAL_TIMEOUT);
 					break;
 				case NMT_MATCH:
-					rayo_component_send_complete_with_metadata_string(component, INPUT_MATCH, result);
+					rayo_component_send_complete_with_metadata_string(component, INPUT_MATCH, result, 0);
 					break;
 				case NMT_BAD_XML:
 					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to parse NLSML result: %s!\n", result);
