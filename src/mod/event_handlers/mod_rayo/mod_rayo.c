@@ -3582,7 +3582,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 			switch_xml_t l;
 			for (l = switch_xml_child(listeners, "listener"); l; l = l->next) {
 				char *val = switch_xml_txt(l);
-				char *port = "";
+				char *port = switch_xml_attr_soft(l, "port");
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Listener: %s\n", val);
 				if (rayo_server_create(val, port) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create listener: %s\n", val);
