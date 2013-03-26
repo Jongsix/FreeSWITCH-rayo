@@ -33,6 +33,7 @@
 #include <switch.h>
 
 struct srgs_parser;
+struct srgs_grammar;
 
 enum srgs_match_type {
 	SMT_NO_MATCH,
@@ -42,11 +43,11 @@ enum srgs_match_type {
 
 extern int srgs_init(void);
 extern struct srgs_parser *srgs_parser_new(const char *uuid);
-extern int srgs_parse(struct srgs_parser *parser, const char *document);
-extern const char *srgs_to_regex(struct srgs_parser *parser);
-extern const char *srgs_to_jsgf(struct srgs_parser *parser);
-extern const char *srgs_to_jsgf_file(struct srgs_parser *parser, const char *basedir, const char *ext);
-extern enum srgs_match_type srgs_match(struct srgs_parser *parser, const char *input);
+extern struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document);
+extern const char *srgs_grammar_to_regex(struct srgs_grammar *grammar);
+extern const char *srgs_grammar_to_jsgf(struct srgs_grammar *grammar);
+extern const char *srgs_grammar_to_jsgf_file(struct srgs_grammar *grammar, const char *basedir, const char *ext);
+extern enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char *input);
 extern void srgs_parser_destroy(struct srgs_parser *parser);
 
 #endif
