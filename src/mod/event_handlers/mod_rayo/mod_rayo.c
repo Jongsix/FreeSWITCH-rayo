@@ -2954,6 +2954,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	struct rayo_server *server = (struct rayo_server *)obj;
 	switch_memory_pool_t *pool = NULL;
 	uint32_t errs = 0;
+	int warned = 0;
 
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
@@ -2990,12 +2991,19 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 			goto sock_fail;
 		}
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Rayo server listening on %s:%u\n", server->addr, server->port);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo server listening on %s:%u\n", server->addr, server->port);
 
 		break;
    sock_fail:
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error! Rayo server could not listen on %s:%u\n", server->addr, server->port);
-		switch_yield(100000);
+		if (server->socket) {
+			switch_socket_close(server->socket);
+			server->socket = NULL;
+		}
+		if (!warned) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error! Rayo server could not listen on %s:%u\n", server->addr, server->port);
+			warned = 1;
+		}
+		switch_yield(1000 * 100); /* 100 ms */
 	}
 
 	/* Listen for XMPP client connections */
@@ -3018,11 +3026,11 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 		/* accept the connection */
 		if ((rv = switch_socket_accept(&socket, server->socket, pool))) {
 			if (globals.shutdown) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Shutting Down\n");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Shutting down Rayo server\n");
 				goto end;
 			} else {
 				/* I wish we could use strerror_r here but its not defined everywhere =/ */
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error [%s]\n", strerror(errno));
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Accept connection error [%s]\n", strerror(errno));
 				if (++errs > 100) {
 					goto end;
 				}
@@ -3057,7 +3065,7 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 	}
 
   fail:
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Rayo server %s:%u thread done\n", server->addr, server->port);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo server %s:%u closed\n", server->addr, server->port);
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 	return NULL;
 }
