@@ -2941,6 +2941,7 @@ static void rayo_server_cleanup(struct rayo_actor *actor)
 	/* shutdown server */
 	switch_socket_shutdown(server->socket, SWITCH_SHUTDOWN_READWRITE);
 	switch_socket_close(server->socket);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo server %s:%u closed\n", server->addr, server->port);
 }
 
 /**
@@ -3058,14 +3059,15 @@ static void *SWITCH_THREAD_FUNC rayo_server_thread(switch_thread_t *thread, void
 
   end:
 
-	RAYO_DESTROY(server);
-
 	if (pool) {
 		switch_core_destroy_memory_pool(&pool);
 	}
 
   fail:
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo server %s:%u closed\n", server->addr, server->port);
+
+	RAYO_UNLOCK(server);
+	RAYO_DESTROY(server);
+
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 	return NULL;
 }
