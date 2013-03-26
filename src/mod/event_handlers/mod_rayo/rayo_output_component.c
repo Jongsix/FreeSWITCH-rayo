@@ -34,6 +34,8 @@
  * An output component
  */
 struct output_component {
+	/** component base class */
+	struct rayo_component base;
 	/** document to play */
 	iks *document;
 	/** maximum time to play */
@@ -48,50 +50,42 @@ struct output_component {
 	int stop;
 };
 
-#define OUTPUT_COMPONENT(x) ((struct output_component *)(rayo_component_get_data(x)))
-
 #define OUTPUT_FINISH "finish", RAYO_OUTPUT_COMPLETE_NS
 #define OUTPUT_MAX_TIME "max-time", RAYO_OUTPUT_COMPLETE_NS
+
+#define OUTPUT_COMPONENT(x) ((struct output_component *)x)
 
 /**
  * Create new output component
  */
-static struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid)
+struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid)
 {
-	struct rayo_component *component = NULL;
+	switch_memory_pool_t *pool;
 	struct output_component *output_component = NULL;
 
-	/* validate output attributes */
-	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		return NULL;
-	}
+	switch_core_new_memory_pool(&pool);
+	output_component = switch_core_alloc(pool, sizeof(*output_component));
+	rayo_component_init((struct rayo_component *)output_component, pool, "output", NULL, actor, client_jid);
 
-	component = rayo_component_create("output", NULL, actor, client_jid);
-	output_component = switch_core_alloc(rayo_component_get_pool(component), sizeof(*output_component));
 	output_component->document = iks_copy(output);
 	output_component->repeat_interval = iks_find_int_attrib(output, "repeat-interval");
 	output_component->repeat_times = iks_find_int_attrib(output, "repeat-times");
 	output_component->max_time = iks_find_int_attrib(output, "max-time");
 	output_component->start_paused = iks_find_bool_attrib(output, "start-paused");
-	rayo_component_set_data(component, output_component);
-	return component;
+
+	return (struct rayo_component *)output_component;
 }
 
 /**
  * Start execution of call output component
+ * @param component to start
+ * @param session the session to output to
+ * @param output the output request
+ * @param iq the original request
  */
-static iks *start_call_output_component(struct rayo_call *call, switch_core_session_t *session,  iks *iq)
+void start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq)
 {
-	struct rayo_component *component = NULL;
-	struct output_component *output_component = NULL;
-	iks *output = iks_find(iq, "output");
 	switch_stream_handle_t stream = { 0 };
-
-	component = create_output_component(rayo_call_get_actor(call), output, iks_find_attrib(iq, "from"));
-	if (!component) {
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
-	}
-	output_component = OUTPUT_COMPONENT(component);
 
 	/* acknowledge command */
 	rayo_component_send_start(component, iq);
@@ -99,18 +93,18 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 	/* build playback command */
 	SWITCH_STANDARD_STREAM(stream);
 	stream.write_function(&stream, "{id=%s,session=%s,pause=%s",
-		rayo_component_get_jid(component), rayo_call_get_uuid(call),
-		output_component->start_paused ? "true" : "false");
-	if (output_component->max_time > 0) {
-		stream.write_function(&stream, ",timeout=%i", output_component->max_time * 1000);
+		RAYO_JID(component), switch_core_session_get_uuid(session),
+		OUTPUT_COMPONENT(component)->start_paused ? "true" : "false");
+	if (OUTPUT_COMPONENT(component)->max_time > 0) {
+		stream.write_function(&stream, ",timeout=%i", OUTPUT_COMPONENT(component)->max_time * 1000);
 	}
-	stream.write_function(&stream, "}fileman://rayo://%s", rayo_component_get_jid(component));
+	stream.write_function(&stream, "}fileman://rayo://%s", RAYO_JID(component));
 
 	if (switch_ivr_displace_session(session, stream.data, 0, "m") == SWITCH_STATUS_SUCCESS) {
-		rayo_component_unlock(component);
+		RAYO_UNLOCK(component);
 	} else {
-		if (output_component->document) {
-			iks_delete(output_component->document);
+		if (OUTPUT_COMPONENT(component)->document) {
+			iks_delete(OUTPUT_COMPONENT(component)->document);
 		}
 		if (switch_channel_get_state(switch_core_session_get_channel(session)) >= CS_HANGUP) {
 			rayo_component_send_complete(component, COMPONENT_COMPLETE_HANGUP);
@@ -121,6 +115,23 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 		}
 	}
 	switch_safe_free(stream.data);
+}
+
+/**
+ * Start execution of call output component
+ */
+static iks *start_call_output_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+{
+	struct rayo_component *output_component = NULL;
+	iks *output = iks_find(iq, "output");
+
+	/* validate output attributes */
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
+		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+	}
+
+	output_component = create_output_component(RAYO_ACTOR(call), output, iks_find_attrib(iq, "from"));
+	start_call_output(output_component, session, output, iq);
 
 	return NULL;
 }
@@ -130,33 +141,33 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
  */
 static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 {
-	struct output_component *output_component = NULL;
 	struct rayo_component *component = NULL;
 	iks *output = iks_find(iq, "output");
 	switch_stream_handle_t stream = { 0 };
 
-	component = create_output_component(rayo_mixer_get_actor(mixer), output, iks_find_attrib(iq, "from"));
-	if (!component) {
+	/* validate output attributes */
+	if (!VALIDATE_RAYO_OUTPUT(output)) {
 		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
-	output_component = OUTPUT_COMPONENT(component);
+
+	component = create_output_component(RAYO_ACTOR(mixer), output, iks_find_attrib(iq, "from"));
 
 	/* build conference command */
 	SWITCH_STANDARD_STREAM(stream);
-	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), rayo_component_get_id(component));
+	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), RAYO_ID(component));
 
 	stream.write_function(&stream, "{id=%s,pause=%s",
-		rayo_component_get_jid(component),
-		output_component->start_paused ? "true" : "false");
-	if (output_component->max_time > 0) {
-		stream.write_function(&stream, ",timeout=%i", output_component->max_time * 1000);
+		RAYO_JID(component),
+		OUTPUT_COMPONENT(component)->start_paused ? "true" : "false");
+	if (OUTPUT_COMPONENT(component)->max_time > 0) {
+		stream.write_function(&stream, ",timeout=%i", OUTPUT_COMPONENT(component)->max_time * 1000);
 	}
-	stream.write_function(&stream, "}fileman://rayo://%s", rayo_component_get_jid(component));
+	stream.write_function(&stream, "}fileman://rayo://%s", RAYO_JID(component));
 
 	rayo_component_api_execute_async(component, "conference", stream.data);
 
 	switch_safe_free(stream.data);
-	rayo_component_unlock(component);
+	RAYO_UNLOCK(component);
 
 	return NULL;
 }
@@ -167,10 +178,10 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 static iks *stop_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s stop", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s stop", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
 	OUTPUT_COMPONENT(component)->stop = 1;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s stopping\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -183,9 +194,9 @@ static iks *stop_output_component(struct rayo_component *component, iks *iq)
 static iks *pause_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s pause", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s pause", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s pausing\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s pausing\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -198,9 +209,9 @@ static iks *pause_output_component(struct rayo_component *component, iks *iq)
 static iks *resume_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s resume", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s resume", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s resuming\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s resuming\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -213,9 +224,9 @@ static iks *resume_output_component(struct rayo_component *component, iks *iq)
 static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s speed:+", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s speed:+", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s speeding up\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s speeding up\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -228,9 +239,9 @@ static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
 static iks *speed_down_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s speed:-", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s speed:-", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s slowing down\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s slowing down\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -243,9 +254,9 @@ static iks *speed_down_output_component(struct rayo_component *component, iks *i
 static iks *volume_up_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s volume:+", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s volume:+", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s increasing volume\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s increasing volume\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -258,9 +269,9 @@ static iks *volume_up_output_component(struct rayo_component *component, iks *iq
 static iks *volume_down_output_component(struct rayo_component *component, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
-	char *command = switch_mprintf("%s volume:-", rayo_component_get_jid(component));
+	char *command = switch_mprintf("%s volume:-", RAYO_JID(component));
 	SWITCH_STANDARD_STREAM(stream);
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s lowering volume\n", rayo_component_get_jid(component));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s lowering volume\n", RAYO_JID(component));
 	switch_api_execute("fileman", command, NULL, &stream);
 	switch_safe_free(stream.data);
 	switch_safe_free(command);
@@ -277,7 +288,7 @@ static iks *seek_output_component(struct rayo_component *component, iks *iq)
 	if (VALIDATE_RAYO_OUTPUT_SEEK(seek)) {
 		int is_forward = !strcmp("forward", iks_find_attrib(seek, "direction"));
 		int amount_ms = iks_find_int_attrib(seek, "amount");
-		char *command = switch_mprintf("%s seek:%s%i", rayo_component_get_jid(component),
+		char *command = switch_mprintf("%s seek:%s%i", RAYO_JID(component),
 			is_forward ? "+" : "-", amount_ms);
 		switch_stream_handle_t stream = { 0 };
 		SWITCH_STANDARD_STREAM(stream);
@@ -437,7 +448,7 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 	if (status != SWITCH_STATUS_SUCCESS && context->component) {
 		/* complete error event will be sent by calling thread */
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Status = %i\n", status);
-		rayo_component_unlock(context->component);
+		RAYO_UNLOCK(context->component);
 	}
 
 	return status;
@@ -701,7 +712,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 		return switch_core_file_read(fh, data, len);
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
+	//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
 	if (*len < context->frame_len) {
 		/* Too small! */
 		memset(context->abuf, 255, context->frame_len * 2);
