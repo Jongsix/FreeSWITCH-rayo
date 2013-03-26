@@ -8,7 +8,7 @@
 
 	<!-- Listeners for new Rayo client connections -->
 	<listeners>
-		<listener>$${domain}</listener>
+		<listener port="5222">$${domain}</listener>
 	</listeners>
 
 	<!-- default gateways per URI -->
