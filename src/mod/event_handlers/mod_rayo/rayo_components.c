@@ -38,13 +38,13 @@
  * @param id the component internal ID
  * @return the component or NULL. Call rayo_component_unlock() when done with component pointer.
  */
-struct rayo_component *_rayo_component_locate(const char *id, const char *file, int line)
+struct rayo_component *rayo_component_locate(const char *id, const char *file, int line)
 {
-	struct rayo_actor *actor = _rayo_actor_locate_by_id(id, file, line);
+	struct rayo_actor *actor = rayo_actor_locate_by_id(id, file, line);
 	if (actor && (actor->type == RAT_MIXER_COMPONENT || actor->type == RAT_CALL_COMPONENT)) {
 		return RAYO_COMPONENT(actor);
 	} else if (actor) {
-		rayo_actor_unlock(actor);
+		 RAYO_UNLOCK(actor);
 	}
 	return NULL;
 }

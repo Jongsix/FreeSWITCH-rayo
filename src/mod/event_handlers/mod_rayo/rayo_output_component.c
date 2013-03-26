@@ -434,7 +434,7 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Got path %s\n", path);
 
-	context->component = rayo_component_locate(path);
+	context->component = RAYO_COMPONENT_LOCATE(path);
 
 	if (context->component) {
 		handle->private_info = context;
