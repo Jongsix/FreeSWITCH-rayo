@@ -93,7 +93,8 @@ static void complete_record(struct rayo_component *component, const char *reason
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", RECORD_COMPONENT(component)->local_file_path);
 
 	if (RECORD_COMPONENT(component)->stop_beep && (session = switch_core_session_locate(uuid))) {
-		switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
+		/** TODO disable mux when FS core bug is fixed */
+		switch_ivr_displace_session(session, RECORD_BEEP, 0, "m");
 		switch_core_session_rwunlock(session);
 	}
 
@@ -234,7 +235,8 @@ static int start_call_record(switch_core_session_t *session, struct rayo_compone
 	};
 
 	if (record_component->start_beep) {
-		switch_ivr_displace_session(session, RECORD_BEEP, 0, "");
+		/** TODO disable mux when FS core bug is fixed */
+		switch_ivr_displace_session(session, RECORD_BEEP, 0, "m");
 		record_component->start_time = switch_micro_time_now();
 	}
 
