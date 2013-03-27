@@ -562,8 +562,8 @@ struct fileman_file_context {
 	int16_t *abuf;
 	/** end of file */
 	int eof;
-	/** size of a packet in 2-byte samples */
-	switch_size_t frame_len;
+	/** maximum size of a packet in 2-byte samples */
+	switch_size_t max_frame_len;
 	/** optional session UUID */
 	const char *uuid;
 	/** fileman control ID */
@@ -613,7 +613,7 @@ static switch_status_t fileman_file_open(switch_file_handle_t *handle, const cha
 	}
 	switch_mutex_unlock(fileman_globals.mutex);
 
-	context->frame_len = (handle->samplerate / 1000 * 20);
+	context->max_frame_len = (handle->samplerate / 1000 * SWITCH_MAX_INTERVAL);
 	switch_zmalloc(context->abuf, FILE_STARTBYTES);
 
 	if (!context->fh.audio_buffer) {
@@ -713,13 +713,9 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 	}
 
 	//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "len = %"SWITCH_SIZE_T_FMT"\n", *len);
-	if (*len < context->frame_len) {
-		/* Too small! */
-		memset(context->abuf, 255, context->frame_len * 2);
-		status = SWITCH_STATUS_FALSE;
-		goto done;
+	if (*len > context->max_frame_len) {
+		*len = context->max_frame_len;
 	}
-	*len = context->frame_len;
 
 	for (;;) {
 		int do_speed = 1;
@@ -728,13 +724,13 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 
 		if (switch_test_flag(handle, SWITCH_FILE_PAUSE)) {
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read pause frame\n");
-			memset(context->abuf, 255, context->frame_len * 2);
+			memset(context->abuf, 255, *len * 2);
 			do_speed = 0;
-			o_len = context->frame_len;
-		} else if (fh->sp_audio_buffer && (context->eof || (switch_buffer_inuse(fh->sp_audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
+			o_len = *len;
+		} else if (fh->sp_audio_buffer && (context->eof || (switch_buffer_inuse(fh->sp_audio_buffer) > (switch_size_t) (*len * 2)))) {
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read speed frame\n");
 			/* get next speed frame */
-			if (!(read_bytes = switch_buffer_read(fh->sp_audio_buffer, context->abuf, context->frame_len * 2))) {
+			if (!(read_bytes = switch_buffer_read(fh->sp_audio_buffer, context->abuf, *len * 2))) {
 				/* This is the reverse of what happens in switch_ivr_play_file... i think that implementation is wrong */
 				if (context->eof) {
 					/* done with file */
@@ -747,16 +743,16 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 			}
 
 			/* pad short frame with silence */
-			if (read_bytes < context->frame_len * 2) {
+			if (read_bytes < *len * 2) {
 				//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Padding speed frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
-				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
+				memset(context->abuf + read_bytes, 255, (*len * 2) - read_bytes);
 			}
-			o_len = context->frame_len;
+			o_len = *len;
 			do_speed = 0;
-		} else if (fh->audio_buffer && (context->eof || (switch_buffer_inuse(fh->audio_buffer) > (switch_size_t) (context->frame_len * 2)))) {
+		} else if (fh->audio_buffer && (context->eof || (switch_buffer_inuse(fh->audio_buffer) > (switch_size_t) (*len * 2)))) {
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "(2) Read audio frame\n");
 			/* get next file frame */
-			if (!(read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2))) {
+			if (!(read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, *len * 2))) {
 				if (context->eof) {
 					/* done with file */
 					status = SWITCH_STATUS_FALSE;
@@ -771,12 +767,12 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "(2) file pos = %i\n", fh->offset_pos);
 
 			/* pad short frame with silence */
-			if (read_bytes < (context->frame_len * 2)) {
+			if (read_bytes < (*len * 2)) {
 				//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Padding audio frame %"SWITCH_SIZE_T_FMT" bytes\n", (context->frame_len * 2) - read_bytes);
-				memset(context->abuf + read_bytes, 255, (context->frame_len * 2) - read_bytes);
+				memset(context->abuf + read_bytes, 255, (*len * 2) - read_bytes);
 			}
 
-			o_len = context->frame_len;
+			o_len = *len;
 		} else {
 			if (context->eof) {
 				/* done with file */
@@ -795,7 +791,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 			read_bytes = switch_buffer_write(fh->audio_buffer, context->abuf, o_len * 2);
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Write audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
 
-			read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, context->frame_len * 2);
+			read_bytes = switch_buffer_read(fh->audio_buffer, context->abuf, *len * 2);
 			o_len = read_bytes / 2;
 			fh->offset_pos += o_len;
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Read audio frame %"SWITCH_SIZE_T_FMT" bytes\n", read_bytes);
@@ -875,7 +871,7 @@ static switch_status_t fileman_file_read(switch_file_handle_t *handle, void *dat
 		/* adjust volume on frame */
 		if (handle->vol) {
 			//switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->uuid), SWITCH_LOG_DEBUG, "Adjust volume to = %i\n", handle->vol);
-			switch_change_sln_volume(context->abuf, context->frame_len, handle->vol);
+			switch_change_sln_volume(context->abuf, *len, handle->vol);
 		}
 		break;
 	}
