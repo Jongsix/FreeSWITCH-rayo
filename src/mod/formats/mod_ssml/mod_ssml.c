@@ -881,8 +881,8 @@ struct tts_context {
 	switch_speech_handle_t sh;
 	/** TTS flags */
 	switch_speech_flag_t flags;
-	/** number of samples to read at a time */
-	int frame_size;
+	/** maximum number of samples to read at a time */
+	int max_frame_size;
 	/** done flag */
 	int done;
 };
@@ -922,7 +922,7 @@ static switch_status_t tts_file_open(switch_file_handle_t *handle, const char *p
 			handle->sections = 0;
 			handle->seekable = 0;
 			handle->speed = 0;
-			context->frame_size = handle->samplerate / 1000 * 20; /* TODO get actual interval */
+			context->max_frame_size = handle->samplerate / 1000 * SWITCH_MAX_INTERVAL;
 		} else {
 			switch_core_speech_close(&context->sh, &context->flags);
 		}
@@ -944,8 +944,8 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 	struct tts_context *context = (struct tts_context *)handle->private_info;
 	switch_size_t rlen;
 
-	if (*len > context->frame_size) {
-		*len = context->frame_size;
+	if (*len > context->max_frame_size) {
+		*len = context->max_frame_size;
 	}
 	rlen = *len * 2; /* rlen (bytes) = len (samples) * 2 */
 
