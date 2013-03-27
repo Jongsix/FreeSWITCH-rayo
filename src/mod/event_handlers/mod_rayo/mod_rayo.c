@@ -3232,8 +3232,8 @@ SWITCH_STANDARD_APP(rayo_app)
 				iks_insert_attrib(offer, "to", RAYO_JID(rclient));
 				rayo_send(offer);
 			}
-			iks_delete(offer);
 		}
+		iks_delete(offer);
 		switch_mutex_unlock(globals.clients_mutex);
 
 		/* nobody to offer to */
