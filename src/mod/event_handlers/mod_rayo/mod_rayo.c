@@ -1201,7 +1201,7 @@ static int rayo_component_command_ok(struct rayo_client *rclient, struct rayo_co
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
 	} else if (rclient->state != RCS_ONLINE) {
 		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
-	} else if (strcmp(component->client_jid, from)) {
+	} else if (!rclient->is_console && strcmp(component->client_jid, from)) {
 		/* does not have control of this component */
 		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
 	}
