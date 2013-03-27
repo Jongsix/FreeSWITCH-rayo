@@ -525,6 +525,7 @@ int skinny_ring_lines_callback(void *pArg, int argc, char **argv, char **columnN
 	if(listener) {
 		switch_channel_t *channel = switch_core_session_get_channel(helper->tech_pvt->session);
 		switch_channel_t *remchannel = switch_core_session_get_channel(helper->remote_session);
+		switch_channel_set_state(channel, CS_ROUTING);
 		helper->lines_count++;
 		switch_channel_set_variable(channel, "effective_callee_id_number", value);
 		switch_channel_set_variable(channel, "effective_callee_id_name", caller_name);
@@ -1508,11 +1509,10 @@ switch_status_t skinny_handle_button_template_request(listener_t *listener, skin
 
 	/* Add buttons */
 	if ((sql = switch_mprintf(
-					"SELECT device_name, device_instance, position, MIN(type, %d) AS type "
+					"SELECT device_name, device_instance, position, type "
 					"FROM skinny_buttons "
 					"WHERE device_name='%s' AND device_instance=%d "
 					"ORDER BY position",
-					SKINNY_BUTTON_UNDEFINED,
 					listener->device_name, listener->device_instance
 				 ))) {
 		skinny_execute_sql_callback(profile, profile->sql_mutex, sql, skinny_handle_button_template_request_callback, &helper);
