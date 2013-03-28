@@ -845,7 +845,7 @@ static switch_bool_t write_displace_callback(switch_media_bug_t *bug, void *user
 			} else {
 				st = switch_core_file_read(&dh->fh, rframe->data, &len);
 				if (len < rframe->samples) {
-					memset(rframe->data, 0, rframe->datalen - len * 2);
+					memset(rframe->data + len * 2, 0, rframe->datalen - len * 2);
 				}
 			}
 
@@ -2674,7 +2674,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_inband_dtmf_session(switch_core_sessi
 	}
 
 	if ((status = switch_core_media_bug_add(session, "inband_dtmf", NULL,
-											inband_dtmf_callback, pvt, 0, SMBF_READ_REPLACE | SMBF_NO_PAUSE, &bug)) != SWITCH_STATUS_SUCCESS) {
+											inband_dtmf_callback, pvt, 0, SMBF_READ_REPLACE | SMBF_NO_PAUSE | SMBF_ONE_ONLY, &bug)) != SWITCH_STATUS_SUCCESS) {
 		return status;
 	}
 
