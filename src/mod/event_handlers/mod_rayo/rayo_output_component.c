@@ -83,7 +83,7 @@ struct rayo_component *create_output_component(struct rayo_actor *actor, iks *ou
  * @param output the output request
  * @param iq the original request
  */
-void start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq)
+iks *start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
 
@@ -115,6 +115,7 @@ void start_call_output(struct rayo_component *component, switch_core_session_t *
 		}
 	}
 	switch_safe_free(stream.data);
+	return NULL;
 }
 
 /**
@@ -132,9 +133,7 @@ static iks *start_call_output_component(struct rayo_actor *client, struct rayo_a
 	}
 
 	output_component = create_output_component(call, output, iks_find_attrib(iq, "from"));
-	start_call_output(output_component, session, output, iq);
-
-	return NULL;
+	return start_call_output(output_component, session, output, iq);
 }
 
 /**
