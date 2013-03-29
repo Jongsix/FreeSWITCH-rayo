@@ -30,6 +30,12 @@
 #include "iks_helpers.h"
 #include <switch.h>
 
+#undef XMPP_ERROR
+#define XMPP_ERROR(def_name, name, type) \
+	const struct xmpp_error def_name##_val = { name, type }; \
+	const struct xmpp_error *def_name = &def_name##_val;
+#include "xmpp_errors.def"
+
 /**
  * Create a <presence> event
  * @param name the event name
@@ -57,11 +63,10 @@ iks *iks_new_presence(const char *name, const char *namespace, const char *from,
  * @param iq the <iq> get/set request
  * @param from
  * @param to
- * @param error_name the XMPP stanza error
- * @param error_type
+ * @param err the XMPP stanza error
  * @return the <iq> error response
  */
-iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type)
+iks *iks_new_iq_error(iks *iq, const struct xmpp_error *err)
 {
 	iks *response = iks_copy(iq);
 	iks *x;
@@ -73,10 +78,10 @@ iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type)
 
 	/* <error> */
 	x = iks_insert(response, "error");
-	iks_insert_attrib(x, "type", error_type);
+	iks_insert_attrib(x, "type", err->type);
 
 	/* e.g. <feature-not-implemented> */
-	x = iks_insert(x, error_name);
+	x = iks_insert(x, err->name);
 	iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_STANZAS);
 
 	return response;
@@ -87,14 +92,13 @@ iks *iks_new_iq_error(iks *iq, const char *error_name, const char *error_type)
  * @param iq the <iq> get/set request
  * @param from
  * @param to
- * @param error_name the XMPP stanza error
- * @param error_type
+ * @param err the XMPP stanza error
  * @param detail_text optional text to include in message
  * @return the <iq> error response
  */
-iks *iks_new_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail_text)
+iks *iks_new_iq_error_detailed(iks *iq, const struct xmpp_error *err, const char *detail_text)
 {
-	iks *reply = iks_new_iq_error(iq, error_name, error_type);
+	iks *reply = iks_new_iq_error(iq, err);
 	if (!zstr(detail_text)) {
 		iks *error = iks_find(reply, "error");
 		iks *text = iks_insert(error, "text");
@@ -110,13 +114,12 @@ iks *iks_new_iq_error_detailed(iks *iq, const char *error_name, const char *erro
  * @param iq the <iq> get/set request
  * @param from
  * @param to
- * @param error_name the XMPP stanza error
- * @param error_type
+ * @param err the XMPP stanza error
  * @param detail_text_format format string
  * @param ...
  * @return the <iq> error response
  */
-iks *iks_new_iq_error_detailed_printf(iks *iq, const char *error_name, const char *error_type, const char *detail_text_format, ...)
+iks *iks_new_iq_error_detailed_printf(iks *iq, const struct xmpp_error *err, const char *detail_text_format, ...)
 {
 	iks *reply = NULL;
 	char *data;
@@ -130,7 +133,7 @@ iks *iks_new_iq_error_detailed_printf(iks *iq, const char *error_name, const cha
 	if (ret == -1) {
 		return NULL;
 	}
-	reply = iks_new_iq_error_detailed(iq, error_name, error_type, data);
+	reply = iks_new_iq_error_detailed(iq, err, data);
 	free(data);
 	return reply;
 }

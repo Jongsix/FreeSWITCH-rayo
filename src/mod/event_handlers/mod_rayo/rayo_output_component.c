@@ -120,8 +120,9 @@ void start_call_output(struct rayo_component *component, switch_core_session_t *
 /**
  * Start execution of call output component
  */
-static iks *start_call_output_component(struct rayo_call *call, switch_core_session_t *session, iks *iq)
+static iks *start_call_output_component(struct rayo_actor *client, struct rayo_actor *call, iks *iq, void *session_data)
 {
+	switch_core_session_t *session = (switch_core_session_t *)session_data;
 	struct rayo_component *output_component = NULL;
 	iks *output = iks_find(iq, "output");
 
@@ -130,7 +131,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
-	output_component = create_output_component(RAYO_ACTOR(call), output, iks_find_attrib(iq, "from"));
+	output_component = create_output_component(call, output, iks_find_attrib(iq, "from"));
 	start_call_output(output_component, session, output, iq);
 
 	return NULL;
@@ -139,7 +140,7 @@ static iks *start_call_output_component(struct rayo_call *call, switch_core_sess
 /**
  * Start execution of mixer output component
  */
-static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
+static iks *start_mixer_output_component(struct rayo_actor *client, struct rayo_actor *mixer, iks *iq, void *data)
 {
 	struct rayo_component *component = NULL;
 	iks *output = iks_find(iq, "output");
@@ -150,11 +151,11 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
-	component = create_output_component(RAYO_ACTOR(mixer), output, iks_find_attrib(iq, "from"));
+	component = create_output_component(mixer, output, iks_find_attrib(iq, "from"));
 
 	/* build conference command */
 	SWITCH_STANDARD_STREAM(stream);
-	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(mixer), RAYO_ID(component));
+	stream.write_function(&stream, "%s play ", rayo_mixer_get_name(RAYO_MIXER(mixer)), RAYO_ID(component));
 
 	stream.write_function(&stream, "{id=%s,pause=%s",
 		RAYO_JID(component),
@@ -175,7 +176,7 @@ static iks *start_mixer_output_component(struct rayo_mixer *mixer, iks *iq)
 /**
  * Stop execution of output component
  */
-static iks *stop_output_component(struct rayo_component *component, iks *iq)
+static iks *stop_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s stop", RAYO_JID(component));
@@ -191,7 +192,7 @@ static iks *stop_output_component(struct rayo_component *component, iks *iq)
 /**
  * Pause execution of output component
  */
-static iks *pause_output_component(struct rayo_component *component, iks *iq)
+static iks *pause_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s pause", RAYO_JID(component));
@@ -206,7 +207,7 @@ static iks *pause_output_component(struct rayo_component *component, iks *iq)
 /**
  * Resume execution of output component
  */
-static iks *resume_output_component(struct rayo_component *component, iks *iq)
+static iks *resume_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s resume", RAYO_JID(component));
@@ -221,7 +222,7 @@ static iks *resume_output_component(struct rayo_component *component, iks *iq)
 /**
  * Speed up execution of output component
  */
-static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
+static iks *speed_up_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s speed:+", RAYO_JID(component));
@@ -236,7 +237,7 @@ static iks *speed_up_output_component(struct rayo_component *component, iks *iq)
 /**
  * Slow down execution of output component
  */
-static iks *speed_down_output_component(struct rayo_component *component, iks *iq)
+static iks *speed_down_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s speed:-", RAYO_JID(component));
@@ -251,7 +252,7 @@ static iks *speed_down_output_component(struct rayo_component *component, iks *i
 /**
  * Increase volume of output component
  */
-static iks *volume_up_output_component(struct rayo_component *component, iks *iq)
+static iks *volume_up_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s volume:+", RAYO_JID(component));
@@ -266,7 +267,7 @@ static iks *volume_up_output_component(struct rayo_component *component, iks *iq
 /**
  * Lower volume of output component
  */
-static iks *volume_down_output_component(struct rayo_component *component, iks *iq)
+static iks *volume_down_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	switch_stream_handle_t stream = { 0 };
 	char *command = switch_mprintf("%s volume:-", RAYO_JID(component));
@@ -281,7 +282,7 @@ static iks *volume_down_output_component(struct rayo_component *component, iks *
 /**
  * Seek output component
  */
-static iks *seek_output_component(struct rayo_component *component, iks *iq)
+static iks *seek_output_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
 {
 	iks *seek = iks_find(iq, "seek");
 
@@ -1071,25 +1072,25 @@ switch_status_t rayo_output_component_load(switch_loadable_module_interface_t **
 	switch_api_interface_t *api_interface;
 	switch_file_interface_t *file_interface;
 
-	rayo_call_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_call_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
-	rayo_call_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
+	rayo_actor_command_handler_add(RAT_CALL, "", "set:"RAYO_OUTPUT_NS":output", start_call_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
 
-	rayo_mixer_command_handler_add("set:"RAYO_OUTPUT_NS":output", start_mixer_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_EXT_NS":stop", stop_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
-	rayo_mixer_component_command_handler_add("output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER, "", "set:"RAYO_OUTPUT_NS":output", start_mixer_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_EXT_NS":stop", stop_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":pause", pause_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":resume", resume_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":speed-up", speed_up_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":speed-down", speed_down_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":volume-up", volume_up_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":volume-down", volume_down_output_component);
+	rayo_actor_command_handler_add(RAT_MIXER_COMPONENT, "output", "set:"RAYO_OUTPUT_NS":seek", seek_output_component);
 
 	file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 	file_interface->interface_name = "mod_rayo";
