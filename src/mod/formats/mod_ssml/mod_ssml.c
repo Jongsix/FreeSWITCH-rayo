@@ -956,7 +956,7 @@ static switch_status_t tts_file_read(switch_file_handle_t *handle, void *data, s
 		}
 	} else {
 		switch_core_speech_flush_tts(&context->sh);
-		memset(data, 0, *len);
+		memset(data, 0, rlen);
 		status = SWITCH_STATUS_FALSE;
 	}
 	*len = rlen / 2; /* len (samples) = rlen (bytes) / 2 */
