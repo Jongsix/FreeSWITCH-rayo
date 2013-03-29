@@ -61,7 +61,6 @@ void rayo_component_send_start(struct rayo_component *component, iks *iq)
 	iks_insert_attrib(ref, "xmlns", RAYO_NS);
 	iks_insert_attrib(ref, "id", component->ref);
 	RAYO_SEND_BY_JID(component, iks_find_attrib(response, "to"), rayo_message_create(response));
-	iks_delete(response);
 }
 
 /**
@@ -114,7 +113,6 @@ iks *rayo_component_create_complete_event(struct rayo_component *component, cons
 void rayo_component_send_complete_event(struct rayo_component *component, iks *response)
 {
 	RAYO_SEND_BY_JID(component, iks_find_attrib(response, "to"), rayo_message_create(response));
-	iks_delete(response);
 	RAYO_UNLOCK(component);
 	RAYO_DESTROY(component);
 }
