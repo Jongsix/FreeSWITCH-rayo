@@ -33,7 +33,7 @@
 #include <switch.h>
 #include <iksemel.h>
 
-#define RAYO_EVENT_XMPP_SEND "rayo::xmpp_send"
+#include "iks_helpers.h"
 
 #define RAYO_VERSION "1"
 #define RAYO_BASE "urn:xmpp:rayo:"
@@ -46,8 +46,16 @@ struct rayo_call;
 struct rayo_mixer;
 struct rayo_component;
 
+/**
+ * A message sent to an actor
+ */
+struct rayo_message {
+	void *payload;
+	int flags;
+};
+
 typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
-typedef void (* rayo_actor_event_fn)(struct rayo_actor *, switch_event_t *event);
+typedef void (* rayo_actor_send_fn)(struct rayo_actor *, struct rayo_actor *, struct rayo_message *, const char *file, int line);
 
 /**
  * Type of actor
@@ -83,10 +91,12 @@ struct rayo_actor {
 	int ref_count;
 	/** destroy flag */
 	int destroy;
+	/** XMPP message handling function */
+	rayo_actor_send_fn send_fn;
 	/** optional cleanup */
 	rayo_actor_cleanup_fn cleanup_fn;
-	/** optional event handling function */
-	rayo_actor_event_fn event_fn;
+	/** true if raw message is allowed */
+	int accepts_raw;
 };
 
 /**
@@ -105,19 +115,33 @@ struct rayo_component {
 	const char *ref;
 };
 
-#define RAYO_COMPONENT(subclass) ((struct rayo_component *)subclass)
+#define RAYO_ACTOR(x) ((struct rayo_actor *)x)
+#define RAYO_COMPONENT(x) ((struct rayo_component *)x)
+#define RAYO_CALL(x) ((struct rayo_call *)x)
+#define RAYO_MIXER(x) ((struct rayo_mixer *)x)
+
+extern struct rayo_message *rayo_message_create(iks *xml);
+extern struct rayo_message *rayo_message_create_dup(iks *xml);
+extern struct rayo_message *rayo_message_raw_create(const char *raw);
+extern struct rayo_message *rayo_message_raw_create_dup(const char *raw);
+extern int rayo_message_is_raw(struct rayo_message *msg);
+extern void rayo_message_destroy(struct rayo_message *msg);
 
 extern struct rayo_actor *rayo_actor_locate(const char *jid, const char *file, int line);
 extern struct rayo_actor *rayo_actor_locate_by_id(const char *id, const char *file, int line);
 extern int rayo_actor_seq_next(struct rayo_actor *actor);
-extern void rayo_actor_set_event_fn(struct rayo_actor *actor, rayo_actor_event_fn event);
+extern void rayo_actor_set_send_fn(struct rayo_actor *actor, rayo_actor_send_fn event);
+extern void rayo_actor_send(struct rayo_actor *from, struct rayo_actor *to, struct rayo_message *msg, const char *file, int line);
+extern void rayo_actor_send_by_jid(struct rayo_actor *from, const char *jid, struct rayo_message *msg, const char *file, int line);
+extern void rayo_actor_send_iq_error(struct rayo_actor *from, iks *iq, const struct xmpp_error *err, const char *file, int line);
+extern void rayo_actor_send_iq_error_detailed(struct rayo_actor *from, iks *iq, const struct xmpp_error *err, const char *detail, const char *file, int line);
 extern void rayo_actor_rdlock(struct rayo_actor *actor, const char *file, int line);
 extern void rayo_actor_unlock(struct rayo_actor *actor, const char *file, int line);
 extern void rayo_actor_destroy(struct rayo_actor *actor, const char *file, int line);
+
 #define RAYO_LOCATE(jid) rayo_actor_locate(jid, __FILE__, __LINE__)
 #define RAYO_LOCATE_BY_ID(id) rayo_actor_locate_by_id(id, __FILE__, __LINE__)
 #define RAYO_SET_EVENT_FN(actor, event) rayo_actor_set_event_fn(RAYO_ACTOR(actor), event)
-#define RAYO_ACTOR(x) ((struct rayo_actor *)x)
 #define RAYO_JID(x) RAYO_ACTOR(x)->jid
 #define RAYO_ID(x) RAYO_ACTOR(x)->id
 #define RAYO_POOL(x) RAYO_ACTOR(x)->pool
@@ -125,6 +149,10 @@ extern void rayo_actor_destroy(struct rayo_actor *actor, const char *file, int l
 #define RAYO_UNLOCK(x) rayo_actor_unlock(RAYO_ACTOR(x), __FILE__, __LINE__)
 #define RAYO_DESTROY(x) rayo_actor_destroy(RAYO_ACTOR(x), __FILE__, __LINE__)
 #define RAYO_SEQ_NEXT(x) rayo_actor_seq_next(RAYO_ACTOR(x))
+#define RAYO_SEND(from, to, msg) rayo_actor_send(RAYO_ACTOR(from), RAYO_ACTOR(to), msg, __FILE__, __LINE__)
+#define RAYO_SEND_BY_JID(from, jid, msg) rayo_actor_send_by_jid(RAYO_ACTOR(from), jid, msg, __FILE__, __LINE__)
+#define RAYO_SEND_IQ_ERROR(from, iq, err) rayo_actor_send_iq_error(RAYO_ACTOR(from), iq, err, __FILE__, __LINE__)
+#define RAYO_SEND_IQ_ERROR_DETAILED(from, iq, err, detail) rayo_actor_send_iq_error_detailed(RAYO_ACTOR(from), iq, err, detail, __FILE__, __LINE__)
 
 extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 
@@ -133,17 +161,9 @@ extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 #define rayo_component_init(component, pool, type, id, parent, client_jid) _rayo_component_init(component, pool, type, id, parent, client_jid, __FILE__, __LINE__)
 extern struct rayo_component *_rayo_component_init(struct rayo_component *component, switch_memory_pool_t *pool, const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
 
-typedef iks *(*rayo_call_command_handler)(struct rayo_call *, switch_core_session_t *session, iks *);
-extern void rayo_call_command_handler_add(const char *name, rayo_call_command_handler fn);
-
-typedef iks *(*rayo_mixer_command_handler)(struct rayo_mixer *, iks *);
-extern void rayo_mixer_command_handler_add(const char *name, rayo_mixer_command_handler fn);
-
-typedef iks *(*rayo_component_command_handler)(struct rayo_component *, iks *);
-extern void rayo_call_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
-extern void rayo_mixer_component_command_handler_add(const char *subtype, const char *name, rayo_component_command_handler fn);
-
-extern void rayo_send(iks *msg);
+typedef iks *(*rayo_actor_command_handler)(struct rayo_actor *, struct rayo_actor *, iks *, void *);
+extern void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subtype, const char *name, rayo_actor_command_handler fn);
+extern rayo_actor_command_handler rayo_actor_command_handler_find(struct rayo_actor *actor, iks *iq);
 
 #endif
 

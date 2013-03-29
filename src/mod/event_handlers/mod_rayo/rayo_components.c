@@ -50,33 +50,6 @@ struct rayo_component *rayo_component_locate(const char *id, const char *file, i
 }
 
 /**
- * Send IQ error to controlling client from call
- * @param call the call
- * @param iq the request that caused the error
- * @param error the error message
- */
-void rayo_component_send_iq_error(iks *iq, const char *error_name, const char *error_type)
-{
-	iks *response = iks_new_iq_error(iq, error_name, error_type);
-	rayo_send(response);
-	iks_delete(response);
-}
-
-/**
- * Send IQ error to controlling client from call
- * @param call the call
- * @param iq the request that caused the error
- * @param error the error message
- * @param detail text
- */
-void rayo_component_send_iq_error_detailed(iks *iq, const char *error_name, const char *error_type, const char *detail)
-{
-	iks *response = iks_new_iq_error_detailed(iq, error_name, error_type, detail);
-	rayo_send(response);
-	iks_delete(response);
-}
-
-/**
  * Send component start reply
  * @param component the component
  * @param iq the start request
@@ -87,7 +60,7 @@ void rayo_component_send_start(struct rayo_component *component, iks *iq)
 	iks *ref = iks_insert(response, "ref");
 	iks_insert_attrib(ref, "xmlns", RAYO_NS);
 	iks_insert_attrib(ref, "id", component->ref);
-	rayo_send(response);
+	RAYO_SEND_BY_JID(component, iks_find_attrib(response, "to"), rayo_message_create(response));
 	iks_delete(response);
 }
 
@@ -140,7 +113,7 @@ iks *rayo_component_create_complete_event(struct rayo_component *component, cons
  */
 void rayo_component_send_complete_event(struct rayo_component *component, iks *response)
 {
-	rayo_send(response);
+	RAYO_SEND_BY_JID(component, iks_find_attrib(response, "to"), rayo_message_create(response));
 	iks_delete(response);
 	RAYO_UNLOCK(component);
 	RAYO_DESTROY(component);
