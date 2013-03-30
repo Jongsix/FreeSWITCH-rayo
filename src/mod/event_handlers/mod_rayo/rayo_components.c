@@ -85,6 +85,7 @@ iks *rayo_component_create_complete_event_with_metadata(struct rayo_component *c
 	reason = iks_insert(complete, reason_str);
 	iks_insert_attrib(reason, "xmlns", reason_namespace);
 	if (meta) {
+		meta = iks_copy_within(meta, iks_stack(response));
 		if (child_of_complete) {
 			iks_insert_node(complete, meta);
 		} else {
