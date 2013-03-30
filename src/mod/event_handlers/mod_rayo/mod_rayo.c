@@ -3650,7 +3650,7 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 
 	if (iks_parse(p, command_str, 0, 1) == IKS_OK && command) {
 		char *str;
-		iks *iq, *l_iq = NULL;
+		iks *iq = NULL;
 
 		/* is command already wrapped in IQ? */
 		if (!strcmp(iks_name(command), "iq")) {
@@ -3658,8 +3658,7 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 			iq = command;
 		} else {
 			/* create IQ to wrap command */
-			l_iq = iks_new("iq");
-			iq = l_iq;
+			iq = iks_new_within("iq", iks_stack(command));
 			iks_insert_node(iq, command);
 		}
 
@@ -3678,9 +3677,6 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 		on_log(client, str, strlen(str), 1);
 		iks_free(str);
 		rayo_client_command_recv(client, iq);
-		if (l_iq) {
-			iks_delete(l_iq);
-		}
 	} else {
 		client->response = "-ERR BAD XML";
 		RAYO_DESTROY(client);
