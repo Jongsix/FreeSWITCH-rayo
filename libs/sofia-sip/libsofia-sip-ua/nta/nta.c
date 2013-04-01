@@ -149,6 +149,9 @@ struct nta_agent_s
   nta_update_magic_t   *sa_update_magic;
   nta_update_tport_f   *sa_update_tport;
 
+  nta_error_magic_t   *sa_error_magic;
+  nta_error_tport_f   *sa_error_tport;
+
   su_time_t             sa_now;	 /**< Timestamp in microsecond resolution. */
   uint32_t              sa_next; /**< Timestamp for next agent_timer. */
   uint32_t              sa_millisec; /**< Timestamp in milliseconds. */
@@ -234,6 +237,8 @@ struct nta_agent_s
   unsigned sa_tport_tcp : 1;	/**< Transports support TCP. */
   unsigned sa_tport_sctp : 1;	/**< Transports support SCTP. */
   unsigned sa_tport_tls : 1;	/**< Transports support TLS. */
+  unsigned sa_tport_ws : 1;	    /**< Transports support WS. */
+  unsigned sa_tport_wss : 1;	    /**< Transports support WSS. */
 
   unsigned sa_use_naptr : 1;	/**< Use NAPTR lookup */
   unsigned sa_use_srv : 1;	/**< Use SRV lookup */
@@ -2045,22 +2050,24 @@ struct sipdns_tport {
   char prefix[14];		/**< Prefix for SRV domains */
   char service[10];		/**< NAPTR service */
 }
-#define SIPDNS_TRANSPORTS (4)
+#define SIPDNS_TRANSPORTS (6)
 const sipdns_tports[SIPDNS_TRANSPORTS] = {
   { "udp",  "5060", "_sip._udp.",  "SIP+D2U"  },
   { "tcp",  "5060", "_sip._tcp.",  "SIP+D2T"  },
-  { "sctp", "5060", "_sip._sctp.", "SIP+D2S" },
-  { "tls",  "5061", "_sips._tcp.", "SIPS+D2T"  },
+  { "sctp", "5060", "_sip._sctp.", "SIP+D2S"  },
+  { "tls",  "5061", "_sips._tcp.", "SIPS+D2T" },
+  { "ws",   "5080",   "_sips._ws.",  "SIP+D2W"  },
+  { "wss",  "5081",  "_sips._wss.", "SIPS+D2W" },
 };
 
 static char const * const tports_sip[] =
   {
-    "udp", "tcp", "sctp", NULL
+	"udp", "tcp", "sctp", "ws", NULL
   };
 
 static char const * const tports_sips[] =
   {
-    "tls", NULL
+	  "tls", "wss", "ws", NULL
   };
 
 static tport_stack_class_t nta_agent_class[1] =
@@ -2188,7 +2195,7 @@ int nta_agent_add_tport(nta_agent_t *self,
   if (url->url_params) {
     if (url_param(url->url_params, "transport", tp, sizeof(tp)) > 0) {
       if (strchr(tp, ',')) {
-	int i; char *t, *tps[9];
+		  int i; char *t, *tps[9] = {0};
 
 	/* Split tp into transports */
 	for (i = 0, t = tp; t && i < 8; i++) {
@@ -2279,7 +2286,6 @@ int agent_create_master_transport(nta_agent_t *self, tagi_t *tags)
 {
   self->sa_tports =
     tport_tcreate(self, nta_agent_class, self->sa_root,
-		  TPTAG_SDWN_ERROR(0),
 		  TPTAG_IDLE(1800000),
 		  TAG_NEXT(tags));
 
@@ -2311,6 +2317,8 @@ int agent_init_via(nta_agent_t *self, tport_t *primaries, int use_maddr)
   self->sa_tport_tcp = 0;
   self->sa_tport_sctp = 0;
   self->sa_tport_tls = 0;
+  self->sa_tport_ws = 0;
+  self->sa_tport_wss = 0;
 
   /* Set via fields for the tports */
   for (tp = primaries; tp; tp = tport_next(tp)) {
@@ -2343,6 +2351,10 @@ int agent_init_via(nta_agent_t *self, tport_t *primaries, int use_maddr)
       self->sa_tport_tcp = 1;
     else if (su_casematch(tpn->tpn_proto, "sctp"))
       self->sa_tport_sctp = 1;
+    else if (su_casematch(tpn->tpn_proto, "ws"))
+      self->sa_tport_ws = 1;
+    else if (su_casematch(tpn->tpn_proto, "wss"))
+      self->sa_tport_wss = 1;
 
     if (tport_has_tls(tp)) self->sa_tport_tls = 1;
 
@@ -2684,8 +2696,12 @@ nta_tpn_by_url(su_home_t *home,
 
   tpn->tpn_ident = NULL;
 
-  if (tpn->tpn_proto)
+  if (tpn->tpn_proto) {
+	  if (su_casematch(url->url_scheme, "sips") && su_casematch(tpn->tpn_proto, "ws")) {
+		  tpn->tpn_proto = "wss";
+	  }
     return 1;
+  }
 
   if (su_casematch(url->url_scheme, "sips"))
     tpn->tpn_proto = "tls";
@@ -2706,6 +2722,10 @@ void agent_tp_error(nta_agent_t *agent,
 	  "nta_agent: tport: %s%s%s\n",
 	  remote ? remote : "", remote ? ": " : "",
 	  su_strerror(errcode));
+
+  if (agent->sa_error_tport) {
+    agent->sa_error_tport(agent->sa_error_magic, agent, tport);
+  }
 }
 
 /** Handle updated transport addresses */
@@ -8318,6 +8338,14 @@ outgoing_tport_error(nta_agent_t *agent, nta_outgoing_t *orq,
       return;
     }
   }
+  else if (error == 0) {
+    /*
+     * Server closed connection. RFC3261:
+     * "there is no coupling between TCP connection state and SIP
+     * processing."
+     */
+    return;
+  }
 
   if (outgoing_other_destinations(orq)) {
     outgoing_print_tport_error(orq, 5, "trying alternative server after ",
@@ -11766,6 +11794,18 @@ int nta_agent_bind_tport_update(nta_agent_t *agent,
     return su_seterrno(EFAULT), -1;
   agent->sa_update_magic = magic;
   agent->sa_update_tport = callback;
+  return 0;
+}
+
+/** Bind transport error callback */
+int nta_agent_bind_tport_error(nta_agent_t *agent,
+				nta_error_magic_t *magic,
+				nta_error_tport_f *callback)
+{
+  if (!agent)
+    return su_seterrno(EFAULT), -1;
+  agent->sa_error_magic = magic;
+  agent->sa_error_tport = callback;
   return 0;
 }
 

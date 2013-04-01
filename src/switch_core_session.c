@@ -792,8 +792,15 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_perform_receive_message(swit
 						  switch_core_session_get_uuid(session), SWITCH_LOG_DEBUG, "%s skip receive message [%s] (channel is hungup already)\n",
 						  switch_channel_get_name(session->channel), message_names[message->message_id]);
 	
-	} else if (session->endpoint_interface->io_routines->receive_message) {
-		status = session->endpoint_interface->io_routines->receive_message(session, message);
+	} else {
+		if (session->media_handle) {
+			status = switch_core_media_receive_message(session, message);
+		}
+		if (status == SWITCH_STATUS_SUCCESS) {
+			if (session->endpoint_interface->io_routines->receive_message) {
+				status = session->endpoint_interface->io_routines->receive_message(session, message);
+			}
+		}
 	}
 
 	if (status == SWITCH_STATUS_SUCCESS) {
@@ -2025,6 +2032,7 @@ SWITCH_DECLARE(switch_core_session_t *) switch_core_session_request_xml(switch_e
 	flags[CF_LAZY_ATTENDED_TRANSFER] = 0;
 	flags[CF_SIGNAL_DATA] = 0;
 	flags[CF_SIMPLIFY] = 0;
+	flags[CF_SECURE] = 0;
 
 
 	if (!(session = switch_core_session_request_uuid(endpoint_interface, direction, SOF_NO_LIMITS, pool, uuid))) {

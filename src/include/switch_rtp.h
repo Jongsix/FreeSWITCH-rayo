@@ -40,6 +40,9 @@
 #define SWITCH_RTP_H
 
 SWITCH_BEGIN_EXTERN_C
+
+#include <switch_core_media.h>
+
 #define SWITCH_RTP_MAX_BUF_LEN 16384
 #define SWITCH_RTCP_MAX_BUF_LEN 16384
 #define SWITCH_RTP_MAX_BUF_LEN_WORDS 4094 /* (max / 4) - 2 */
@@ -50,6 +53,8 @@ SWITCH_BEGIN_EXTERN_C
 	typedef enum {
 	SWITCH_RTP_CRYPTO_SEND,
 	SWITCH_RTP_CRYPTO_RECV,
+	SWITCH_RTP_CRYPTO_SEND_RTCP,
+	SWITCH_RTP_CRYPTO_RECV_RTCP,
 	SWITCH_RTP_CRYPTO_MAX
 } switch_rtp_crypto_direction_t;
 
@@ -57,6 +62,7 @@ typedef enum {
 	NO_CRYPTO,
 	AES_CM_128_HMAC_SHA1_80,
 	AES_CM_128_HMAC_SHA1_32,
+	AES_CM_256_HMAC_SHA1_80,
 	AES_CM_128_NULL_AUTH
 } switch_rtp_crypto_key_type_t;
 
@@ -68,6 +74,40 @@ struct switch_rtp_crypto_key {
 	struct switch_rtp_crypto_key *next;
 };
 typedef struct switch_rtp_crypto_key switch_rtp_crypto_key_t;
+
+typedef enum {
+	IPR_RTP,
+	IPR_RTCP
+} ice_proto_t;
+
+
+
+typedef struct icand_s {
+	char *foundation;
+	int component_id;
+	char *transport;
+	uint32_t priority;
+	char *con_addr;
+	switch_port_t con_port;
+	char *cand_type;
+	char *raddr;
+	switch_port_t rport;
+	char *generation;
+	uint8_t ready;
+} icand_t;
+
+#define MAX_CAND 25
+typedef struct ice_s {
+
+	icand_t cands[MAX_CAND][2];
+	int cand_idx;
+	int chosen[2];
+	char *ufrag;
+	char *pwd;
+	char *options;
+
+} ice_t;
+
 
 
 
@@ -134,7 +174,7 @@ SWITCH_DECLARE(switch_status_t) switch_rtp_create(switch_rtp_t **new_rtp_session
 												  switch_payload_t payload,
 												  uint32_t samples_per_interval,
 												  uint32_t ms_per_packet,
-												  switch_rtp_flag_t flags, char *timer_name, const char **err, switch_memory_pool_t *pool);
+												  switch_rtp_flag_t flags[], char *timer_name, const char **err, switch_memory_pool_t *pool);
 
 
 /*!
@@ -159,7 +199,7 @@ SWITCH_DECLARE(switch_rtp_t *) switch_rtp_new(const char *rx_host,
 											  switch_payload_t payload,
 											  uint32_t samples_per_interval,
 											  uint32_t ms_per_packet,
-											  switch_rtp_flag_t flags, char *timer_name, const char **err, switch_memory_pool_t *pool);
+											  switch_rtp_flag_t flags[], char *timer_name, const char **err, switch_memory_pool_t *pool);
 
 
 /*! 
@@ -216,15 +256,16 @@ SWITCH_DECLARE(void) switch_rtp_destroy(switch_rtp_t **rtp_session);
   \brief Acvite ICE on an RTP session
   \return SWITCH_STATUS_SUCCESS
 */
-SWITCH_DECLARE(switch_status_t) switch_rtp_activate_ice(switch_rtp_t *rtp_session, char *login, char *rlogin, const char *password);
-SWITCH_DECLARE(switch_status_t) switch_rtp_activate_rtcp_ice(switch_rtp_t *rtp_session, char *login, char *rlogin, const char *password);
+SWITCH_DECLARE(switch_status_t) switch_rtp_activate_ice(switch_rtp_t *rtp_session, char *login, char *rlogin, 
+														const char *password, const char *rpassword, ice_proto_t proto,
+														switch_core_media_ice_type_t type, ice_t *ice_params);
 
 /*! 
   \brief Activate sending RTCP Sender Reports (SR's)
   \param send_rate interval in milliseconds to send at
   \return SWITCH_STATUS_SUCCESS
 */
-SWITCH_DECLARE(switch_status_t) switch_rtp_activate_rtcp(switch_rtp_t *rtp_session, int send_rate, switch_port_t remote_port);
+SWITCH_DECLARE(switch_status_t) switch_rtp_activate_rtcp(switch_rtp_t *rtp_session, int send_rate, switch_port_t remote_port, switch_bool_t mux);
 
 /*! 
   \brief Acvite a jitter buffer on an RTP session
@@ -248,7 +289,9 @@ SWITCH_DECLARE(stfu_instance_t *) switch_rtp_get_jitter_buffer(switch_rtp_t *rtp
   \param rtp_session the RTP session
   \param flags the flags to set
 */
-SWITCH_DECLARE(void) switch_rtp_set_flag(switch_rtp_t *rtp_session, switch_rtp_flag_t flags);
+SWITCH_DECLARE(void) switch_rtp_set_flag(switch_rtp_t *rtp_session, switch_rtp_flag_t flag);
+SWITCH_DECLARE(void) switch_rtp_set_flags(switch_rtp_t *rtp_session, switch_rtp_flag_t flags[SWITCH_RTP_FLAG_INVALID]);
+SWITCH_DECLARE(void) switch_rtp_clear_flags(switch_rtp_t *rtp_session, switch_rtp_flag_t flags[SWITCH_RTP_FLAG_INVALID]);
 
 /*!
   \brief Test an RTP Flag
@@ -263,7 +306,7 @@ SWITCH_DECLARE(uint32_t) switch_rtp_test_flag(switch_rtp_t *rtp_session, switch_
   \param rtp_session the RTP session
   \param flags the flags to clear
 */
-SWITCH_DECLARE(void) switch_rtp_clear_flag(switch_rtp_t *rtp_session, switch_rtp_flag_t flags);
+SWITCH_DECLARE(void) switch_rtp_clear_flag(switch_rtp_t *rtp_session, switch_rtp_flag_t flag);
 
 /*! 
   \brief Retrieve the socket from an existing RTP session
@@ -465,6 +508,10 @@ SWITCH_DECLARE(void) switch_rtp_intentional_bugs(switch_rtp_t *rtp_session, swit
 SWITCH_DECLARE(switch_rtp_stats_t *) switch_rtp_get_stats(switch_rtp_t *rtp_session, switch_memory_pool_t *pool);
 SWITCH_DECLARE(switch_byte_t) switch_rtp_check_auto_adj(switch_rtp_t *rtp_session);
 SWITCH_DECLARE(void) switch_rtp_set_interdigit_delay(switch_rtp_t *rtp_session, uint32_t delay);
+
+SWITCH_DECLARE(switch_status_t) switch_rtp_add_dtls(switch_rtp_t *rtp_session, dtls_fingerprint_t *local_fp, dtls_fingerprint_t *remote_fp, dtls_type_t type);
+
+SWITCH_DECLARE(int) switch_rtp_has_dtls(void);
 
 /*!
   \}

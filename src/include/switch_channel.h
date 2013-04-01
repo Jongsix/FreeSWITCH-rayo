@@ -187,6 +187,7 @@ SWITCH_DECLARE(void) switch_channel_uninit(switch_channel_t *channel);
   \param caller_profile the profile to assign
 */
 SWITCH_DECLARE(void) switch_channel_set_caller_profile(switch_channel_t *channel, switch_caller_profile_t *caller_profile);
+SWITCH_DECLARE(void) switch_channel_step_caller_profile(switch_channel_t *channel);
 
 /*!
   \brief Retrieve the given channel's caller profile
@@ -201,6 +202,7 @@ SWITCH_DECLARE(switch_caller_profile_t *) switch_channel_get_caller_profile(swit
   \param caller_profile the profile to assign
 */
 SWITCH_DECLARE(void) switch_channel_set_originator_caller_profile(switch_channel_t *channel, switch_caller_profile_t *caller_profile);
+
 
 SWITCH_DECLARE(void) switch_channel_set_hunt_caller_profile(switch_channel_t *channel, switch_caller_profile_t *caller_profile);
 
@@ -217,6 +219,7 @@ SWITCH_DECLARE(switch_caller_profile_t *) switch_channel_get_originator_caller_p
   \param caller_profile the profile to assign
 */
 SWITCH_DECLARE(void) switch_channel_set_originatee_caller_profile(switch_channel_t *channel, switch_caller_profile_t *caller_profile);
+
 
 /*!
   \brief Retrieve the given channel's originatee caller profile
@@ -600,6 +603,7 @@ SWITCH_DECLARE(void) switch_channel_event_set_extended_data(_In_ switch_channel_
 SWITCH_DECLARE(char *) switch_channel_expand_variables_check(switch_channel_t *channel, const char *in, switch_event_t *var_list, switch_event_t *api_list, uint32_t recur);
 #define switch_channel_expand_variables(_channel, _in) switch_channel_expand_variables_check(_channel, _in, NULL, NULL, 0)
 
+#define switch_channel_inbound_display(_channel) (switch_channel_direction(_channel) == SWITCH_CALL_DIRECTION_INBOUND || switch_channel_test_flag(_channel, CF_DIALPLAN))
 
 SWITCH_DECLARE(char *) switch_channel_build_param_string(_In_ switch_channel_t *channel, _In_opt_ switch_caller_profile_t *caller_profile,
 														 _In_opt_ const char *prefix);
@@ -650,6 +654,7 @@ SWITCH_DECLARE(switch_hold_record_t *) switch_channel_get_hold_record(switch_cha
 SWITCH_DECLARE(void) switch_channel_state_thread_lock(switch_channel_t *channel);
 SWITCH_DECLARE(void) switch_channel_state_thread_unlock(switch_channel_t *channel);
 SWITCH_DECLARE(switch_status_t) switch_channel_state_thread_trylock(switch_channel_t *channel);
+
 
 SWITCH_END_EXTERN_C
 #endif

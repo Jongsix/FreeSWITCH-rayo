@@ -2497,7 +2497,17 @@ SWITCH_DECLARE(void) switch_channel_event_set_data(switch_channel_t *channel, sw
 	switch_mutex_unlock(channel->profile_mutex);
 }
 
+SWITCH_DECLARE(void) switch_channel_step_caller_profile(switch_channel_t *channel)
+{
+	switch_caller_profile_t *cp;
 
+
+	switch_mutex_lock(channel->profile_mutex);
+	cp = switch_caller_profile_clone(channel->session, channel->caller_profile);
+	switch_mutex_unlock(channel->profile_mutex);
+	
+	switch_channel_set_caller_profile(channel, cp);
+}
 
 SWITCH_DECLARE(void) switch_channel_set_caller_profile(switch_channel_t *channel, switch_caller_profile_t *caller_profile)
 {

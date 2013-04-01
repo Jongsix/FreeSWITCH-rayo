@@ -711,6 +711,17 @@ SWITCH_DECLARE(void) switch_core_set_globals(void)
 #endif
 	}
 
+	if (!SWITCH_GLOBAL_dirs.certs_dir && (SWITCH_GLOBAL_dirs.certs_dir = (char *) malloc(BUFSIZE))) {
+		if (SWITCH_GLOBAL_dirs.base_dir)
+			switch_snprintf(SWITCH_GLOBAL_dirs.certs_dir, BUFSIZE, "%s%scert", SWITCH_GLOBAL_dirs.base_dir, SWITCH_PATH_SEPARATOR);
+		else
+#ifdef SWITCH_CERTS_DIR
+			switch_snprintf(SWITCH_GLOBAL_dirs.certs_dir, BUFSIZE, "%s", SWITCH_CERTS_DIR);
+#else
+			switch_snprintf(SWITCH_GLOBAL_dirs.certs_dir, BUFSIZE, "%s%scert", base_dir, SWITCH_PATH_SEPARATOR);
+#endif
+	}
+
 	if (!SWITCH_GLOBAL_dirs.temp_dir && (SWITCH_GLOBAL_dirs.temp_dir = (char *) malloc(BUFSIZE))) {
 #ifdef SWITCH_TEMP_DIR
 		switch_snprintf(SWITCH_GLOBAL_dirs.temp_dir, BUFSIZE, "%s", SWITCH_TEMP_DIR);
@@ -745,6 +756,7 @@ SWITCH_DECLARE(void) switch_core_set_globals(void)
 	switch_assert(SWITCH_GLOBAL_dirs.grammar_dir);
 	switch_assert(SWITCH_GLOBAL_dirs.recordings_dir);
 	switch_assert(SWITCH_GLOBAL_dirs.sounds_dir);
+	switch_assert(SWITCH_GLOBAL_dirs.certs_dir);
 	switch_assert(SWITCH_GLOBAL_dirs.temp_dir);
 }
 
@@ -1228,6 +1240,7 @@ SWITCH_DECLARE(void) switch_load_network_lists(switch_bool_t reload)
 	switch_network_list_add_cidr(rfc_list, "10.0.0.0/8", SWITCH_FALSE);
 	switch_network_list_add_cidr(rfc_list, "172.16.0.0/12", SWITCH_FALSE);
 	switch_network_list_add_cidr(rfc_list, "192.168.0.0/16", SWITCH_FALSE);
+	switch_network_list_add_cidr(rfc_list, "169.254.0.0/16", SWITCH_FALSE);
 	switch_core_hash_insert(IP_LIST.hash, tmp_name, rfc_list);
 
 	tmp_name = "nat.auto";
@@ -1592,7 +1605,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	switch_dir_make_recursive(SWITCH_GLOBAL_dirs.recordings_dir, SWITCH_DEFAULT_DIR_PERMS, runtime.memory_pool);
 	switch_dir_make_recursive(SWITCH_GLOBAL_dirs.sounds_dir, SWITCH_DEFAULT_DIR_PERMS, runtime.memory_pool);
 	switch_dir_make_recursive(SWITCH_GLOBAL_dirs.temp_dir, SWITCH_DEFAULT_DIR_PERMS, runtime.memory_pool);
-
+	switch_dir_make_recursive(SWITCH_GLOBAL_dirs.certs_dir, SWITCH_DEFAULT_DIR_PERMS, runtime.memory_pool);
 
 	switch_mutex_init(&runtime.uuid_mutex, SWITCH_MUTEX_NESTED, runtime.memory_pool);
 
@@ -1663,7 +1676,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 		*err = "Error activating database";
 		return SWITCH_STATUS_FALSE;
 	}
-
+	switch_core_media_init();
 	switch_scheduler_task_thread_start();
 
 	switch_nat_late_init();
@@ -2586,6 +2599,8 @@ SWITCH_DECLARE(switch_status_t) switch_core_destroy(void)
 	if (IP_LIST.pool) {
 		switch_core_destroy_memory_pool(&IP_LIST.pool);
 	}
+
+	switch_core_media_deinit();
 
 	if (runtime.memory_pool) {
 		apr_pool_destroy(runtime.memory_pool);

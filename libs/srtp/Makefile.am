@@ -7,7 +7,7 @@ AM_LDFLAGS   = $(new_AM_LDFLAGS) -L.
 
 
 lib_LTLIBRARIES = libsrtp.la libcryptomath.la
-libsrtp_la_SOURCES =    srtp/srtp.c crypto/cipher/cipher.c crypto/cipher/null_cipher.c \
+libsrtp_la_SOURCES =    srtp/srtp.c srtp/ekt.c crypto/cipher/cipher.c crypto/cipher/null_cipher.c \
 			crypto/cipher/aes.c crypto/cipher/aes_icm.c \
 			crypto/cipher/aes_cbc.c \
 			crypto/hash/null_auth.c crypto/hash/sha1.c \
@@ -20,8 +20,10 @@ libsrtp_la_SOURCES =    srtp/srtp.c crypto/cipher/cipher.c crypto/cipher/null_ci
 			crypto/replay/rdb.c crypto/replay/rdbx.c crypto/replay/ut_sim.c
 libsrtp_la_LDFLAGS = 	-version-info 1:42:1
 
+EXTRA_DIST=
 if RNG_OBJS_LINUX
 libsrtp_la_SOURCES += crypto/rng/rand_linux_kernel.c
+EXTRA_DIST += crypto/rng/rand_source.c
 else
 libsrtp_la_SOURCES += crypto/rng/rand_source.c
 endif
