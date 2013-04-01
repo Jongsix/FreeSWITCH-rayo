@@ -129,7 +129,6 @@ extern void rayo_message_destroy(struct rayo_message *msg);
 extern struct rayo_actor *rayo_actor_locate(const char *jid, const char *file, int line);
 extern struct rayo_actor *rayo_actor_locate_by_id(const char *id, const char *file, int line);
 extern int rayo_actor_seq_next(struct rayo_actor *actor);
-extern void rayo_actor_set_send_fn(struct rayo_actor *actor, rayo_actor_send_fn event);
 extern struct rayo_message *rayo_actor_send(struct rayo_actor *from, struct rayo_actor *to, struct rayo_message *msg, const char *file, int line);
 extern struct rayo_message *rayo_actor_send_by_jid(struct rayo_actor *from, const char *jid, struct rayo_message *msg, const char *file, int line);
 extern void rayo_actor_rdlock(struct rayo_actor *actor, const char *file, int line);
@@ -156,9 +155,9 @@ extern const char *rayo_call_get_dcp_jid(struct rayo_call *call);
 #define rayo_component_init(component, pool, type, id, parent, client_jid) _rayo_component_init(component, pool, type, id, parent, client_jid, __FILE__, __LINE__)
 extern struct rayo_component *_rayo_component_init(struct rayo_component *component, switch_memory_pool_t *pool, const char *type, const char *id, struct rayo_actor *parent, const char *client_jid, const char *file, int line);
 
-typedef iks *(*rayo_actor_command_handler)(struct rayo_actor *, struct rayo_actor *, iks *, void *);
-extern void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subtype, const char *name, rayo_actor_command_handler fn);
-extern rayo_actor_command_handler rayo_actor_command_handler_find(struct rayo_actor *actor, iks *iq);
+typedef iks *(*rayo_actor_xmpp_handler)(struct rayo_actor *, struct rayo_actor *, iks *, void *);
+extern void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subtype, const char *name, rayo_actor_xmpp_handler fn);
+extern void rayo_actor_event_handler_add(enum rayo_actor_type from_type, const char *from_subtype, enum rayo_actor_type to_type, const char *to_subtype, const char *name, rayo_actor_xmpp_handler fn);
 
 #endif
 

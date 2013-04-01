@@ -67,10 +67,12 @@ struct rayo_call;
 /**
  * Function pointer wrapper for the handlers hash
  */
-struct rayo_command_handler {
-	enum rayo_actor_type type;
-	const char *subtype;
-	rayo_actor_command_handler fn;
+struct rayo_xmpp_handler {
+	enum rayo_actor_type from_type;
+	const char *from_subtype;
+	enum rayo_actor_type to_type;
+	const char *to_subtype;
+	rayo_actor_xmpp_handler fn;
 };
 
 enum rayo_client_state {
@@ -205,13 +207,15 @@ static struct {
 	switch_thread_rwlock_t *shutdown_rwlock;
 	/** users mapped to passwords */
 	switch_hash_t *users;
-	/** XMPP <iq> set commands mapped to functions */
+	/** Rayo <iq> set commands mapped to functions */
 	switch_hash_t *command_handlers;
-	/** Active XMPP actors mapped by JID */
+	/** Rayo <presence> events mapped to functions */
+	switch_hash_t *event_handlers;
+	/** Active Rayo actors mapped by JID */
 	switch_hash_t *actors;
-	/** XMPP actors pending destruction */
+	/** Rayo actors pending destruction */
 	switch_hash_t *destroy_actors;
-	/** Active XMPP actors mapped by internal ID */
+	/** Active Rayo actors mapped by internal ID */
 	switch_hash_t *actors_by_id;
 	/** synchronizes access to actors */
 	switch_mutex_t *actors_mutex;
@@ -473,13 +477,13 @@ static struct dial_gateway *dial_gateway_find(const char *uri)
 /**
  * Add command handler function
  * @param name the command name
- * @param handler the command handler functions
+ * @param handler the command handler function
  */
-static void rayo_command_handler_add(const char *name, struct rayo_command_handler *handler)
+static void rayo_command_handler_add(const char *name, struct rayo_xmpp_handler *handler)
 {
 	char full_name[1024];
 	full_name[1023] = '\0';
-	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s", handler->type, handler->subtype, name);
+	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s", handler->to_type, handler->to_subtype, name);
 	switch_core_hash_insert(globals.command_handlers, full_name, handler);
 }
 
@@ -490,13 +494,13 @@ static void rayo_command_handler_add(const char *name, struct rayo_command_handl
  * @param name the command name
  * @param fn the command callback function
  */
-void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subtype, const char *name, rayo_actor_command_handler fn)
+void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subtype, const char *name, rayo_actor_xmpp_handler fn)
 {
-	struct rayo_command_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
-	handler->type = type;
-	handler->subtype = zstr(subtype) ? "" : switch_core_strdup(globals.pool, subtype);
+	struct rayo_xmpp_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
+	handler->to_type = type;
+	handler->to_subtype = zstr(subtype) ? "" : switch_core_strdup(globals.pool, subtype);
 	handler->fn = fn;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s command: %s\n", rayo_actor_type_to_string(type), name);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s%s%s command: %s\n", zstr(subtype) ? "" : subtype, zstr(subtype) ? "" : " ", rayo_actor_type_to_string(type), name);
 	rayo_command_handler_add(name, handler);
 }
 
@@ -506,11 +510,11 @@ void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subty
  * @param iq
  * @return the command handler function or NULL
  */
-rayo_actor_command_handler rayo_actor_command_handler_find(struct rayo_actor *actor, iks *iq)
+rayo_actor_xmpp_handler rayo_actor_command_handler_find(struct rayo_actor *actor, iks *iq)
 {
 	iks *command = iks_first_tag(iq);
 	if (command) {
-		struct rayo_command_handler *handler = NULL;
+		struct rayo_xmpp_handler *handler = NULL;
 		const char *name = iks_name(command);
 		const char *iq_type = iks_find_attrib(iq, "type");
 		const char *namespace = iks_find_attrib(command, "xmlns");
@@ -521,13 +525,80 @@ rayo_actor_command_handler rayo_actor_command_handler_find(struct rayo_actor *ac
 		}
 		snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s:%s:%s", actor->type, actor->subtype, iq_type, namespace, name);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s command\n", RAYO_JID(actor), full_name);
-		handler = (struct rayo_command_handler *)switch_core_hash_find(globals.command_handlers, full_name);
+		handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.command_handlers, full_name);
 		if (handler) {
 			return handler->fn;
 		}
 	}
 	return NULL;
 }
+
+/**
+ * Add event handler function
+ * @param name the event name
+ * @param handler the event handler function
+ */
+static void rayo_event_handler_add(const char *name, struct rayo_xmpp_handler *handler)
+{
+	char full_name[1024];
+	full_name[1023] = '\0';
+	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%i:%s:%s", handler->from_type, handler->from_subtype, handler->to_type, handler->to_subtype, name);
+	switch_core_hash_insert(globals.event_handlers, full_name, handler);
+}
+
+/**
+ * Add event handler function
+ * @param from_type the source actor type
+ * @param from_subtype the source actor subtype
+ * @param to_type the destination actor type
+ * @param to_subtype the destination actor subtype
+ * @param name the event name
+ * @param fn the event callback function
+ */
+void rayo_actor_event_handler_add(enum rayo_actor_type from_type, const char *from_subtype, enum rayo_actor_type to_type, const char *to_subtype, const char *name, rayo_actor_xmpp_handler fn)
+{
+	struct rayo_xmpp_handler *handler = switch_core_alloc(globals.pool, sizeof (*handler));
+	handler->from_type = from_type;
+	handler->from_subtype = zstr(from_subtype) ? "" : switch_core_strdup(globals.pool, from_subtype);
+	handler->to_type = to_type;
+	handler->to_subtype = zstr(to_subtype) ? "" : switch_core_strdup(globals.pool, to_subtype);
+	handler->fn = fn;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s%s%s => %s%s%s event handler: %s\n",
+		zstr(from_subtype) ? "" : from_subtype, zstr(from_subtype) ? "" : " ", rayo_actor_type_to_string(from_type),
+		zstr(to_subtype) ? "" : to_subtype, zstr(to_subtype) ? "" : " ", rayo_actor_type_to_string(to_type), name);
+	rayo_event_handler_add(name, handler);
+}
+
+/**
+ * Get event handler function from hash
+ * @param from the event source
+ * @param actor the event destination
+ * @param presence the event
+ * @return the event handler function or NULL
+ */
+rayo_actor_xmpp_handler rayo_actor_event_handler_find(struct rayo_actor *from, struct rayo_actor *actor, iks *presence)
+{
+	iks *event = iks_first_tag(presence);
+	if (event) {
+		struct rayo_xmpp_handler *handler = NULL;
+		const char *presence_type = iks_find_attrib(presence, "type");
+		const char *event_name = iks_name(event);
+		const char *event_namespace = iks_find_attrib(event, "xmlns");
+		char full_name[1024];
+		full_name[1023] = '\0';
+		if (zstr(event_name) || zstr(presence_type)) {
+			return NULL;
+		}
+		snprintf(full_name, sizeof(full_name) - 1, "%i:%i:%s:%s:%s:%s", from->type, actor->type, actor->subtype, presence_type, event_namespace, event_name);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s event handler\n", RAYO_JID(actor), full_name);
+		handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.event_handlers, full_name);
+		if (handler) {
+			return handler->fn;
+		}
+	}
+	return NULL;
+}
+
 
 #define RAYO_MESSAGE_FLAG_RAW 1
 #define RAYO_MESSAGE_FLAG_DESTROY_ON_SEND (1 << 1)
@@ -955,19 +1026,6 @@ static struct rayo_actor *rayo_actor_init(struct rayo_actor *actor, switch_memor
 }
 
 /**
- * @param actor to add send function to
- * @param send send function to call when a message arrives
- */
-void rayo_actor_set_send_fn(struct rayo_actor *actor, rayo_actor_send_fn send)
-{
-	if (send == NULL) {
-		actor->send_fn = rayo_actor_send_ignore;
-	} else {
-		actor->send_fn = send;
-	}
-}
-
-/**
  * Initialize rayo call
  */
 static struct rayo_call *rayo_call_init(struct rayo_call *call, switch_memory_pool_t *pool, const char *uuid, const char *file, int line)
@@ -1236,7 +1294,7 @@ static iks *rayo_component_command_ok(struct rayo_actor *rclient, struct rayo_co
  */
 static struct rayo_message *rayo_server_send(struct rayo_actor *client, struct rayo_actor *server, struct rayo_message *msg, const char *file, int line)
 {
-	rayo_actor_command_handler handler = NULL;
+	rayo_actor_xmpp_handler handler = NULL;
 	iks *iq = (iks *)msg->payload;
 	iks *response = NULL;
 
@@ -1263,7 +1321,7 @@ static struct rayo_message *rayo_server_send(struct rayo_actor *client, struct r
  */
 static struct rayo_message *rayo_call_send(struct rayo_actor *client, struct rayo_actor *call, struct rayo_message *msg, const char *file, int line)
 {
-	rayo_actor_command_handler handler = NULL;
+	rayo_actor_xmpp_handler handler = NULL;
 	iks *iq = (iks *)msg->payload;
 	switch_core_session_t *session;
 	iks *response = NULL;
@@ -1302,7 +1360,7 @@ static struct rayo_message *rayo_call_send(struct rayo_actor *client, struct ray
  */
 static struct rayo_message *rayo_mixer_send(struct rayo_actor *client, struct rayo_actor *mixer, struct rayo_message *msg, const char *file, int line)
 {
-	rayo_actor_command_handler handler = NULL;
+	rayo_actor_xmpp_handler handler = NULL;
 	iks *iq = (iks *)msg->payload;
 	iks *response = NULL;
 
@@ -1326,27 +1384,41 @@ static struct rayo_message *rayo_mixer_send(struct rayo_actor *client, struct ra
  */
 static struct rayo_message *rayo_component_send(struct rayo_actor *client, struct rayo_actor *component, struct rayo_message *msg, const char *file, int line)
 {
-	rayo_actor_command_handler handler = NULL;
-	iks *iq = (iks *)msg->payload;
+	rayo_actor_xmpp_handler handler = NULL;
+	iks *xml_msg = (iks *)msg->payload;
 	iks *response = NULL;
 
-	/* is this a command a component supports? */
-	handler = rayo_actor_command_handler_find(component, iq);
-	if (!handler) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no component handler function for command\n", RAYO_JID(component));
-		return rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+	if (!strcmp("iq", iks_name(xml_msg))) {
+		/* is this a command a component supports? */
+		handler = rayo_actor_command_handler_find(component, xml_msg);
+		if (!handler) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no component handler function for command\n", RAYO_JID(component));
+			return rayo_message_create(iks_new_iq_error(xml_msg, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+		}
+
+		/* is the command valid? */
+		if (!(response = rayo_component_command_ok(client, RAYO_COMPONENT(component), xml_msg))) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, executing command\n", RAYO_JID(component));
+			response = handler(client, component, xml_msg, NULL);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, done executing command\n", RAYO_JID(component));
+		}
+
+		if (response) {
+			return rayo_message_create(response);
+		}
+	} else if (!strcmp("presence", iks_name(xml_msg))) {
+		/* is this an event the component wants? */
+		handler = rayo_actor_event_handler_find(client, component, xml_msg);
+		if (!handler) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no component handler function for event\n", RAYO_JID(component));
+			return NULL;
+		}
+
+		/* forward the event */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, forwarding event\n", RAYO_JID(component));
+		handler(client, component, xml_msg, NULL);
 	}
 
-	/* is the command valid? */
-	if (!(response = rayo_component_command_ok(client, RAYO_COMPONENT(component), iq))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, executing command\n", RAYO_JID(component));
-		response = handler(client, component, iq, NULL);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, done executing command\n", RAYO_JID(component));
-	}
-
-	if (response) {
-		return rayo_message_create(response);
-	}
 	return NULL;
 }
 
@@ -3767,6 +3839,13 @@ switch_status_t list_actors(const char *line, const char *cursor, switch_console
 	return status;
 }
 
+static void rayo_add_cmd_alias(const char *alias_name, const char *alias_cmd)
+{
+	char *cmd = switch_core_sprintf(globals.pool, "add rayo cmd ::rayo::list_actors %s", alias_name);
+	switch_console_set_complete(cmd);
+	switch_core_hash_insert(globals.cmd_aliases, alias_name, alias_cmd);
+}
+
 /**
  * Load module
  */
@@ -3784,6 +3863,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	switch_thread_rwlock_create(&globals.shutdown_rwlock, pool);
 	switch_core_hash_init(&globals.users, pool);
 	switch_core_hash_init(&globals.command_handlers, pool);
+	switch_core_hash_init(&globals.event_handlers, pool);
 	switch_core_hash_init(&globals.clients, pool);
 	switch_mutex_init(&globals.clients_mutex, SWITCH_MUTEX_UNNESTED, pool);
 	switch_core_hash_init(&globals.actors, pool);
@@ -3832,34 +3912,28 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 
 	switch_console_set_complete("add rayo status");
 	switch_console_set_complete("add rayo cmd ::rayo::list_actors");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors ping");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors answer");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors hangup");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors stop");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors pause");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors resume");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors speed-up");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors speed-down");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors volume-up");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors volume-down");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors record");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors record_pause");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors record_resume");
 	switch_console_add_complete_func("::rayo::list_actors", list_actors);
 
-	switch_core_hash_insert(globals.cmd_aliases, "ping", "<iq type=\"get\"><ping xmlns=\"urn:xmpp:ping\"/></iq>");
-	switch_core_hash_insert(globals.cmd_aliases, "answer", "<answer xmlns=\"urn:xmpp:rayo:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "hangup", "<hangup xmlns=\"urn:xmpp:rayo:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "stop", "<stop xmlns=\"urn:xmpp:rayo:ext:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "pause", "<pause xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "resume", "<resume xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "speed-up", "<speed-up xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "speed-down", "<speed-down xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "volume-up", "<volume-up xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "volume-down", "<volume-down xmlns=\"urn:xmpp:rayo:output:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "record", "<record xmlns=\"urn:xmpp:rayo:record:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "record_pause", "<pause xmlns=\"urn:xmpp:rayo:record:1\"/>");
-	switch_core_hash_insert(globals.cmd_aliases, "record_resume", "<resume xmlns=\"urn:xmpp:rayo:record:1\"/>");
+	rayo_add_cmd_alias("ping", "<iq type=\"get\"><ping xmlns=\""IKS_NS_XMPP_PING"\"/></iq>");
+	rayo_add_cmd_alias("answer", "<answer xmlns=\""RAYO_NS"\"/>");
+	rayo_add_cmd_alias("hangup", "<hangup xmlns=\""RAYO_NS"\"/>");
+	rayo_add_cmd_alias("stop", "<stop xmlns=\""RAYO_EXT_NS"\"/>");
+	rayo_add_cmd_alias("pause", "<pause xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("resume", "<resume xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("speed-up", "<speed-up xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("speed-down", "<speed-down xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("volume-up", "<volume-up xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("volume-down", "<volume-down xmlns=\""RAYO_OUTPUT_NS"\"/>");
+	rayo_add_cmd_alias("record", "<record xmlns=\""RAYO_RECORD_NS"\"/>");
+	rayo_add_cmd_alias("record_pause", "<pause xmlns=\""RAYO_RECORD_NS"\"/>");
+	rayo_add_cmd_alias("record_resume", "<resume xmlns=\""RAYO_RECORD_NS"\"/>");
+	rayo_add_cmd_alias("prompt_test", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
+		"<output xmlns=\""RAYO_OUTPUT_NS"\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><p>Please press a digit.</p></speak>]]></document></output>"
+		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\">"
+		"<grammar content-type=\"application/srgs+xml\">"
+		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digit\" scope=\"public\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></rule></grammar>]]>"
+		"</grammar></input>"
+		"</prompt>");
 
 	return SWITCH_STATUS_SUCCESS;
 }
