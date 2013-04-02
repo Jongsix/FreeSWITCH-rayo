@@ -484,6 +484,7 @@ static void rayo_command_handler_add(const char *name, struct rayo_xmpp_handler 
 	char full_name[1024];
 	full_name[1023] = '\0';
 	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s", handler->to_type, handler->to_subtype, name);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding command: %s\n", full_name);
 	switch_core_hash_insert(globals.command_handlers, full_name, handler);
 }
 
@@ -500,7 +501,6 @@ void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subty
 	handler->to_type = type;
 	handler->to_subtype = zstr(subtype) ? "" : switch_core_strdup(globals.pool, subtype);
 	handler->fn = fn;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s%s%s command: %s\n", zstr(subtype) ? "" : subtype, zstr(subtype) ? "" : " ", rayo_actor_type_to_string(type), name);
 	rayo_command_handler_add(name, handler);
 }
 
@@ -543,6 +543,7 @@ static void rayo_event_handler_add(const char *name, struct rayo_xmpp_handler *h
 	char full_name[1024];
 	full_name[1023] = '\0';
 	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%i:%s:%s", handler->from_type, handler->from_subtype, handler->to_type, handler->to_subtype, name);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding event: %s\n", full_name);
 	switch_core_hash_insert(globals.event_handlers, full_name, handler);
 }
 
@@ -563,9 +564,6 @@ void rayo_actor_event_handler_add(enum rayo_actor_type from_type, const char *fr
 	handler->to_type = to_type;
 	handler->to_subtype = zstr(to_subtype) ? "" : switch_core_strdup(globals.pool, to_subtype);
 	handler->fn = fn;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Adding %s%s%s => %s%s%s event handler: %s\n",
-		zstr(from_subtype) ? "" : from_subtype, zstr(from_subtype) ? "" : " ", rayo_actor_type_to_string(from_type),
-		zstr(to_subtype) ? "" : to_subtype, zstr(to_subtype) ? "" : " ", rayo_actor_type_to_string(to_type), name);
 	rayo_event_handler_add(name, handler);
 }
 
@@ -589,7 +587,7 @@ rayo_actor_xmpp_handler rayo_actor_event_handler_find(struct rayo_actor *from, s
 		if (zstr(event_name) || zstr(presence_type)) {
 			return NULL;
 		}
-		snprintf(full_name, sizeof(full_name) - 1, "%i:%i:%s:%s:%s:%s", from->type, actor->type, actor->subtype, presence_type, event_namespace, event_name);
+		snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%i:%s:%s:%s:%s", from->type, from->subtype, actor->type, actor->subtype, presence_type, event_namespace, event_name);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s event handler\n", RAYO_JID(actor), full_name);
 		handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.event_handlers, full_name);
 		if (handler) {
@@ -1216,15 +1214,18 @@ static iks *rayo_server_command_ok(struct rayo_actor *rclient, struct rayo_serve
 	} else if (rclient->type != RAT_CLIENT) {
 		/* not a rayo client request */
 		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s not a client\n", RAYO_JID(rclient), RAYO_JID(server));
 	} else if (RAYO_CLIENT(rclient)->is_console) {
 		/* superuser */
 		return NULL;
 	} else if (strcmp(RAYO_JID(RAYO_CLIENT(rclient)->server), RAYO_JID(server))) {
 		/* client connected to different domain */
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s wrong server\n", RAYO_JID(rclient), RAYO_JID(server));
 	} else if (RAYO_CLIENT(rclient)->state == RCS_CONNECT) {
 		/* client hasn't authenticated yet */
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s registration required\n", RAYO_JID(rclient), RAYO_JID(server));
 	}
 
 	return response;
@@ -1245,15 +1246,29 @@ static iks *rayo_call_command_ok(struct rayo_actor *rclient, struct rayo_call *c
 
 	if (bad) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+	} else if (rclient->type == RAT_CALL_COMPONENT) {
+		struct rayo_actor *client = RAYO_LOCATE(RAYO_COMPONENT(rclient)->client_jid);
+		if (client) {
+	 		iks *response = rayo_call_command_ok(client, call, session, node);
+			RAYO_UNLOCK(client);
+			return response;
+		}
+		/* not a client request */
+		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s call component client is gone\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (rclient->type != RAT_CLIENT) {
 		/* not a client request */
 		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s not a client request\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (RAYO_CLIENT(rclient)->state == RCS_CONNECT) {
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s registration required\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
 		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (!rayo_client_has_call_control(RAYO_CLIENT(rclient), call, session)) {
 		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s conflict\n", RAYO_JID(rclient), RAYO_JID(call));
 	}
 
 	return response;
@@ -1274,16 +1289,24 @@ static iks *rayo_component_command_ok(struct rayo_actor *rclient, struct rayo_co
 
 	if (bad) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s bad request\n", RAYO_JID(rclient), RAYO_JID(component));
+	} else if (rclient->type == RAT_CALL_COMPONENT) {
+		/* internal message is ok */
+		return NULL;
 	} else if (rclient->type != RAT_CLIENT) {
 		/* not a client request */
 		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (RAYO_CLIENT(rclient)->state == RCS_CONNECT) {
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s registration required\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
 		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (!RAYO_CLIENT(rclient)->is_console && strcmp(component->client_jid, from)) {
 		/* does not have control of this component */
 		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s conflict\n", RAYO_JID(rclient), RAYO_JID(component));
 	}
 
 	return response;
