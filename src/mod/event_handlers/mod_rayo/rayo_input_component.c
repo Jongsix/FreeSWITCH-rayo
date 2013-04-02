@@ -24,7 +24,7 @@
  * Contributor(s):
  * Chris Rienzo <chris.rienzo@grasshopper.com>
  *
- * input_component.c -- Rayo input component implementation
+ * rayo_input_component.c -- Rayo input component implementation
  *
  */
 #include "rayo_components.h"
@@ -68,14 +68,20 @@ struct input_component {
 	switch_time_t last_digit_time;
 	/** timeout before first digit is received */
 	int initial_timeout;
+	/** maximum silence allowed */
+	int max_silence;
+	/** minimum speech detection confidence */
+	int min_confidence;
 	/** timeout after first digit is received */
 	int inter_digit_timeout;
 	/** stop flag */
 	int stop;
-	/** true if input barges in on output */
-	int barge_in;
-	/** optional output linked to this input */
-	const char *output_file;
+	/** true if input timers started */
+	int start_timers;
+	/** true if event fired for first digit / start of speech */
+	int barge_event;
+	/** true if input is paused */
+	int paused;
 	/** global data */
 	struct input_handler *handler;
 };
@@ -95,6 +101,20 @@ struct input_handler {
 };
 
 /**
+ * Send barge-in event to client
+ */
+static void send_barge_event(struct rayo_component *component)
+{
+	iks *event = iks_new("presence");
+	iks *x;
+	iks_insert_attrib(event, "from", RAYO_JID(component));
+	iks_insert_attrib(event, "to", component->client_jid);
+	x = iks_insert(event, "start-of-input");
+	iks_insert_attrib(x, "xmlns", RAYO_INPUT_NS);
+	RAYO_SEND_BY_JID(component, component->client_jid, rayo_message_create(event));
+}
+
+/**
  * Process DTMF press
  */
 static switch_status_t input_component_on_dtmf(switch_core_session_t *session, const switch_dtmf_t *dtmf, switch_dtmf_direction_t direction)
@@ -107,6 +127,11 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		enum srgs_match_type match;
 		switch_mutex_lock(handler->mutex);
 		component = handler->component;
+		if (component->paused) {
+			/* ignore input */
+			switch_mutex_unlock(handler->mutex);
+			return SWITCH_STATUS_SUCCESS;
+		}
 		component->digits[component->num_digits] = dtmf->digit;
 		component->num_digits++;
 		component->digits[component->num_digits] = '\0';
@@ -118,6 +143,9 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		switch (match) {
 			case SMT_MATCH_PARTIAL: {
 				/* need more digits */
+				if (component->num_digits == 1) {
+					send_barge_event(RAYO_COMPONENT(component));
+				}
 				break;
 			}
 			case SMT_NO_MATCH: {
@@ -152,8 +180,10 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 	switch_core_session_t *session = switch_core_media_bug_get_session(bug);
 	struct input_handler *handler = (struct input_handler *)user_data;
 	struct input_component *component;
+
 	switch_mutex_lock(handler->mutex);
 	component = handler->component;
+
 	switch(type) {
 		case SWITCH_ABC_TYPE_INIT: {
 			switch_core_event_hook_add_recv_dtmf(session, input_component_on_dtmf);
@@ -162,7 +192,7 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 		case SWITCH_ABC_TYPE_READ_REPLACE: {
 			switch_frame_t *rframe = switch_core_media_bug_get_read_replace_frame(bug);
 			/* check for timeout */
-			if (component) {
+			if (component && component->start_timers) {
 				int elapsed_ms = (switch_micro_time_now() - component->last_digit_time) / 1000;
 				if (component->num_digits && component->inter_digit_timeout > 0 && elapsed_ms > component->inter_digit_timeout) {
 					handler->component = NULL;
@@ -243,8 +273,6 @@ static int validate_call_input(iks *input, const char **error)
  * @param session the session
  * @param input the input request
  * @param iq the original input/prompt request
- * @param output_file optional output file linked to this input
- * @param barge_in true if start of input stops output
  */
 static iks *start_call_input(struct input_component *component, switch_core_session_t *session, iks *input, iks *iq, const char *output_file, int barge_in)
 {
@@ -261,8 +289,13 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 	component->digits[0] = '\0';
 	component->stop = 0;
 	component->speech_mode = 0;
-	component->output_file = output_file;
-	component->barge_in = barge_in;
+	component->initial_timeout = iks_find_int_attrib(input, "initial-timeout");
+	component->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
+	component->max_silence = iks_find_int_attrib(input, "max-silence");
+	component->min_confidence = (int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0);
+	component->barge_event = iks_find_bool_attrib(iq, "barge-event");
+	component->start_timers = iks_find_bool_attrib(iq, "start-timers");
+	component->paused = iks_find_bool_attrib(iq, "start-paused");
 	component->handler = handler;
 
 	/* parse the grammar */
@@ -276,8 +309,6 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 	/* is this voice or dtmf srgs grammar? */
 	if (!strcasecmp("dtmf", iks_find_attrib_soft(input, "mode"))) {
 		component->last_digit_time = switch_micro_time_now();
-		component->initial_timeout = iks_find_int_attrib(input, "initial-timeout");
-		component->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
 
 		/* acknowledge command */
 		rayo_component_send_start(RAYO_COMPONENT(component), iq);
@@ -288,7 +319,6 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 		}
 	} else {
 		const char *jsgf_path;
-		char *grammar = NULL;
 		component->speech_mode = 1;
 		jsgf_path = srgs_grammar_to_jsgf_file(component->grammar, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
 		if (!jsgf_path) {
@@ -300,17 +330,20 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 		/* acknowledge command */
 		rayo_component_send_start(RAYO_COMPONENT(component), iq);
 
-		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
-		grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=%s,confidence-threshold=%d}%s",
-			iks_find_attrib(input, "initial-timeout"), iks_find_attrib(input, "max-silence"),
-			zstr(component->output_file) ? "true" : "false",
-			(int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0), jsgf_path);
-		/* start speech detection */
-		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
-		if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
-			rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
+		if (!component->paused) {
+			char *grammar = NULL;
+			/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
+			grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=%s,confidence-threshold=%d}%s",
+				component->initial_timeout, component->max_silence,
+				component->start_timers ? "true" : "false",
+				component->min_confidence, jsgf_path);
+			/* start speech detection */
+			switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
+			if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
+				rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
+			}
+			switch_safe_free(grammar);
 		}
-		switch_safe_free(grammar);
 	}
 
 	return NULL;
@@ -369,6 +402,65 @@ static iks *stop_call_input_component(struct rayo_actor *client, struct rayo_act
 }
 
 /**
+ * Start input component timers
+ */
+static iks *start_timers_call_input_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
+{
+	struct input_component *input_component = INPUT_COMPONENT(component);
+	if (input_component) {
+		switch_core_session_t *session = switch_core_session_locate(RAYO_COMPONENT(component)->parent->id);
+		if (session) {
+			switch_mutex_lock(input_component->handler->mutex);
+			if (input_component->speech_mode) {
+				switch_ivr_detect_speech_start_input_timers(session);
+				rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_STOP);
+			} else {
+				input_component->start_timers = 1;
+			}
+			switch_mutex_unlock(input_component->handler->mutex);
+			switch_core_session_rwunlock(session);
+		}
+	}
+	return iks_new_iq_result(iq);
+}
+
+/**
+ * Resume input component
+ */
+static iks *resume_call_input_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
+{
+	struct input_component *input_component = INPUT_COMPONENT(component);
+	if (input_component) {
+		switch_core_session_t *session = switch_core_session_locate(RAYO_COMPONENT(component)->parent->id);
+		if (session) {
+			switch_mutex_lock(input_component->handler->mutex);
+			if (input_component->speech_mode) {
+				char *grammar = NULL;
+				const char *jsgf_path = srgs_grammar_to_jsgf_file(input_component->grammar, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
+
+				/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
+				grammar = switch_mprintf("{no-input-timeout=%d,speech-timeout=%d,start-input-timers=%s,confidence-threshold=%d}%s",
+					input_component->initial_timeout, input_component->max_silence,
+					input_component->start_timers ? "true" : "false",
+					input_component->min_confidence, jsgf_path);
+
+				/* start speech detection */
+				switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
+				if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
+					rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
+				}
+				switch_safe_free(grammar);
+			} else {
+				input_component->paused = 0;
+			}
+			switch_mutex_unlock(input_component->handler->mutex);
+			switch_core_session_rwunlock(session);
+		}
+	}
+	return iks_new_iq_result(iq);
+}
+
+/**
  * Handle speech detection event
  */
 static void on_detected_speech_event(switch_event_t *event)
@@ -416,6 +508,15 @@ static void on_detected_speech_event(switch_event_t *event)
 			}
 			RAYO_UNLOCK(component);
 		}
+	} else if (!strcasecmp("begin-speaking", speech_type)) {
+		const char *uuid = switch_event_get_header(event, "Unique-ID");
+		char *component_id = switch_mprintf("%s-input", uuid);
+		struct rayo_component *component = RAYO_COMPONENT_LOCATE(component_id);
+		switch_safe_free(component_id);
+		if (component && INPUT_COMPONENT(component)->barge_event) {
+			send_barge_event(component);
+		}
+		RAYO_UNLOCK(component);
 	} else if (!strcasecmp("closed", speech_type)) {
 		const char *uuid = switch_event_get_header(event, "Unique-ID");
 		char *component_id = switch_mprintf("%s-input", uuid);
@@ -440,231 +541,6 @@ static void on_detected_speech_event(switch_event_t *event)
 }
 
 /**
- * Send stop to component
- */
-static void rayo_component_send_stop(struct rayo_actor *from, const char *to_jid)
-{
-	iks *stop = iks_new("iq");
-	iks *x;
-	iks_insert_attrib(stop, "from", RAYO_JID(from));
-	iks_insert_attrib(stop, "to", to_jid);
-	iks_insert_attrib(stop, "type", "set");
-	iks_insert_attrib_printf(stop, "id", "%05x", RAYO_SEQ_NEXT(from));
-	x = iks_insert(stop, "stop");
-	iks_insert_attrib(x, "xmlns", RAYO_EXT_NS);
-	RAYO_SEND_BY_JID(from, to_jid, rayo_message_create(stop));
-}
-
-/**
- * Prompt input/output component state
- */
-enum rayo_component_state {
-	RCS_NONE,
-	RCS_START,
-	RCS_DONE,
-	RCS_ERROR
-};
-
-/**
- * Prompt state
- */
-struct prompt_component {
-	struct rayo_component base;
-	enum rayo_component_state prompt_state;
-	const char *input_jid;
-	enum rayo_component_state input_state;
-	const char *output_jid;
-	enum rayo_component_state output_state;
-};
-
-#define PROMPT_COMPONENT(x) ((struct prompt_component *)x)
-
-/**
- * Handle start of input.
- */
-static iks *prompt_component_handle_input_start(struct rayo_actor *input, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	if (PROMPT_COMPONENT(prompt)->input_jid && !strcmp(RAYO_JID(input), PROMPT_COMPONENT(prompt)->input_jid)) {
-		PROMPT_COMPONENT(prompt)->input_state = RCS_START;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, started input\n", RAYO_JID(prompt));
-	}
-	return NULL;
-}
-
-/**
- * Handle start of output.
- */
-static iks *prompt_component_handle_output_start(struct rayo_actor *output, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	if (PROMPT_COMPONENT(prompt)->output_jid && !strcmp(RAYO_JID(output), PROMPT_COMPONENT(prompt)->output_jid)) {
-		PROMPT_COMPONENT(prompt)->output_state = RCS_START;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, started output\n", RAYO_JID(prompt));
-	}
-	return NULL;
-}
-
-/**
- * Handle start of input/output.
- */
-static iks *prompt_component_handle_io_start(struct rayo_actor *component, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, got <ref> from %s\n", RAYO_JID(prompt), RAYO_JID(component));
-	if (!strcmp("input", component->subtype)) {
-		return prompt_component_handle_input_start(component, prompt, iq, data);
-	} else if (!strcmp("output", component->subtype)) {
-		return prompt_component_handle_output_start(component, prompt, iq, data);
-	}
-	return NULL;
-}
-
-/**
- * Handle input failure.
- */
-static iks *prompt_component_handle_input_error(struct rayo_actor *input, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	if (PROMPT_COMPONENT(prompt)->input_jid && !strcmp(RAYO_JID(input), PROMPT_COMPONENT(prompt)->input_jid)) {
-		PROMPT_COMPONENT(prompt)->input_state = RCS_ERROR;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, <input> error\n", RAYO_JID(prompt));
-		if (PROMPT_COMPONENT(prompt)->output_state <= RCS_START && PROMPT_COMPONENT(prompt)->output_jid) {
-			/* stop output */
-			rayo_component_send_stop(prompt, PROMPT_COMPONENT(prompt)->output_jid);
-		}
-	}
-	return NULL;
-}
-
-/**
- * Handle output failure.
- */
-static iks *prompt_component_handle_output_error(struct rayo_actor *output, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	if (PROMPT_COMPONENT(prompt)->output_jid && !strcmp(RAYO_JID(output), PROMPT_COMPONENT(prompt)->output_jid)) {
-		PROMPT_COMPONENT(prompt)->output_state = RCS_ERROR;
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, <output> error\n", RAYO_JID(prompt));
-		if (PROMPT_COMPONENT(prompt)->input_state <= RCS_START && PROMPT_COMPONENT(prompt)->input_jid) {
-			/* stop input */
-			rayo_component_send_stop(prompt, PROMPT_COMPONENT(prompt)->input_jid);
-		}
-	}
-	return NULL;
-}
-
-/**
- * Handle input/output failure
- */
-static iks *prompt_component_handle_io_error(struct rayo_actor *component, struct rayo_actor *prompt, iks *iq, void *data)
-{
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, got error from %s\n", RAYO_JID(prompt), RAYO_JID(component));
-	if (!strcmp("input", component->subtype)) {
-		return prompt_component_handle_input_error(component, prompt, iq, data);
-	} else if (!strcmp("output", component->subtype)) {
-		return prompt_component_handle_output_error(component, prompt, iq, data);
-	}
-
-	/* TODO finish this */
-
-	return NULL;
-}
-
-/**
- * Handle completion event
- */
-static iks *prompt_component_handle_input_complete(struct rayo_actor *component, struct rayo_actor *prompt, iks *presence, void *data)
-{
-	/* TODO */
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, got <complete> from %s\n", RAYO_JID(prompt), RAYO_JID(component));
-	return NULL;
-}
-
-/**
- * Handle completion event
- */
-static iks *prompt_component_handle_output_complete(struct rayo_actor *component, struct rayo_actor *prompt, iks *presence, void *data)
-{
-	/* TODO */
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, got <complete> from %s\n", RAYO_JID(prompt), RAYO_JID(component));
-	return NULL;
-}
-
-/**
- * Start execution of prompt component
- */
-static iks *start_call_prompt_component(struct rayo_actor *client, struct rayo_actor *call, iks *iq, void *session_data)
-{
-	switch_core_session_t *session = (switch_core_session_t *)session_data;
-	switch_memory_pool_t *pool;
-	struct prompt_component *prompt_component = NULL;
-	struct input_component *input_component = NULL;
-	struct rayo_component *output_component = NULL;
-	char *input_component_id;
-	iks *prompt = iks_find(iq, "prompt");
-	iks *input;
-	iks *output;
-	const char *error = NULL;
-	iks *reply = NULL;
-
-	if (!VALIDATE_RAYO_PROMPT(prompt)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad <prompt> attrib\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <prompt> attrib value");
-	}
-
-	output = iks_find(prompt, "output");
-	if (!output) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <output>\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <output>");
-	}
-
-	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad <output> attrib\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <output> attrib value");
-	}
-
-	input = iks_find(prompt, "input");
-	if (!input) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <input>\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <input>");
-	}
-
-	if (!validate_call_input(input, &error)) {
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s\n", error);
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, error);
-	}
-
-	/* create prompt component, linked to call */
-	switch_core_new_memory_pool(&pool);
-	prompt_component = switch_core_alloc(pool, sizeof(*prompt_component));
-	rayo_component_init(RAYO_COMPONENT(prompt_component), pool, "prompt", NULL, call, iks_find_attrib(iq, "from"));
-
-	/* create input component linked to prompt component */
-	input_component_id = switch_mprintf("%s-input", switch_core_session_get_uuid(session));
-	pool = NULL;
-	switch_core_new_memory_pool(&pool);
-	input_component = switch_core_alloc(pool, sizeof(*input_component));
-	rayo_component_init(RAYO_COMPONENT(input_component), pool, "input", input_component_id, RAYO_ACTOR(prompt_component), RAYO_JID(prompt_component));
-	switch_safe_free(input_component_id);
-
-	/* create output component linked to prompt component */
-	output_component = create_output_component(RAYO_ACTOR(prompt_component), output, RAYO_JID(prompt_component));
-
-	/* start input and output */
-	reply = start_call_input(input_component, session, input, iq, RAYO_JID(output_component), iks_find_bool_attrib(prompt, "barge-in"));
-	if (!reply) {
-		reply = start_call_output(output_component, session, output, iq);
-	}
-	/* TODO handle reply */
-
-	return NULL;
-}
-
-/**
- * Stop execution of prompt component
- */
-static iks *stop_call_prompt_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
-{
-	return NULL;
-}
-
-/**
  * Initialize input component
  * @return SWITCH_STATUS_SUCCESS if successful
  */
@@ -677,15 +553,9 @@ switch_status_t rayo_input_component_load(void)
 
 	rayo_actor_command_handler_add(RAT_CALL, "", "set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_EXT_NS":stop", stop_call_input_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_INPUT_NS":start-timers", start_timers_call_input_component);
+	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_INPUT_NS":resume", resume_call_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
-
-	/* Prompt is a special <input> linked to <output> */
-	rayo_actor_command_handler_add(RAT_CALL, "", "set:"RAYO_PROMPT_NS":prompt", start_call_prompt_component);
-	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "prompt", "set:"RAYO_EXT_NS":stop", stop_call_prompt_component);
-	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "prompt", "result:"RAYO_NS":ref", prompt_component_handle_io_start);
-	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "prompt", "error:"RAYO_PROMPT_NS":prompt", prompt_component_handle_io_error);
-	rayo_actor_event_handler_add(RAT_CALL_COMPONENT, "input", RAT_CALL_COMPONENT, "prompt", "unavailable:"RAYO_EXT_NS":complete", prompt_component_handle_input_complete);
-	rayo_actor_event_handler_add(RAT_CALL_COMPONENT, "output", RAT_CALL_COMPONENT, "prompt", "unavailable:"RAYO_EXT_NS":complete", prompt_component_handle_output_complete);
 
 	return SWITCH_STATUS_SUCCESS;
 }

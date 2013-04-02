@@ -58,7 +58,7 @@ struct output_component {
 /**
  * Create new output component
  */
-struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid)
+static struct rayo_component *create_output_component(struct rayo_actor *actor, iks *output, const char *client_jid)
 {
 	switch_memory_pool_t *pool;
 	struct output_component *output_component = NULL;
@@ -83,7 +83,7 @@ struct rayo_component *create_output_component(struct rayo_actor *actor, iks *ou
  * @param output the output request
  * @param iq the original request
  */
-iks *start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq)
+static iks *start_call_output(struct rayo_component *component, switch_core_session_t *session, iks *output, iks *iq)
 {
 	switch_stream_handle_t stream = { 0 };
 

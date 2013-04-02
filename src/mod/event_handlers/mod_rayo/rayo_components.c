@@ -226,6 +226,7 @@ switch_status_t rayo_components_load(switch_loadable_module_interface_t **module
 {
 	rayo_input_component_load();
 	rayo_output_component_load(module_interface, pool);
+	rayo_prompt_component_load();
 	rayo_record_component_load();
 
 	return SWITCH_STATUS_SUCCESS;
@@ -238,6 +239,7 @@ switch_status_t rayo_components_shutdown(void)
 {
 	rayo_input_component_shutdown();
 	rayo_output_component_shutdown();
+	rayo_prompt_component_shutdown();
 	rayo_record_component_shutdown();
 	return SWITCH_STATUS_SUCCESS;
 }
