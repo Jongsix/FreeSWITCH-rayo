@@ -293,8 +293,8 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 	component->inter_digit_timeout = iks_find_int_attrib(input, "inter-digit-timeout");
 	component->max_silence = iks_find_int_attrib(input, "max-silence");
 	component->min_confidence = (int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0);
-	component->barge_event = iks_find_bool_attrib(iq, "barge-event");
-	component->start_timers = iks_find_bool_attrib(iq, "start-timers");
+	component->barge_event = iks_find_bool_attrib(input, "barge-event");
+	component->start_timers = iks_find_bool_attrib(input, "start-timers");
 	component->paused = iks_find_bool_attrib(iq, "start-paused");
 	component->handler = handler;
 

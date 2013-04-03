@@ -695,6 +695,15 @@ struct rayo_message *rayo_actor_send(struct rayo_actor *from, struct rayo_actor 
 	if (rayo_message_test_flag(msg, RAYO_MESSAGE_FLAG_RAW) && !actor->accepts_raw) {
 		switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_WARNING, "%s, %s does not accept raw messages: %s", RAYO_JID(from), RAYO_JID(actor), (char *)msg->payload);
 	} else {
+		if (rayo_message_test_flag(msg, RAYO_MESSAGE_FLAG_RAW)) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s\n",
+				RAYO_JID(from), (char *)msg->payload);
+		} else {
+			iks *payload = (iks *)msg->payload;
+			char *msg_str = iks_string(iks_stack(payload), payload);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s\n",
+				RAYO_JID(from), msg_str);
+		}
 		reply = actor->send_fn(from, actor, msg, file, line);
 	}
 	switch_mutex_unlock(actor->mutex);
