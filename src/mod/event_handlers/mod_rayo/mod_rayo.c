@@ -3139,8 +3139,10 @@ static void rayo_server_cleanup(struct rayo_actor *actor)
 {
 	struct rayo_server *server = RAYO_SERVER(actor);
 	/* shutdown server */
-	switch_socket_shutdown(server->socket, SWITCH_SHUTDOWN_READWRITE);
-	switch_socket_close(server->socket);
+	if (server->socket) {
+		switch_socket_shutdown(server->socket, SWITCH_SHUTDOWN_READWRITE);
+		switch_socket_close(server->socket);
+	}
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo server %s:%u closed\n", server->addr, server->port);
 }
 
@@ -3950,9 +3952,17 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	rayo_add_cmd_alias("record", "<record xmlns=\""RAYO_RECORD_NS"\"/>");
 	rayo_add_cmd_alias("record_pause", "<pause xmlns=\""RAYO_RECORD_NS"\"/>");
 	rayo_add_cmd_alias("record_resume", "<resume xmlns=\""RAYO_RECORD_NS"\"/>");
-	rayo_add_cmd_alias("prompt_test", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
-		"<output xmlns=\""RAYO_OUTPUT_NS"\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><p>Please press a digit.</p></speak>]]></document></output>"
-		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\">"
+	rayo_add_cmd_alias("prompt_barge", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
+		"<output xmlns=\""RAYO_OUTPUT_NS"\" repeat-times=\"5\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><p>Please press a digit.</p></speak>]]></document></output>"
+		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\" initial-timeout=\"5000\" inter-digit-timeout=\"3000\">"
+		"<grammar content-type=\"application/srgs+xml\">"
+		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digit\" scope=\"public\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></rule></grammar>]]>"
+		"</grammar></input>"
+		"</prompt>");
+
+	rayo_add_cmd_alias("prompt_no_barge", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"false\">"
+		"<output xmlns=\""RAYO_OUTPUT_NS"\" repeat-times=\"2\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><p>Please press a digit.</p></speak>]]></document></output>"
+		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\" initial-timeout=\"5000\" inter-digit-timeout=\"3000\">"
 		"<grammar content-type=\"application/srgs+xml\">"
 		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digit\" scope=\"public\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></rule></grammar>]]>"
 		"</grammar></input>"
