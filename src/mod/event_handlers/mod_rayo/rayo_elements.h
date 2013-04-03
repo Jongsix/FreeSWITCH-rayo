@@ -47,7 +47,6 @@ ELEMENT(RAYO_INPUT)
 	/* internal attribs for prompt support */
 	ATTRIB(barge-event, false, bool)
 	ATTRIB(start-timers, true, bool)
-	ATTRIB(start-paused, false, bool)
 ELEMENT_END
 
 /**
