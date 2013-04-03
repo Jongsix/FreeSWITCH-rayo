@@ -80,8 +80,6 @@ struct input_component {
 	int start_timers;
 	/** true if event fired for first digit / start of speech */
 	int barge_event;
-	/** true if input is paused */
-	int paused;
 	/** global data */
 	struct input_handler *handler;
 };
@@ -127,11 +125,6 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		enum srgs_match_type match;
 		switch_mutex_lock(handler->mutex);
 		component = handler->component;
-		if (component->paused) {
-			/* ignore input */
-			switch_mutex_unlock(handler->mutex);
-			return SWITCH_STATUS_SUCCESS;
-		}
 		component->digits[component->num_digits] = dtmf->digit;
 		component->num_digits++;
 		component->digits[component->num_digits] = '\0';
@@ -295,7 +288,6 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 	component->min_confidence = (int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0);
 	component->barge_event = iks_find_bool_attrib(input, "barge-event");
 	component->start_timers = iks_find_bool_attrib(input, "start-timers");
-	component->paused = iks_find_bool_attrib(iq, "start-paused");
 	component->handler = handler;
 
 	/* parse the grammar */
@@ -318,6 +310,7 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 			rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
 		}
 	} else {
+		char *grammar = NULL;
 		const char *jsgf_path;
 		component->speech_mode = 1;
 		jsgf_path = srgs_grammar_to_jsgf_file(component->grammar, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
@@ -330,20 +323,17 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 		/* acknowledge command */
 		rayo_component_send_start(RAYO_COMPONENT(component), iq);
 
-		if (!component->paused) {
-			char *grammar = NULL;
-			/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
-			grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=%s,confidence-threshold=%d}%s",
-				component->initial_timeout, component->max_silence,
-				component->start_timers ? "true" : "false",
-				component->min_confidence, jsgf_path);
-			/* start speech detection */
-			switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
-			if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
-				rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
-			}
-			switch_safe_free(grammar);
+		/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
+		grammar = switch_mprintf("{no-input-timeout=%s,speech-timeout=%s,start-input-timers=%s,confidence-threshold=%d}%s",
+			component->initial_timeout, component->max_silence,
+			component->start_timers ? "true" : "false",
+			component->min_confidence, jsgf_path);
+		/* start speech detection */
+		switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
+		if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
+			rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
 		}
+		switch_safe_free(grammar);
 	}
 
 	return NULL;
@@ -415,43 +405,8 @@ static iks *start_timers_call_input_component(struct rayo_actor *client, struct 
 				switch_ivr_detect_speech_start_input_timers(session);
 				rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_STOP);
 			} else {
+				input_component->last_digit_time = switch_micro_time_now();
 				input_component->start_timers = 1;
-			}
-			switch_mutex_unlock(input_component->handler->mutex);
-			switch_core_session_rwunlock(session);
-		}
-	}
-	return iks_new_iq_result(iq);
-}
-
-/**
- * Resume input component
- */
-static iks *resume_call_input_component(struct rayo_actor *client, struct rayo_actor *component, iks *iq, void *data)
-{
-	struct input_component *input_component = INPUT_COMPONENT(component);
-	if (input_component) {
-		switch_core_session_t *session = switch_core_session_locate(RAYO_COMPONENT(component)->parent->id);
-		if (session) {
-			switch_mutex_lock(input_component->handler->mutex);
-			if (input_component->speech_mode) {
-				char *grammar = NULL;
-				const char *jsgf_path = srgs_grammar_to_jsgf_file(input_component->grammar, SWITCH_GLOBAL_dirs.grammar_dir, "gram");
-
-				/* TODO configurable speech detection - different engines, grammar passthrough, dtmf handled by recognizer */
-				grammar = switch_mprintf("{no-input-timeout=%d,speech-timeout=%d,start-input-timers=%s,confidence-threshold=%d}%s",
-					input_component->initial_timeout, input_component->max_silence,
-					input_component->start_timers ? "true" : "false",
-					input_component->min_confidence, jsgf_path);
-
-				/* start speech detection */
-				switch_channel_set_variable(switch_core_session_get_channel(session), "fire_asr_events", "true");
-				if (switch_ivr_detect_speech(session, "pocketsphinx", grammar, "mod_rayo_grammar", "", NULL) != SWITCH_STATUS_SUCCESS) {
-					rayo_component_send_complete(RAYO_COMPONENT(component), COMPONENT_COMPLETE_ERROR);
-				}
-				switch_safe_free(grammar);
-			} else {
-				input_component->paused = 0;
 			}
 			switch_mutex_unlock(input_component->handler->mutex);
 			switch_core_session_rwunlock(session);
@@ -554,7 +509,6 @@ switch_status_t rayo_input_component_load(void)
 	rayo_actor_command_handler_add(RAT_CALL, "", "set:"RAYO_INPUT_NS":input", start_call_input_component);
 	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_EXT_NS":stop", stop_call_input_component);
 	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_INPUT_NS":start-timers", start_timers_call_input_component);
-	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "input", "set:"RAYO_INPUT_NS":resume", resume_call_input_component);
 	switch_event_bind("rayo_input_component", SWITCH_EVENT_DETECTED_SPEECH, SWITCH_EVENT_SUBCLASS_ANY, on_detected_speech_event, NULL);
 
 	return SWITCH_STATUS_SUCCESS;
