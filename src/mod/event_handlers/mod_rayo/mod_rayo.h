@@ -125,6 +125,7 @@ extern struct rayo_message *rayo_message_create_dup(iks *xml);
 extern struct rayo_message *rayo_message_raw_create(const char *raw);
 extern struct rayo_message *rayo_message_raw_create_dup(const char *raw);
 extern void rayo_message_destroy(struct rayo_message *msg);
+extern iks *rayo_message_remove_payload(struct rayo_message *msg);
 
 extern struct rayo_actor *rayo_actor_locate(const char *jid, const char *file, int line);
 extern struct rayo_actor *rayo_actor_locate_by_id(const char *id, const char *file, int line);
