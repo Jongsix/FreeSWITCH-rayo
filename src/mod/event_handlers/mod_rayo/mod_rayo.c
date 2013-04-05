@@ -1318,13 +1318,9 @@ static iks *rayo_component_command_ok(struct rayo_actor *rclient, struct rayo_co
 	if (bad) {
 		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s bad request\n", RAYO_JID(rclient), RAYO_JID(component));
-	} else if (rclient->type == RAT_CALL_COMPONENT) {
+	} else if (rclient->type != RAT_CLIENT) {
 		/* internal message is ok */
 		return NULL;
-	} else if (rclient->type != RAT_CLIENT) {
-		/* not a client request */
-		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (RAYO_CLIENT(rclient)->state == RCS_CONNECT) {
 		response = iks_new_iq_error(node, STANZA_ERROR_REGISTRATION_REQUIRED);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s registration required\n", RAYO_JID(rclient), RAYO_JID(component));
@@ -2703,6 +2699,7 @@ static void route_call_event(switch_event_t *event)
 		actor = RAYO_LOCATE(dcp_jid);
 		if (actor && actor->type == RAT_CLIENT) {
 			if (RAYO_CLIENT(actor)->is_console) {
+				/* FIXME ignore? */
 			} else {
 				/* route event to client */
 				switch_event_t *dup_event = NULL;
@@ -4006,6 +4003,22 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 
 	rayo_add_cmd_alias("prompt_multi_digit", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
 		"<output xmlns=\""RAYO_OUTPUT_NS"\" repeat-times=\"100\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><audio src=\"http://phono.com/audio/troporocks.mp3\"/></speak>]]></document></output>"
+		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\" initial-timeout=\"5000\" inter-digit-timeout=\"3000\">"
+		"<grammar content-type=\"application/srgs+xml\">"
+		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digits\" scope=\"public\"><item repeat=\"4\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></item></rule></grammar>]]>"
+		"</grammar></input>"
+		"</prompt>");
+
+	rayo_add_cmd_alias("prompt_input_bad", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
+		"<output xmlns=\""RAYO_OUTPUT_NS"\" repeat-times=\"100\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><audio src=\"http://phono.com/audio/troporocks.mp3\"/></speak>]]></document></output>"
+		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtf\" initial-timeout=\"5000\" inter-digit-timeout=\"3000\">"
+		"<grammar content-type=\"application/srgs+xml\">"
+		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digits\" scope=\"public\"><item repeat=\"4\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></item></rule></grammar>]]>"
+		"</grammar></input>"
+		"</prompt>");
+
+	rayo_add_cmd_alias("prompt_output_bad", "<prompt xmlns=\""RAYO_PROMPT_NS"\" barge-in=\"true\">"
+		"<output xmlns=\""RAYO_OUTPUT_NS"\" repeat-time=\"100\"><document content-type=\"application/ssml+xml\"><![CDATA[<speak><audio src=\"http://phono.com/audio/troporocks.mp3\"/></speak>]]></document></output>"
 		"<input xmlns=\""RAYO_INPUT_NS"\" mode=\"dtmf\" initial-timeout=\"5000\" inter-digit-timeout=\"3000\">"
 		"<grammar content-type=\"application/srgs+xml\">"
 		"<![CDATA[<grammar mode=\"dtmf\"><rule id=\"digits\" scope=\"public\"><item repeat=\"4\"><one-of><item>0</item><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item><item>8</item><item>9</item></one-of></item></rule></grammar>]]>"
