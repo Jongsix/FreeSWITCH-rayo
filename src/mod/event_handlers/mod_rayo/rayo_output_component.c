@@ -443,6 +443,7 @@ static switch_status_t rayo_file_open(switch_file_handle_t *handle, const char *
 		status = next_file(handle);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "File error! %s\n", path);
+		return SWITCH_STATUS_FALSE;
 	}
 
 	if (status != SWITCH_STATUS_SUCCESS && context->component) {
@@ -504,13 +505,17 @@ static switch_status_t rayo_file_read(switch_file_handle_t *handle, void *data, 
 	struct rayo_file_context *context = (struct rayo_file_context *)handle->private_info;
 	size_t llen = *len;
 
-	status = switch_core_file_read(&context->fh, data, len);
-	if (status != SWITCH_STATUS_SUCCESS) {
-		if ((status = next_file(handle)) != SWITCH_STATUS_SUCCESS) {
-			return status;
-		}
-		*len = llen;
+	if (OUTPUT_COMPONENT(context->component)->stop) {
+		return SWITCH_STATUS_FALSE;
+	} else {
 		status = switch_core_file_read(&context->fh, data, len);
+		if (status != SWITCH_STATUS_SUCCESS) {
+			if ((status = next_file(handle)) != SWITCH_STATUS_SUCCESS) {
+				return status;
+			}
+			*len = llen;
+			status = switch_core_file_read(&context->fh, data, len);
+		}
 	}
 
 	return status;
