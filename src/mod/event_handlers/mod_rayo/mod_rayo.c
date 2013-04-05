@@ -512,24 +512,29 @@ void rayo_actor_command_handler_add(enum rayo_actor_type type, const char *subty
  */
 rayo_actor_xmpp_handler rayo_actor_command_handler_find(struct rayo_actor *actor, iks *iq)
 {
+	const char *iq_type = iks_find_attrib_soft(iq, "type");
 	iks *command = iks_first_tag(iq);
+	const char *name = "";
+	const char *namespace = "";
+	struct rayo_xmpp_handler *handler = NULL;
+	char full_name[1024];
+
+	full_name[1023] = '\0';
 	if (command) {
-		struct rayo_xmpp_handler *handler = NULL;
-		const char *name = iks_name(command);
-		const char *iq_type = iks_find_attrib(iq, "type");
-		const char *namespace = iks_find_attrib(command, "xmlns");
-		char full_name[1024];
-		full_name[1023] = '\0';
-		if (zstr(name) || zstr(iq_type)) {
-			return NULL;
-		}
-		snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s:%s:%s", actor->type, actor->subtype, iq_type, namespace, name);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s command\n", RAYO_JID(actor), full_name);
-		handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.command_handlers, full_name);
-		if (handler) {
-			return handler->fn;
+		name = iks_name(command);
+		namespace = iks_find_attrib_soft(command, "xmlns");
+		if (zstr(name)) {
+			name = "";
 		}
 	}
+
+	snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%s:%s:%s", actor->type, actor->subtype, iq_type, namespace, name);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s command\n", RAYO_JID(actor), full_name);
+	handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.command_handlers, full_name);
+	if (handler) {
+		return handler->fn;
+	}
+
 	return NULL;
 }
 
@@ -579,20 +584,22 @@ rayo_actor_xmpp_handler rayo_actor_event_handler_find(struct rayo_actor *from, s
 	iks *event = iks_first_tag(presence);
 	if (event) {
 		struct rayo_xmpp_handler *handler = NULL;
-		const char *presence_type = iks_find_attrib(presence, "type");
+		const char *presence_type = iks_find_attrib_soft(presence, "type");
 		const char *event_name = iks_name(event);
-		const char *event_namespace = iks_find_attrib(event, "xmlns");
+		const char *event_namespace = iks_find_attrib_soft(event, "xmlns");
 		char full_name[1024];
 		full_name[1023] = '\0';
-		if (zstr(event_name) || zstr(presence_type)) {
+		if (zstr(event_name)) {
 			return NULL;
 		}
 		snprintf(full_name, sizeof(full_name) - 1, "%i:%s:%i:%s:%s:%s:%s", from->type, from->subtype, actor->type, actor->subtype, presence_type, event_namespace, event_name);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, looking for %s event handler\n", RAYO_JID(actor), full_name);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s => %s, looking for %s event handler\n", RAYO_JID(from), RAYO_JID(actor), full_name);
 		handler = (struct rayo_xmpp_handler *)switch_core_hash_find(globals.event_handlers, full_name);
 		if (handler) {
 			return handler->fn;
 		}
+	} else {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s => %s, event missing child element\n", RAYO_JID(from), RAYO_JID(actor));
 	}
 	return NULL;
 }
