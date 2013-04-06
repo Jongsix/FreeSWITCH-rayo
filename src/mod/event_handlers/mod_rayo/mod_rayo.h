@@ -63,6 +63,7 @@ typedef struct rayo_message *(* rayo_actor_send_fn)(struct rayo_actor *, struct 
 enum rayo_actor_type {
 	RAT_CLIENT,
 	RAT_SERVER,
+	RAT_LISTENER,
 	RAT_CALL,
 	RAT_MIXER,
 	RAT_CALL_COMPONENT,
