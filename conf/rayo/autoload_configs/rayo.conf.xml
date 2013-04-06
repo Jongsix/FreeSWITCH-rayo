@@ -6,12 +6,19 @@
 		<param name="mixer-conf-profile" value="sla"/>
 	</settings>
 
-	<!-- Listeners for new Rayo client connections -->
-	<listeners>
-		<listener port="5222">$${domain}</listener>
-	</listeners>
+	<!-- domain to use in from attribute of client messages -->
+	<domain name="$${domain}">
+		<!-- Listeners for new Rayo client connections -->
+		<listen type="c2s" port="5222" address="$${local_ip_v4}"/>
 
-	<!-- default gateways per URI -->
+		<!-- Listeners for new server connections -->
+		<listen type="s2s" port="5269" address="$${local_ip_v4}"/>
+
+		<!-- servers to connect to -->
+		<connect port="5269" address="example.com"/>
+	</domain>
+
+	<!-- URI mapping to endpoint / gateway -->
 	<dial-gateways>
 		<dial-gateway uriprefix="default" dialprefix="sofia/gateway/outbound/" strip="0"/>
 		<dial-gateway uriprefix="sip:" dialprefix="sofia/external/" strip="0"/>

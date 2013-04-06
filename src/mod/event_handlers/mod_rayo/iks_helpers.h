@@ -33,6 +33,8 @@
 #include <iksemel.h>
 #include <switch.h>
 
+#define IKS_JABBER_SERVER_PORT 5269
+
 #define IKS_NS_XMPP_DISCO "http://jabber.org/protocol/disco#info"
 #define IKS_NS_XMPP_PING "urn:xmpp:ping"
 #define IKS_NS_XMPP_STANZAS "urn:ietf:params:xml:ns:xmpp-stanzas"
