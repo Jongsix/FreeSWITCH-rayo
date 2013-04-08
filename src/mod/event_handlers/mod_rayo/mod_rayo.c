@@ -3301,7 +3301,7 @@ static switch_status_t rayo_listener_create(const char *addr, const char *port, 
 	struct rayo_listener *new_listener = NULL;
 	switch_thread_t *thread;
 	switch_threadattr_t *thd_attr = NULL;
-	const char *jid = NULL;
+	const char *id = NULL;
 
 	if (zstr(addr)) {
 		return SWITCH_STATUS_FALSE;
@@ -3315,10 +3315,10 @@ static switch_status_t rayo_listener_create(const char *addr, const char *port, 
 			port = switch_core_sprintf(pool, "%d", IKS_JABBER_PORT);
 		}
 	}
-	jid = switch_core_sprintf(pool, "%s:%s", addr, port);
+	id = switch_core_sprintf(pool, "%s:%s", addr, port);
 
 	new_listener = switch_core_alloc(pool, sizeof(*new_listener));
-	RAYO_ACTOR_INIT(RAYO_ACTOR(new_listener), pool, RAT_LISTENER, type, jid, jid, rayo_listener_cleanup, NULL);
+	RAYO_ACTOR_INIT(RAYO_ACTOR(new_listener), pool, RAT_LISTENER, type, id, NULL, rayo_listener_cleanup, NULL);
 	new_listener->addr = switch_core_strdup(pool, addr);
 	new_listener->port = atoi(port);
 
