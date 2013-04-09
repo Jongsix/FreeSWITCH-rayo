@@ -76,6 +76,8 @@ struct rayo_actor {
 	enum rayo_actor_type type;
 	/** Sub-type of actor */
 	char *subtype;
+	/** domain part of JID */
+	char *domain;
 	/** Internal ID */
 	char *id;
 	/** actor JID */
@@ -136,6 +138,7 @@ extern void rayo_actor_destroy(struct rayo_actor *actor, const char *file, int l
 #define RAYO_LOCATE(jid) rayo_actor_locate(jid, __FILE__, __LINE__)
 #define RAYO_LOCATE_BY_ID(id) rayo_actor_locate_by_id(id, __FILE__, __LINE__)
 #define RAYO_SET_EVENT_FN(actor, event) rayo_actor_set_event_fn(RAYO_ACTOR(actor), event)
+#define RAYO_DOMAIN(x) RAYO_ACTOR(x)->domain
 #define RAYO_JID(x) RAYO_ACTOR(x)->jid
 #define RAYO_ID(x) RAYO_ACTOR(x)->id
 #define RAYO_POOL(x) RAYO_ACTOR(x)->pool
