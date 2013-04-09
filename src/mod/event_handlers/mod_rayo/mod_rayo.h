@@ -50,8 +50,7 @@ struct rayo_component;
  * A message sent to an actor
  */
 struct rayo_message {
-	void *payload;
-	int flags;
+	iks *payload;
 };
 
 typedef void (* rayo_actor_cleanup_fn)(struct rayo_actor *);
@@ -63,7 +62,6 @@ typedef struct rayo_message *(* rayo_actor_send_fn)(struct rayo_actor *, struct 
 enum rayo_actor_type {
 	RAT_CLIENT,
 	RAT_SERVER,
-	RAT_LISTENER,
 	RAT_CALL,
 	RAT_MIXER,
 	RAT_CALL_COMPONENT,
@@ -123,8 +121,6 @@ struct rayo_component {
 
 extern struct rayo_message *rayo_message_create(iks *xml);
 extern struct rayo_message *rayo_message_create_dup(iks *xml);
-extern struct rayo_message *rayo_message_raw_create(const char *raw);
-extern struct rayo_message *rayo_message_raw_create_dup(const char *raw);
 extern void rayo_message_destroy(struct rayo_message *msg);
 extern iks *rayo_message_remove_payload(struct rayo_message *msg);
 
