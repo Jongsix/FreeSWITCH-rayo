@@ -163,8 +163,6 @@ struct rayo_client {
 	struct rayo_actor base;
 	/** state */
 	enum rayo_client_state state;
-	/** availability of this client */
-	enum presence_status presence;
 	/** stream that this client is reachable over */
 	const char *stream_id;
 	/** true if console client */
@@ -468,7 +466,7 @@ static void add_header(iks *node, const char *name, const char *value)
  * @param size of the log message
  * @param is_incoming true if this is a log for a received message
  */
-static void on_log(void *user_data, const char *data, size_t size, int is_incoming)
+static void on_stream_log(void *user_data, const char *data, size_t size, int is_incoming)
 {
 	if (size > 0) {
 		struct rayo_stream *stream = (struct rayo_stream *)user_data;
@@ -3097,47 +3095,12 @@ static void rayo_stream_destroy(struct rayo_stream *stream)
  */
 static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void *obj)
 {
-	iksparser *parser;
 	struct rayo_stream *stream = (struct rayo_stream *)obj;
-	switch_pollfd_t *read_pollfd = NULL;
 	int err_count = 0;
 
 	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "New %s connection\n", stream->s2s ? "server" : "client");
-
-	/* set up XMPP stream parser */
-	parser = iks_stream_new(stream->s2s ? IKS_NS_SERVER : IKS_NS_CLIENT, stream, on_stream);
-	if (!parser) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "Failed to create XMPP stream parser!\n");
-		goto done;
-	}
-	stream->parser = parser;
-
-	/* set up additional message callbacks */
-	stream->filter = iks_filter_new();
-	iks_filter_add_rule(stream->filter, on_presence, stream,
-		IKS_RULE_TYPE, IKS_PAK_PRESENCE,
-		IKS_RULE_DONE);
-	iks_filter_add_rule(stream->filter, on_iq, stream,
-		IKS_RULE_TYPE, IKS_PAK_IQ,
-		IKS_RULE_DONE);
-
-	/* enable logging of XMPP stream */
-	iks_set_log_hook(parser, on_log);
-
-	/* connect XMPP stream parser to socket */
-	{
-		switch_os_socket_t socket;
-		switch_os_sock_get(&socket, stream->socket);
-		iks_connect_fd(parser, socket);
-		/* TODO connect error checking */
-	}
-	/* set up pollfd to monitor listen socket */
-	if (switch_socket_create_pollset(&read_pollfd, stream->socket, SWITCH_POLLIN | SWITCH_POLLERR, stream->pool) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "create pollset error!\n");
-		goto done;
-	}
 
 	while (rayo_stream_ready(stream)) {
 		char *msg;
@@ -3145,7 +3108,7 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 
 		/* read any messages from client */
 		stream->idle = 1;
-		result = iks_recv(parser, 0);
+		result = iks_recv(stream->parser, 0);
 		switch (result) {
 		case IKS_OK:
 			err_count = 0;
@@ -3199,11 +3162,14 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 }
 
 /**
- * Initialize the Rayo connection
- * @param stream the connection to initialize
- * @return the connection
+ * Initialize the Rayo stream
+ * @param stream the stream to initialize
+ * @param pool for this stream
+ * @param socket the socket for this stream
+ * @param s2s true if a server-to-server stream
+ * @return the stream
  */
-static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_memory_pool_t *pool, switch_socket_t *socket)
+static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_memory_pool_t *pool, switch_socket_t *socket, int s2s)
 {
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
 	stream->pool = pool;
@@ -3212,8 +3178,32 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 	stream->id = switch_core_strdup(pool, id);
 	switch_mutex_init(&stream->mutex, SWITCH_MUTEX_NESTED, pool);
 	stream->socket = socket;
+	stream->s2s = s2s;
 	switch_queue_create(&stream->msg_queue, MAX_QUEUE_LEN, pool);
 	switch_socket_create_pollset(&stream->pollfd, stream->socket, SWITCH_POLLIN | SWITCH_POLLERR, pool);
+
+	/* set up XMPP stream parser */
+	stream->parser = iks_stream_new(stream->s2s ? IKS_NS_SERVER : IKS_NS_CLIENT, stream, on_stream);
+
+	/* set up additional message callbacks */
+	stream->filter = iks_filter_new();
+	iks_filter_add_rule(stream->filter, on_presence, stream,
+		IKS_RULE_TYPE, IKS_PAK_PRESENCE,
+		IKS_RULE_DONE);
+	iks_filter_add_rule(stream->filter, on_iq, stream,
+		IKS_RULE_TYPE, IKS_PAK_IQ,
+		IKS_RULE_DONE);
+
+	/* enable logging of XMPP stream */
+	iks_set_log_hook(stream->parser, on_stream_log);
+
+	/* connect XMPP stream parser to socket */
+	{
+		switch_os_socket_t socket;
+		switch_os_sock_get(&socket, stream->socket);
+		iks_connect_fd(stream->parser, socket);
+		/* TODO connect error checking */
+	}
 
 	/* add to available streams */
 	switch_mutex_lock(globals.clients_mutex);
@@ -3224,19 +3214,20 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 }
 
 /**
- * Create a new Rayo connection
- * @param pool the memory pool for this connection
- * @param socket the socket for this connection
+ * Create a new Rayo stream
+ * @param pool the memory pool for this stream
+ * @param socket the socket for this stream
+ * @param s2s true if server-to-server stream
  * @return the new connection or NULL
  */
-static struct rayo_stream *rayo_stream_create(switch_memory_pool_t *pool, switch_socket_t *socket)
+static struct rayo_stream *rayo_stream_create(switch_memory_pool_t *pool, switch_socket_t *socket, int s2s)
 {
 	struct rayo_stream *stream = NULL;
 	if (!(stream = switch_core_alloc(pool, sizeof(*stream)))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Memory Error\n");
 		return NULL;
 	}
-	return rayo_stream_init(stream, pool, socket);
+	return rayo_stream_init(stream, pool, socket, s2s);
 }
 
 /**
@@ -3300,11 +3291,11 @@ static void *SWITCH_THREAD_FUNC rayo_listener_thread(switch_thread_t *thread, vo
 
 		rv = switch_socket_create_pollset(&listener->read_pollfd, listener->socket, SWITCH_POLLIN | SWITCH_POLLERR, listener->pool);
 		if (rv) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Create pollset for listener socket %s:%u error!\n", listener->addr, listener->port);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Create pollset for %s listener socket %s:%u error!\n", listener->s2s ? "s2s" : "c2s", listener->addr, listener->port);
 			goto sock_fail;
 		}
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo listener bound to %s:%u\n", listener->addr, listener->port);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo %s listener bound to %s:%u\n", listener->s2s ? "s2s" : "c2s", listener->addr, listener->port);
 
 		break;
    sock_fail:
@@ -3313,7 +3304,7 @@ static void *SWITCH_THREAD_FUNC rayo_listener_thread(switch_thread_t *thread, vo
 			listener->socket = NULL;
 		}
 		if (!warned) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error! Rayo listener could not bind to %s:%u\n", listener->addr, listener->port);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error! Rayo %s listener could not bind to %s:%u\n", listener->s2s ? "s2s" : "c2s", listener->addr, listener->port);
 			warned = 1;
 		}
 		switch_yield(1000 * 100); /* 100 ms */
@@ -3356,7 +3347,7 @@ static void *SWITCH_THREAD_FUNC rayo_listener_thread(switch_thread_t *thread, vo
 			errs = 0;
 
 			/* start connection thread */
-			if (!(stream = rayo_stream_create(pool, socket))) {
+			if (!(stream = rayo_stream_create(pool, socket, listener->s2s))) {
 				switch_socket_shutdown(socket, SWITCH_SHUTDOWN_READWRITE);
 				switch_socket_close(socket);
 				break;
@@ -3413,25 +3404,27 @@ static switch_status_t rayo_listener_create(const char *addr, const char *port, 
 	struct rayo_listener *new_listener = NULL;
 	switch_thread_t *thread;
 	switch_threadattr_t *thd_attr = NULL;
-	const char *id = NULL;
 
 	if (zstr(addr)) {
 		return SWITCH_STATUS_FALSE;
 	}
 
 	switch_core_new_memory_pool(&pool);
-	if (zstr(port)) {
-		if (!strcmp("s2s", type)) {
-			port = switch_core_sprintf(pool, "%d", IKS_JABBER_SERVER_PORT);
-		} else {
-			port = switch_core_sprintf(pool, "%d", IKS_JABBER_PORT);
-		}
-	}
-	id = switch_core_sprintf(pool, "%s:%s", addr, port);
-
 	new_listener = switch_core_alloc(pool, sizeof(*new_listener));
 	new_listener->pool = pool;
 	new_listener->addr = switch_core_strdup(pool, addr);
+
+	if (!strcmp("s2s", type)) {
+		new_listener->s2s = 1;
+		if (zstr(port)) {
+			port = switch_core_sprintf(pool, "%d", IKS_JABBER_SERVER_PORT);
+		}
+	} else {
+		new_listener->s2s = 0;
+		if (zstr(port)) {
+			port = switch_core_sprintf(pool, "%d", IKS_JABBER_PORT);
+		}
+	}
 	new_listener->port = atoi(port);
 
 	/* start the server thread */
@@ -3756,7 +3749,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *stream)
 {
 	if (actor->type == RAT_CLIENT) {
-		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',REFS=%i,STATE='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), actor->ref_count, rayo_client_state_to_string(RAYO_CLIENT(actor)->state));
+		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',REFS=%i,STATUS='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), actor->ref_count, rayo_client_state_to_string(RAYO_CLIENT(actor)->state));
 	} else {
 		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',REFS=%i", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), actor->ref_count);
 	}
@@ -3767,7 +3760,7 @@ static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *st
  */
 static void rayo_stream_dump(struct rayo_stream *s, switch_stream_handle_t *stream)
 {
-	stream->write_function(stream, "TYPE='%s',JID='%s',STATE='%s'", s->s2s ? "s2s" : "c2s", s->jid, rayo_stream_state_to_string(s->state));
+	stream->write_function(stream, "TYPE='%s',ID='%s',JID='%s',STATE='%s'", s->s2s ? "s2s" : "c2s", s->id, s->jid, rayo_stream_state_to_string(s->state));
 }
 
 /**
@@ -3909,7 +3902,7 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 
 		/* send command */
 		str = iks_string(iks_stack(iq), iq);
-		on_log(client, str, strlen(str), 1);
+		on_stream_log(client, str, strlen(str), 1);
 		rayo_client_command_recv(client, iq);
 	} else {
 		client->response = "-ERR BAD XML";
