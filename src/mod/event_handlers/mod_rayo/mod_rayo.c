@@ -110,8 +110,6 @@ struct rayo_stream {
 	switch_pollfd_t *pollfd;
 	/** XML stream parser */
 	iksparser *parser;
-	/** XML stream filter (sets callbacks to <iq>, <presence>, etc). */
-	iksfilter *filter;
 	/** outbound message queue */
 	switch_queue_t *msg_queue;
 	/** true if no activity last poll */
@@ -1266,11 +1264,26 @@ static struct rayo_client *rayo_client_create(switch_memory_pool_t *pool, const 
 }
 
 /**
- * Send bind + session reply to <stream>
- * @param server the Rayo server sending the reply
+ * Send session reply to server <stream> after auth is done
  * @param stream the Rayo stream
  */
-static void rayo_send_header_bind(struct rayo_actor *server, struct rayo_stream *stream)
+static void rayo_send_server_header_features(struct rayo_stream *stream)
+{
+	char *header = switch_mprintf(
+		"<stream:stream xmlns='"IKS_NS_SERVER"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
+		" from='%s' id='%s' xml:lang='en' version='1.0'"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
+		"</stream:features>", RAYO_JID(globals.server), stream->id);
+
+	iks_send_raw(stream->parser, header);
+	free(header);
+}
+
+/**
+ * Send bind + session reply to client <stream>
+ * @param stream the Rayo stream
+ */
+static void rayo_send_client_header_bind(struct rayo_stream *stream)
 {
 	char *header = switch_mprintf(
 		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
@@ -1278,7 +1291,7 @@ static void rayo_send_header_bind(struct rayo_actor *server, struct rayo_stream 
 		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
 		"<bind xmlns='"IKS_NS_XMPP_BIND"'/>"
 		"<session xmlns='"IKS_NS_XMPP_SESSION"'/>"
-		"</stream:features>", RAYO_JID(server), stream->id);
+		"</stream:features>", RAYO_JID(globals.server), stream->id);
 
 	iks_send_raw(stream->parser, header);
 	free(header);
@@ -2085,16 +2098,13 @@ static iks *on_rayo_dial(struct rayo_actor *client, struct rayo_actor *server, i
 
 /**
  * Handle <presence> message callback
- * @param user_data the Rayo client
- * @param pak the <presence> packet
- * @return IKS_FILTER_EAT
+ * @param stream the stream
+ * @param node the presence message
  */
-static int on_presence(void *user_data, ikspak *pak)
+static void on_stream_presence(struct rayo_stream *stream, iks *node)
 {
-	struct rayo_stream *stream = (struct rayo_stream *)user_data;
 	struct rayo_actor *actor;
 	struct rayo_client *rclient;
-	iks *node = pak->x;
 	char *type = iks_find_attrib(node, "type");
 	const char *from = iks_find_attrib(node, "from");
 	enum presence_status status = PS_UNKNOWN;
@@ -2107,7 +2117,7 @@ static int on_presence(void *user_data, ikspak *pak)
 		if (zstr(from)) {
 			/* TODO error */
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
-			return IKS_FILTER_EAT;
+			return;
 		}
 	}
 
@@ -2115,13 +2125,13 @@ static int on_presence(void *user_data, ikspak *pak)
 	if (!actor) {
 		/* TODO create client if this is a server stream... */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", RAYO_JID(stream), from);
-		return IKS_FILTER_EAT;
+		return;
 	}
 	if (actor->type != RAT_CLIENT) {
 		/* TODO error */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(stream), from);
 		RAYO_UNLOCK(actor);
-		return IKS_FILTER_EAT;
+		return;
 	}
 	rclient = RAYO_CLIENT(actor);
 
@@ -2173,8 +2183,6 @@ static int on_presence(void *user_data, ikspak *pak)
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
 	}
 	RAYO_UNLOCK(actor);
-
-	return IKS_FILTER_EAT;
 }
 
 /**
@@ -2314,22 +2322,30 @@ static iks *on_iq_set_xmpp_bind(struct rayo_stream *stream, iks *node)
 }
 
 /**
+ * Handle <bidi> message.
+ * @param stream the Rayo stream
+ * @param node the <bidi> packet
+ */
+static void on_stream_bidi(struct rayo_stream *stream, iks *node)
+{
+	/* TODO */
+}
+
+/**
  * Send <success> reply to Rayo stream <auth>
- * @param server the Rayo server sending the reply
  * @param stream the Rayo stream.
  */
-static void rayo_send_auth_success(struct rayo_actor *server, struct rayo_stream *stream)
+static void rayo_send_auth_success(struct rayo_stream *stream)
 {
 	iks_send_raw(stream->parser, "<success xmlns='"IKS_NS_XMPP_SASL"'/>");
 }
 
 /**
  * Send <failure> reply to Rayo client <auth>
- * @param server the Rayo server sending the reply
  * @param stream the Rayo stream to use.
  * @param reason the reason for failure
  */
-static void rayo_send_auth_failure(struct rayo_actor *server, struct rayo_stream *stream, const char *reason)
+static void rayo_send_auth_failure(struct rayo_stream *stream, const char *reason)
 {
 	char *reply = switch_mprintf("<failure xmlns='"IKS_NS_XMPP_SASL"'>"
 		"<%s/></failure>", reason);
@@ -2356,28 +2372,43 @@ static int verify_plain_auth(const char *authzid, const char *authcid, const cha
 
 /**
  * Send sasl reply to Rayo <stream>
- * @param server the Rayo server sending the reply
  * @param stream the Rayo stream
  */
-static void rayo_send_header_auth(struct rayo_actor *server, struct rayo_stream *stream)
+static void rayo_send_client_header_auth(struct rayo_stream *stream)
 {
 	char *header = switch_mprintf(
-		"<stream:stream xmlns='%s' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
+		"<stream:stream xmlns='"IKS_NS_CLIENT"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
 		" from='%s' id='%s' xml:lang='en' version='1.0'"
 		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
 		"<mechanisms xmlns='"IKS_NS_XMPP_SASL"'><mechanism>"
-		"PLAIN</mechanism></mechanisms></stream:features>", stream->s2s ? IKS_NS_SERVER : IKS_NS_CLIENT, RAYO_JID(server), stream->id);
+		"PLAIN</mechanism></mechanisms></stream:features>", RAYO_JID(globals.server), stream->id);
+	iks_send_raw(stream->parser, header);
+	free(header);
+}
+
+/**
+ * Send sasl reply to Rayo <stream>
+ * @param stream the Rayo stream
+ */
+static void rayo_send_server_header_auth(struct rayo_stream *stream)
+{
+	char *header = switch_mprintf(
+		"<stream:stream xmlns='"IKS_NS_SERVER"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
+		" from='%s' id='%s' xml:lang='en' version='1.0'"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
+		"<bidi xmlns='"IKS_NS_BIDI_FEATURE"'/>"
+		"<mechanisms xmlns='"IKS_NS_XMPP_SASL"'><mechanism>"
+		"PLAIN</mechanism></mechanisms></stream:features>", RAYO_JID(globals.server), stream->id);
 	iks_send_raw(stream->parser, header);
 	free(header);
 }
 
 /**
  * Handle <auth> message.  Only PLAIN supported.
- * @param stream the Rayo connection
- * @param server to handle the request
+ * @param stream the Rayo stream
  * @param node the <auth> packet
  */
-static void on_auth(struct rayo_stream *stream, struct rayo_actor *server, iks *node)
+static void on_stream_auth(struct rayo_stream *stream, iks *node)
 {
 	const char *xmlns, *mechanism;
 	iks *auth_body;
@@ -2405,7 +2436,7 @@ static void on_auth(struct rayo_stream *stream, struct rayo_actor *server, iks *
 	mechanism = iks_find_attrib_soft(node, "mechanism");
 	if (strcmp("PLAIN", mechanism)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, auth, state = %s, unsupported SASL mechanism: %s!\n", stream->jid, rayo_stream_state_to_string(stream->state), mechanism);
-		rayo_send_auth_failure(server, stream, "invalid-mechanism");
+		rayo_send_auth_failure(stream, "invalid-mechanism");
 		stream->state = RSS_ERROR;
 		return;
 	}
@@ -2429,10 +2460,10 @@ static void on_auth(struct rayo_stream *stream, struct rayo_actor *server, iks *
 			}
 			stream->state = RSS_AUTHENTICATED;
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", stream->jid, rayo_stream_state_to_string(stream->state), authzid, authcid);
-			rayo_send_auth_success(server, stream);
+			rayo_send_auth_success(stream);
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, auth, state = %s, invalid user or password!\n", stream->jid, rayo_stream_state_to_string(stream->state));
-			rayo_send_auth_failure(server, stream, "not-authorized");
+			rayo_send_auth_failure(stream, "not-authorized");
 			stream->state = RSS_ERROR;
 		}
 		switch_safe_free(authzid);
@@ -2483,15 +2514,11 @@ static void rayo_client_command_recv(struct rayo_client *rclient, iks *iq)
 
 /**
  * Handle <iq> message callback
- * @param user_data the Rayo connection
- * @param pak the <iq> packet
- * @return IKS_FILTER_EAT
+ * @param stream the stream
+ * @param iq the packet
  */
-static int on_iq(void *user_data, ikspak *pak)
+static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 {
-	iks *iq = pak->x;
-	struct rayo_stream *stream = (struct rayo_stream *)user_data;
-
 	switch(stream->state) {
 		case RSS_CONNECT: {
 			iks *error = iks_new_iq_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
@@ -2532,7 +2559,7 @@ static int on_iq(void *user_data, ikspak *pak)
 		case RSS_SESSION_ESTABLISHED: {
 			/* client requests */
 			struct rayo_actor *rclient;
-			const char *client_jid = iks_find_attrib(pak->x, "from");
+			const char *client_jid = iks_find_attrib(iq, "from");
 			if (!client_jid) {
 				client_jid = stream->jid;
 			}
@@ -2564,8 +2591,69 @@ static int on_iq(void *user_data, ikspak *pak)
 			break;
 		}
 	};
+}
 
-	return IKS_FILTER_EAT;
+/**
+ * Handle </stream>
+ * @param stream the stream
+ */
+static void on_stream_stop(struct rayo_stream *stream)
+{
+	if (stream->state != RSS_SHUTDOWN) {
+		iks_send_raw(stream->parser, "</stream:stream>");
+	}
+	stream->state = RSS_DESTROY;
+}
+
+/**
+ * Handle <stream>
+ * @param stream the stream
+ * @param node the stream message
+ */
+static void on_stream_start(struct rayo_stream *stream, iks *node)
+{
+	switch (stream->state) {
+		case RSS_CONNECT: {
+			const char *to = iks_find_attrib_soft(node, "to");
+			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
+				/* wrong server JID */
+				stream->state = RSS_ERROR;
+			} else {
+				if (stream->s2s) {
+					rayo_send_server_header_auth(stream);
+				} else {
+					rayo_send_client_header_auth(stream);
+				}
+			}
+			break;
+		}
+		case RSS_AUTHENTICATED: {
+			const char *to = iks_find_attrib_soft(node, "to");
+			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
+				/* wrong server JID */
+				stream->state = RSS_ERROR;
+			} else if (stream->s2s) {
+				/* all set with s2s */
+				rayo_send_server_header_features(stream);
+			} else {
+				/* client bind required */
+				rayo_stream_new_id(stream);
+				rayo_send_client_header_bind(stream);
+			}
+			break;
+		}
+		case RSS_SHUTDOWN:
+			/* strange... I expect IKS_NODE_STOP, this is a workaround. */
+			stream->state = RSS_DESTROY;
+			break;
+		case RSS_RESOURCE_BOUND:
+		case RSS_SESSION_ESTABLISHED:
+		case RSS_ERROR:
+		case RSS_DESTROY:
+			/* bad state */
+			stream->state = RSS_ERROR;
+			break;
+	}
 }
 
 /**
@@ -2578,63 +2666,46 @@ static int on_iq(void *user_data, ikspak *pak)
 static int on_stream(void *user_data, int type, iks *node)
 {
 	struct rayo_stream *stream = (struct rayo_stream *)user_data;
-	ikspak *pak = NULL;
-
-	if (node) {
-		pak = iks_packet(node);
-	}
 
 	stream->idle = 0;
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, state = %s, node type = %s\n", stream->jid, rayo_stream_state_to_string(stream->state), iks_node_type_to_string(type));
 
 	switch(type) {
-	case IKS_NODE_START:
-		if (stream->state == RSS_CONNECT) {
-			const char *to = iks_find_attrib_soft(node, "to");
-			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
-				/* wrong server JID */
-				stream->state = RSS_ERROR;
+		case IKS_NODE_START:
+			/* <stream> */
+			if (node) {
+				on_stream_start(stream, node);
 			} else {
-				rayo_send_header_auth(globals.server, stream);
-			}
-		} else if (stream->state == RSS_AUTHENTICATED) {
-			const char *to = iks_find_attrib_soft(node, "to");
-			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
-				/* wrong server JID */
 				stream->state = RSS_ERROR;
-			} else {
-				rayo_stream_new_id(stream);
-				rayo_send_header_bind(globals.server, stream);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, missing node!\n", stream->jid);
 			}
-		} else if (stream->state == RSS_SHUTDOWN) {
-			/* strange... I expect IKS_NODE_STOP, this is a workaround. */
-			stream->state = RSS_DESTROY;
-		}
-		break;
-	case IKS_NODE_NORMAL:
-		if (!strcmp("auth", iks_name(node))) {
-			const char *to = iks_find_attrib_soft(node, "to");
-			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
-				/* wrong server JID */
-				stream->state = RSS_ERROR;
-			} else {
-				on_auth(stream, globals.server, node);
+			break;
+		case IKS_NODE_NORMAL:
+			/* stanza */
+			if (node) {
+				const char *name = iks_name(node);
+				if (!strcmp("iq", name)) {
+					on_stream_iq(stream, node);
+				} else if (!strcmp("presence", name)) {
+					on_stream_presence(stream, node);
+				} else if (!strcmp("auth", name)) {
+					on_stream_auth(stream, node);
+				} else if (!strcmp("bidi", name)) {
+					on_stream_bidi(stream, node);
+				} else {
+					/* unknown first-level element */
+					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown first-level element: %s\n", stream->jid, name);
+					stream->state = RSS_ERROR;
+				}
 			}
-		}
-		break;
-	case IKS_NODE_ERROR:
-		break;
-	case IKS_NODE_STOP:
-		if (stream->state != RSS_SHUTDOWN) {
-			iks_send_raw(stream->parser, "</stream:stream>");
-		}
-		stream->state = RSS_DESTROY;
-		break;
-	}
-
-	if (pak) {
-		iks_filter_packet(stream->filter, pak);
+			break;
+		case IKS_NODE_ERROR:
+			/* <error> */
+			break;
+		case IKS_NODE_STOP:
+			on_stream_stop(stream);
+			break;
 	}
 
 	if (node) {
@@ -3079,10 +3150,6 @@ static void rayo_stream_destroy(struct rayo_stream *stream)
 		iks_disconnect(stream->parser);
 	}
 
-	if (stream->filter) {
-		iks_filter_delete(stream->filter);
-	}
-
 	if (stream->parser) {
 		iks_parser_delete(stream->parser);
 	}
@@ -3224,15 +3291,6 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 
 	/* set up XMPP stream parser */
 	stream->parser = iks_stream_new(stream->s2s ? IKS_NS_SERVER : IKS_NS_CLIENT, stream, on_stream);
-
-	/* set up additional message callbacks */
-	stream->filter = iks_filter_new();
-	iks_filter_add_rule(stream->filter, on_presence, stream,
-		IKS_RULE_TYPE, IKS_PAK_PRESENCE,
-		IKS_RULE_DONE);
-	iks_filter_add_rule(stream->filter, on_iq, stream,
-		IKS_RULE_TYPE, IKS_PAK_IQ,
-		IKS_RULE_DONE);
 
 	/* enable logging of XMPP stream */
 	iks_set_log_hook(stream->parser, on_stream_log);
