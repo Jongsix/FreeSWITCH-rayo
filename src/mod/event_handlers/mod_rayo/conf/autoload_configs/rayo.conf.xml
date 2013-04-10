@@ -15,7 +15,7 @@
 		<listen type="s2s" port="5269" address="$${local_ip_v4}"/>
 
 		<!-- servers to connect to -->
-		<connect port="5269" address="example.com"/>
+		<connect port="5269" address="node.example.com" domain="example.com"/>
 	</domain>
 
 	<!-- URI mapping to endpoint / gateway -->
@@ -32,4 +32,5 @@
 	<users>
 		<user name="usera" password="1"/>
 	</users>
+
 </configuration>

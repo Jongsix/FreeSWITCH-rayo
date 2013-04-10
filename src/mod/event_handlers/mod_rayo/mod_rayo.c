@@ -105,12 +105,18 @@ struct rayo_stream {
 	enum rayo_stream_state state;
 	/** true if server-to-server connection */
 	int s2s;
+	/** true if incoming connection */
+	int incoming;
 	/** Jabber ID of remote party */
 	char *jid;
 	/** stream ID */
 	char *id;
 	/** stream pool */
 	switch_memory_pool_t *pool;
+	/** address of this stream */
+	const char *address;
+	/** port of this stream */
+	int port;
 	/** synchronizes access to this stream */
 	switch_mutex_t *mutex;
 	/** socket to remote party */
@@ -2181,12 +2187,12 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 	struct rayo_actor *actor;
 	const char *from = iks_find_attrib(node, "from");
 
-	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", RAYO_JID(stream), rayo_stream_state_to_string(stream->state));
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
 
 	if (!from) {
 		if (stream->s2s) {
 			/* from is required in s2s connections */
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", stream->jid);
 			return;
 		}
 
@@ -2194,7 +2200,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 		from = stream->jid;
 		if (zstr(from)) {
 			/* error */
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", stream->jid);
 			return;
 		}
 	}
@@ -2207,7 +2213,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 			switch_core_hash_insert(stream->clients, RAYO_JID(actor), actor);
 		} else {
 			/* bad from address over c2s connection */
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", RAYO_JID(stream), from);
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", stream->jid, from);
 			return;
 		}
 	}
@@ -2215,7 +2221,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 		on_client_presence(stream, RAYO_CLIENT(actor), node);
 	} else {
 		/* TODO error */
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(stream), from);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", stream->jid, from);
 		RAYO_UNLOCK(actor);
 		return;
 	}
@@ -2460,6 +2466,20 @@ static void rayo_send_server_header_auth(struct rayo_stream *stream)
 }
 
 /**
+ * Send initial <stream> header to peer server
+ * @param stream the Rayo stream
+ */
+static void rayo_send_outbound_server_header(struct rayo_stream *stream)
+{
+	char *header = switch_mprintf(
+		"<stream:stream xmlns='"IKS_NS_SERVER"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
+		" from='%s' to='%s' xml:lang='en' version='1.0'"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'>", RAYO_JID(globals.server), stream->jid);
+	iks_send_raw(stream->parser, header);
+	free(header);
+}
+
+/**
  * Handle <auth> message.  Only PLAIN supported.
  * @param stream the Rayo stream
  * @param node the <auth> packet
@@ -2668,9 +2688,18 @@ static void on_client_stream_start(struct rayo_stream *stream, iks *node)
 	const char *to = iks_find_attrib_soft(node, "to");
 	const char *xmlns = iks_find_attrib_soft(node, "xmlns");
 
-	/* to is optional - xmlns = client */
-	if ((!zstr(to) && strcmp(RAYO_JID(globals.server), to)) || zstr(xmlns) || strcmp(xmlns, IKS_NS_CLIENT)) {
+	/* to is optional, must be server domain if set */
+	if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, wrong server domain!\n", stream->jid);
 		stream->state = RSS_ERROR;
+		return;
+	}
+
+	/* xmlns = client */
+	if (zstr(xmlns) || strcmp(xmlns, IKS_NS_CLIENT)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, wrong stream namespace!\n", stream->jid);
+		stream->state = RSS_ERROR;
+		return;
 	}
 
 	switch (stream->state) {
@@ -2692,24 +2721,74 @@ static void on_client_stream_start(struct rayo_stream *stream, iks *node)
 		case RSS_ERROR:
 		case RSS_DESTROY:
 			/* bad state */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, bad state!\n", stream->jid);
 			stream->state = RSS_ERROR;
 			break;
 	}
 }
 
 /**
- * Handle <stream> from a peer server
+ * Handle <stream> from an outbound peer server
+ */
+static void on_outbound_server_stream_start(struct rayo_stream *stream, iks *node)
+{
+	const char *xmlns = iks_find_attrib_soft(node, "xmlns");
+
+	/* xmlns = server */
+	if (zstr(xmlns) || strcmp(xmlns, IKS_NS_SERVER)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, wrong stream namespace!\n", stream->jid);
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	switch (stream->state) {
+		case RSS_CONNECT:
+			stream->state = RSS_READY;
+
+			/* add to available streams */
+			switch_mutex_lock(globals.clients_mutex);
+			switch_core_hash_insert(globals.streams, stream->jid, stream);
+			switch_mutex_unlock(globals.clients_mutex);
+			break;
+
+		case RSS_SHUTDOWN:
+			/* strange... I expect IKS_NODE_STOP, this is a workaround. */
+			stream->state = RSS_DESTROY;
+			break;
+		case RSS_BIDI:
+		case RSS_AUTHENTICATED:
+		case RSS_RESOURCE_BOUND:
+		case RSS_READY:
+		case RSS_ERROR:
+		case RSS_DESTROY:
+			/* bad state */
+			stream->state = RSS_ERROR;
+			break;
+	}
+}
+
+/**
+ * Handle <stream> from an inbound peer server
  * @param stream the stream
  * @param node the stream message
  */
-static void on_server_stream_start(struct rayo_stream *stream, iks *node)
+static void on_inbound_server_stream_start(struct rayo_stream *stream, iks *node)
 {
 	const char *to = iks_find_attrib_soft(node, "to");
 	const char *xmlns = iks_find_attrib_soft(node, "xmlns");
 
-	/* to is required - xmlns = server */
-	if (zstr(to) || strcmp(RAYO_JID(globals.server), to) || zstr(xmlns) || strcmp(xmlns, IKS_NS_SERVER)) {
+	/* to is required, must be server domain */
+	if (zstr(to) || strcmp(RAYO_JID(globals.server), to)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, wrong server domain!\n", stream->jid);
 		stream->state = RSS_ERROR;
+		return;
+	}
+
+	/* xmlns = server */
+	if (zstr(xmlns) || strcmp(xmlns, IKS_NS_SERVER)) {
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, wrong stream namespace!\n", stream->jid);
+		stream->state = RSS_ERROR;
+		return;
 	}
 
 	switch (stream->state) {
@@ -2761,7 +2840,11 @@ static int on_stream(void *user_data, int type, iks *node)
 			/* <stream> */
 			if (node) {
 				if (stream->s2s) {
-					on_server_stream_start(stream, node);
+					if (stream->incoming) {
+						on_inbound_server_stream_start(stream, node);
+					} else {
+						on_outbound_server_stream_start(stream, node);
+					}
 				} else {
 					on_client_stream_start(stream, node);
 				}
@@ -3285,9 +3368,15 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 	struct rayo_stream *stream = (struct rayo_stream *)obj;
 	int err_count = 0;
 
-	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+	if (stream->incoming) {
+		switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+	}
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "New %s connection\n", stream->s2s ? "server" : "client");
+
+	if (!stream->incoming) {
+		rayo_send_outbound_server_header(stream);
+	}
 
 	while (rayo_stream_ready(stream)) {
 		char *msg;
@@ -3342,8 +3431,10 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 
   done:
 
-	rayo_stream_destroy(stream);
-	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
+	if (stream->incoming) {
+		rayo_stream_destroy(stream);
+		switch_thread_rwlock_unlock(globals.shutdown_rwlock);
+	}
 
 	return NULL;
 }
@@ -3363,20 +3454,27 @@ static void rayo_stream_new_id(struct rayo_stream *stream)
  * Initialize the Rayo stream
  * @param stream the stream to initialize
  * @param pool for this stream
- * @param socket the socket for this stream
+ * @param address remote address (outbound streams only)
+ * @param port remote port (outbound streams only)
  * @param s2s true if a server-to-server stream
+ * @param incoming true if incoming stream
  * @return the stream
  */
-static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_memory_pool_t *pool, switch_socket_t *socket, int s2s)
+static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_memory_pool_t *pool, const char *address, int port, int s2s, int incoming)
 {
 	stream->pool = pool;
 	switch_core_hash_init(&stream->clients, pool);
 	rayo_stream_new_id(stream);
 	switch_mutex_init(&stream->mutex, SWITCH_MUTEX_NESTED, pool);
-	stream->socket = socket;
+	if (!zstr(address)) {
+		stream->address = switch_core_strdup(pool, address);
+	}
+	if (port > 0) {
+		stream->port = port;
+	}
 	stream->s2s = s2s;
+	stream->incoming = incoming;
 	switch_queue_create(&stream->msg_queue, MAX_QUEUE_LEN, pool);
-	switch_socket_create_pollset(&stream->pollfd, stream->socket, SWITCH_POLLIN | SWITCH_POLLERR, pool);
 
 	if (!stream->s2s) {
 		/* client is already bi-directional */
@@ -3389,32 +3487,147 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 	/* enable logging of XMPP stream */
 	iks_set_log_hook(stream->parser, on_stream_log);
 
+	return stream;
+}
+
+/**
+ * Attach stream to connected socket
+ * @param stream the stream
+ * @param socket the connected socket
+ */
+static void rayo_stream_set_socket(struct rayo_stream *stream, switch_socket_t *socket)
+{
+	stream->socket = socket;
+	switch_socket_create_pollset(&stream->pollfd, stream->socket, SWITCH_POLLIN | SWITCH_POLLERR, stream->pool);
+
 	/* connect XMPP stream parser to socket */
 	{
-		switch_os_socket_t socket;
-		switch_os_sock_get(&socket, stream->socket);
-		iks_connect_fd(stream->parser, socket);
+		switch_os_socket_t os_socket;
+		switch_os_sock_get(&os_socket, stream->socket);
+		iks_connect_fd(stream->parser, os_socket);
 		/* TODO connect error checking */
 	}
-
-	return stream;
 }
 
 /**
  * Create a new Rayo stream
  * @param pool the memory pool for this stream
- * @param socket the socket for this stream
+ * @param address remote address (outbound streams only)
+ * @param port remote port (outbound streams only)
  * @param s2s true if server-to-server stream
+ * @param incoming true if incoming stream
  * @return the new connection or NULL
  */
-static struct rayo_stream *rayo_stream_create(switch_memory_pool_t *pool, switch_socket_t *socket, int s2s)
+static struct rayo_stream *rayo_stream_create(switch_memory_pool_t *pool, const char *address, int port, int s2s, int incoming)
 {
 	struct rayo_stream *stream = NULL;
 	if (!(stream = switch_core_alloc(pool, sizeof(*stream)))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Memory Error\n");
 		return NULL;
 	}
-	return rayo_stream_init(stream, pool, socket, s2s);
+	return rayo_stream_init(stream, pool, address, port, s2s, incoming);
+}
+
+/**
+ * Thread that handles Rayo XML stream
+ * @param thread this thread
+ * @param obj the Rayo connection
+ * @return NULL
+ */
+static void *SWITCH_THREAD_FUNC rayo_outbound_stream_thread(switch_thread_t *thread, void *obj)
+{
+	struct rayo_stream *stream = (struct rayo_stream *)obj;
+	switch_socket_t *socket;
+	int warned = 0;
+
+	switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
+
+	/* connect to server */
+	while (!globals.shutdown) {
+		switch_sockaddr_t *sa;
+		if (switch_sockaddr_info_get(&sa, stream->address, SWITCH_UNSPEC, stream->port, 0, stream->pool) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "failed to get sockaddr info!\n");
+			goto fail;
+		}
+
+		if (switch_socket_create(&socket, switch_sockaddr_get_family(sa), SOCK_STREAM, SWITCH_PROTO_TCP, stream->pool) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "failed to create socket!\n");
+			goto sock_fail;
+		}
+
+		switch_socket_opt_set(socket, SWITCH_SO_KEEPALIVE, 1);
+		switch_socket_opt_set(socket, SWITCH_SO_TCP_NODELAY, 1);
+
+		if (switch_socket_connect(socket, sa) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "Socket Error!\n");
+			goto sock_fail;
+		}
+
+		warned = 0;
+
+		/* run the stream thread now */
+		rayo_stream_set_socket(stream, socket);
+		rayo_stream_thread(thread, stream);
+		rayo_stream_destroy(stream);
+		stream = NULL;
+
+		/* re-establish connection if not shutdown */
+		switch_yield(1000 * 1000); /* 1000 ms */
+		continue;
+
+   sock_fail:
+		if (socket) {
+			switch_socket_close(socket);
+			socket = NULL;
+		}
+		if (!warned) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Socket Error! Rayo could not connect to %s:%i\n", stream->address, stream->port);
+			warned = 1;
+		}
+		switch_yield(1000 * 1000); /* 1000 ms */
+	}
+
+  fail:
+
+	if (stream) {
+		rayo_stream_destroy(stream);
+	}
+
+	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
+	return NULL;
+}
+
+/**
+ * Open a new Rayo stream with a peer server
+ * @param domain of server - if not set, address is used
+ * @param address of server - if not set, domain is used
+ * @param port of server - if not set default port is used
+ */
+static void rayo_peer_server_connect(const char *domain, const char *address, int port)
+{
+	struct rayo_stream *stream;
+	switch_memory_pool_t *pool;
+	switch_thread_t *thread;
+	switch_threadattr_t *thd_attr = NULL;
+
+	if (port <= 0) {
+		port = IKS_JABBER_SERVER_PORT;
+	}
+
+	if (zstr(address)) {
+		address = domain;
+	} else if (zstr(domain)) {
+		domain = address;
+	}
+
+	/* start outbound connection thread */
+	switch_core_new_memory_pool(&pool);
+	stream = rayo_stream_create(pool, address, port, 1, 0);
+	stream->jid = switch_core_strdup(pool, domain);
+	switch_threadattr_create(&thd_attr, pool);
+			switch_threadattr_detach_set(thd_attr, 1);
+			switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
+			switch_thread_create(&thread, thd_attr, rayo_outbound_stream_thread, stream, pool);
 }
 
 /**
@@ -3534,11 +3747,12 @@ static void *SWITCH_THREAD_FUNC rayo_listener_thread(switch_thread_t *thread, vo
 			errs = 0;
 
 			/* start connection thread */
-			if (!(stream = rayo_stream_create(pool, socket, listener->s2s))) {
+			if (!(stream = rayo_stream_create(pool, NULL, 0, listener->s2s, 1))) {
 				switch_socket_shutdown(socket, SWITCH_SHUTDOWN_READWRITE);
 				switch_socket_close(socket);
 				break;
 			}
+			rayo_stream_set_socket(stream, socket);
 			pool = NULL; /* connection now owns the pool */
 			switch_threadattr_create(&thd_attr, stream->pool);
 			switch_threadattr_detach_set(thd_attr, 1);
@@ -3912,13 +4126,18 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 
 			/* get outbound server connections */
 			for (l = switch_xml_child(domain, "connect"); l; l = l->next) {
+				const char *domain = switch_xml_attr_soft(l, "domain");
 				const char *address = switch_xml_attr_soft(l, "address");
 				const char *port = switch_xml_attr_soft(l, "port");
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "outbound server connection: %s:%s\n", address, port);
-				/* TODO */
-				//if (rayo_stream_create(address, port) != SWITCH_STATUS_SUCCESS) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create outbound connection to: %s:%s\n", address, port);
-				//}
+				if (!zstr(port) && !switch_is_number(port)) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Outbound server port must be an integer!\n");
+					return SWITCH_STATUS_FALSE;
+				}
+				if (zstr(address) && zstr(domain)) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Missing outbound server address!\n");
+					return SWITCH_STATUS_FALSE;
+				}
+				rayo_peer_server_connect(domain, address, atoi(port));
 			}
 		}
 	}
