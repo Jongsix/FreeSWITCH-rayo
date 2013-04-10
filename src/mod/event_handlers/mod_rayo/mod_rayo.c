@@ -79,12 +79,21 @@ struct rayo_xmpp_handler {
  * State of a stream
  */
 enum rayo_stream_state {
+	/** new connection */
 	RSS_CONNECT,
+	/** bidirectional comms established */
+	RSS_BIDI,
+	/** remote party authenticated */
 	RSS_AUTHENTICATED,
+	/** client resource bound */
 	RSS_RESOURCE_BOUND,
-	RSS_SESSION_ESTABLISHED,
+	/** ready to accept requests */
+	RSS_READY,
+	/** terminating stream */
 	RSS_SHUTDOWN,
+	/** unrecoverable error */
 	RSS_ERROR,
+	/** destroyed */
 	RSS_DESTROY
 };
 
@@ -294,9 +303,10 @@ static const char *rayo_stream_state_to_string(enum rayo_stream_state state)
 {
 	switch(state) {
 		case RSS_CONNECT: return "CONNECT";
+		case RSS_BIDI: return "BIDI";
 		case RSS_AUTHENTICATED: return "AUTHENTICATED";
 		case RSS_RESOURCE_BOUND: return "RESOURCE_BOUND";
-		case RSS_SESSION_ESTABLISHED: return "SESSION_ESTABLISHED";
+		case RSS_READY: return "READY";
 		case RSS_SHUTDOWN: return "SHUTDOWN";
 		case RSS_ERROR: return "ERROR";
 		case RSS_DESTROY: return "DESTROY";
@@ -1242,7 +1252,6 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
 
 /**
  * Create a new Rayo client
- * @param pool the memory pool for this client
  * @param jid for this client
  * @param state of client
  * @param send message transmission function
@@ -1250,12 +1259,12 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
  * @param is_local true if locally connected client
  * @return the new client or NULL
  */
-static struct rayo_client *rayo_client_create(switch_memory_pool_t *pool, const char *jid, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, int is_local)
+static struct rayo_client *rayo_client_create(const char *jid, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, int is_local)
 {
+	switch_memory_pool_t *pool;
 	struct rayo_client *rclient = NULL;
-	if (!pool) {
-		switch_core_new_memory_pool(&pool);
-	}
+
+	switch_core_new_memory_pool(&pool);
 	if (!(rclient = switch_core_alloc(pool, sizeof(*rclient)))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Memory Error\n");
 		return NULL;
@@ -2097,43 +2106,15 @@ static iks *on_rayo_dial(struct rayo_actor *client, struct rayo_actor *server, i
 }
 
 /**
- * Handle <presence> message callback
- * @param stream the stream
+ * Handle <presence> message from a client
+ * @param stream the originating stream
+ * @param rclient the client
  * @param node the presence message
  */
-static void on_stream_presence(struct rayo_stream *stream, iks *node)
+static void on_client_presence(struct rayo_stream *stream, struct rayo_client *rclient, iks *node)
 {
-	struct rayo_actor *actor;
-	struct rayo_client *rclient;
 	char *type = iks_find_attrib(node, "type");
-	const char *from = iks_find_attrib(node, "from");
 	enum presence_status status = PS_UNKNOWN;
-
-	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", RAYO_JID(stream), rayo_stream_state_to_string(stream->state));
-
-	if (!from) {
-		/* TODO error if server stream */
-		from = stream->jid;
-		if (zstr(from)) {
-			/* TODO error */
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
-			return;
-		}
-	}
-
-	actor = RAYO_LOCATE(from);
-	if (!actor) {
-		/* TODO create client if this is a server stream... */
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", RAYO_JID(stream), from);
-		return;
-	}
-	if (actor->type != RAT_CLIENT) {
-		/* TODO error */
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(stream), from);
-		RAYO_UNLOCK(actor);
-		return;
-	}
-	rclient = RAYO_CLIENT(actor);
 
 	/*
 	   From RFC-6121:
@@ -2181,6 +2162,55 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 	} else if (status == PS_OFFLINE && rclient->state != RCS_ONLINE) {
 		rclient->state = RCS_OFFLINE;
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
+	}
+}
+
+/**
+ * Handle <presence> message callback
+ * @param stream the stream
+ * @param node the presence message
+ */
+static void on_stream_presence(struct rayo_stream *stream, iks *node)
+{
+	struct rayo_actor *actor;
+	const char *from = iks_find_attrib(node, "from");
+
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", RAYO_JID(stream), rayo_stream_state_to_string(stream->state));
+
+	if (!from) {
+		if (stream->s2s) {
+			/* from is required in s2s connections */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
+			return;
+		}
+
+		/* use stream JID if a c2s connection */
+		from = stream->jid;
+		if (zstr(from)) {
+			/* error */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, no presence from JID\n", RAYO_JID(stream));
+			return;
+		}
+	}
+
+	actor = RAYO_LOCATE(from);
+	if (!actor) {
+		if (stream->s2s) {
+			/* previously unknown client - add it */
+			actor = RAYO_ACTOR(rayo_client_create(stream->jid, RCS_OFFLINE, rayo_client_send, 0, 0));
+		} else {
+			/* bad from address over c2s connection */
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", RAYO_JID(stream), from);
+			return;
+		}
+	}
+	if (actor->type == RAT_CLIENT) {
+		on_client_presence(stream, RAYO_CLIENT(actor), node);
+	} else {
+		/* TODO error */
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", RAYO_JID(stream), from);
+		RAYO_UNLOCK(actor);
+		return;
 	}
 	RAYO_UNLOCK(actor);
 }
@@ -2252,10 +2282,10 @@ static iks *on_iq_set_xmpp_session(struct rayo_stream *stream, iks *node)
 		case RSS_RESOURCE_BOUND: {
 			struct rayo_client *client;
 			reply = iks_new_iq_result(node);
-			stream->state = RSS_SESSION_ESTABLISHED;
+			stream->state = RSS_READY;
 
 			/* accept client commands now */
-			client = rayo_client_create(NULL, stream->jid, RCS_OFFLINE, rayo_client_send, 0, 1);
+			client = rayo_client_create(stream->jid, RCS_OFFLINE, rayo_client_send, 0, 1);
 			switch_core_hash_insert(stream->clients, RAYO_JID(client), client);
 
 			/* make client available for offers */
@@ -2265,7 +2295,7 @@ static iks *on_iq_set_xmpp_session(struct rayo_stream *stream, iks *node)
 			break;
 		}
 		case RSS_AUTHENTICATED:
-		case RSS_SESSION_ESTABLISHED:
+		case RSS_READY:
 		default:
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
 			reply = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
@@ -2328,7 +2358,29 @@ static iks *on_iq_set_xmpp_bind(struct rayo_stream *stream, iks *node)
  */
 static void on_stream_bidi(struct rayo_stream *stream, iks *node)
 {
-	/* TODO */
+	/* only allow bidi on s2s connections before auth */
+	if (stream->s2s) {
+		switch(stream->state) {
+			case RSS_CONNECT:
+				stream->state = RSS_BIDI;
+				break;
+			case RSS_BIDI:
+			case RSS_AUTHENTICATED:
+			case RSS_RESOURCE_BOUND:
+			case RSS_READY:
+			case RSS_SHUTDOWN:
+			case RSS_ERROR:
+			case RSS_DESTROY:
+				/* error */
+				stream->state = RSS_ERROR;
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, bad state: %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
+				break;
+		}
+	} else {
+		/* error */
+		stream->state = RSS_ERROR;
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, bidi not allowed from client\n", stream->jid);
+	}
 }
 
 /**
@@ -2416,7 +2468,7 @@ static void on_stream_auth(struct rayo_stream *stream, iks *node)
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, auth, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
 
 	/* wrong state for authentication */
-	if (stream->state != RSS_CONNECT) {
+	if (stream->state != RSS_BIDI) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, auth UNEXPECTED, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
 		/* on_auth unexpected error */
 		stream->state = RSS_ERROR;
@@ -2452,15 +2504,17 @@ static void on_stream_auth(struct rayo_stream *stream, iks *node)
 			if (!stream->s2s && !strchr(stream->jid, '@')) {
 				stream->jid = switch_core_sprintf(stream->pool, "%s@%s", stream->jid, RAYO_JID(globals.server));
 			}
+
 			if (stream->s2s) {
 				/* add to available streams */
 				switch_mutex_lock(globals.clients_mutex);
 				switch_core_hash_insert(globals.streams, stream->jid, stream);
 				switch_mutex_unlock(globals.clients_mutex);
 			}
-			stream->state = RSS_AUTHENTICATED;
+
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", stream->jid, rayo_stream_state_to_string(stream->state), authzid, authcid);
 			rayo_send_auth_success(stream);
+			stream->state = RSS_AUTHENTICATED;
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, auth, state = %s, invalid user or password!\n", stream->jid, rayo_stream_state_to_string(stream->state));
 			rayo_send_auth_failure(stream, "not-authorized");
@@ -2520,7 +2574,8 @@ static void rayo_client_command_recv(struct rayo_client *rclient, iks *iq)
 static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 {
 	switch(stream->state) {
-		case RSS_CONNECT: {
+		case RSS_CONNECT:
+		case RSS_BIDI: {
 			iks *error = iks_new_iq_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
 			iks_send(stream->parser, error);
 			iks_delete(error);
@@ -2556,7 +2611,7 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 			}
 			break;
 		}
-		case RSS_SESSION_ESTABLISHED: {
+		case RSS_READY: {
 			/* client requests */
 			struct rayo_actor *rclient;
 			const char *client_jid = iks_find_attrib(iq, "from");
@@ -2613,7 +2668,8 @@ static void on_stream_stop(struct rayo_stream *stream)
 static void on_stream_start(struct rayo_stream *stream, iks *node)
 {
 	switch (stream->state) {
-		case RSS_CONNECT: {
+		case RSS_CONNECT:
+		case RSS_BIDI: {
 			const char *to = iks_find_attrib_soft(node, "to");
 			if (!zstr(to) && strcmp(RAYO_JID(globals.server), to)) {
 				/* wrong server JID */
@@ -2635,6 +2691,7 @@ static void on_stream_start(struct rayo_stream *stream, iks *node)
 			} else if (stream->s2s) {
 				/* all set with s2s */
 				rayo_send_server_header_features(stream);
+				stream->state = RSS_READY;
 			} else {
 				/* client bind required */
 				rayo_stream_new_id(stream);
@@ -2647,7 +2704,7 @@ static void on_stream_start(struct rayo_stream *stream, iks *node)
 			stream->state = RSS_DESTROY;
 			break;
 		case RSS_RESOURCE_BOUND:
-		case RSS_SESSION_ESTABLISHED:
+		case RSS_READY:
 		case RSS_ERROR:
 		case RSS_DESTROY:
 			/* bad state */
@@ -3288,6 +3345,11 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 	stream->s2s = s2s;
 	switch_queue_create(&stream->msg_queue, MAX_QUEUE_LEN, pool);
 	switch_socket_create_pollset(&stream->pollfd, stream->socket, SWITCH_POLLIN | SWITCH_POLLERR, pool);
+
+	if (!stream->s2s) {
+		/* client is already bi-directional */
+		stream->state = RSS_BIDI;
+	}
 
 	/* set up XMPP stream parser */
 	stream->parser = iks_stream_new(stream->s2s ? IKS_NS_SERVER : IKS_NS_CLIENT, stream, on_stream);
@@ -3948,11 +4010,9 @@ static struct rayo_message *rayo_console_client_send(struct rayo_actor *from, st
  */
 static struct rayo_client *rayo_console_client_create(void)
 {
-	switch_memory_pool_t *pool;
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
-	switch_core_new_memory_pool(&pool);
 	switch_uuid_str(id, sizeof(id));
-	return rayo_client_create(pool, id, RCS_ONLINE, rayo_console_client_send, 1, 1);
+	return rayo_client_create(id, RCS_ONLINE, rayo_console_client_send, 1, 1);
 }
 
 /**
