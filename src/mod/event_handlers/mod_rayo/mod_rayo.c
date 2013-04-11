@@ -286,6 +286,8 @@ static struct {
 	switch_hash_t *cmd_aliases;
 	/** global console */
 	struct rayo_client *console;
+	/** shared secret for server dialback */
+	const char *dialback_secret;
 } globals;
 
 /**
@@ -4157,12 +4159,21 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 		switch_xml_t domain = switch_xml_child(cfg, "domain");
 		if (domain) {
 			switch_xml_t l;
+			const char *shared_secret = switch_xml_attr_soft(domain, "shared-secret");
 			const char *name = switch_xml_attr_soft(domain, "name");
 			if (zstr(name)) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing <domain name=\"... failed to configure rayo server\n");
 				return SWITCH_STATUS_FALSE;
 			}
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo domain set to %s\n", name);
+
+			if (zstr(shared_secret)) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing shared secret for %s domain.  Server dialback will not work\n", name);
+				globals.dialback_secret = "";
+			} else {
+				globals.dialback_secret = switch_core_strdup(pool, shared_secret);
+			}
+
 			globals.server = rayo_server_create(name);
 
 			/* get listeners for this domain */
