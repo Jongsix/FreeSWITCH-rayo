@@ -339,6 +339,21 @@ static void iks_sha256_hex_string(const unsigned char *data, int datalen, unsign
 }
 
 /**
+ * Generate HMAC SHA-256
+ * @param key the key
+ * @param keylen length of key
+ * @param message the message
+ * @param messagelen length of message
+ * @param hash buffer to store the hash - must be IKS_SHA256_HEX_DIGEST_LENGTH
+ */
+static void iks_hmac_sha256_hex_string(const unsigned char *key, int keylen, const unsigned char *message, int messagelen, unsigned char *hash)
+{
+	unsigned int hash_len = SHA256_DIGEST_LENGTH;
+	HMAC(EVP_sha256(), key, keylen, message, messagelen, hash, &hash_len);
+	iks_hash_to_hex_string(hash, SHA256_DIGEST_LENGTH, hash);
+}
+
+/**
  * Generate server dialback key.  free() the returned value
  * @param secret originating server shared secret
  * @param receiving_server domain
@@ -349,20 +364,14 @@ static void iks_sha256_hex_string(const unsigned char *data, int datalen, unsign
 char *iks_server_dialback_key(const char *secret, const char *receiving_server, const char *originating_server, const char *stream_id)
 {
 	if (!zstr(secret) && !zstr(receiving_server) && !zstr(originating_server) && !zstr(stream_id)) {
-		unsigned char *data = NULL;
-		unsigned char *dialback_key = malloc(sizeof(unsigned char *) * IKS_SHA256_HEX_DIGEST_LENGTH);
-		unsigned int dialback_key_len = SHA256_DIGEST_LENGTH;
 		unsigned char secret_hash[IKS_SHA256_HEX_DIGEST_LENGTH];
-
+		unsigned char *message = NULL;
+		unsigned char *dialback_key = malloc(sizeof(unsigned char *) * IKS_SHA256_HEX_DIGEST_LENGTH);
 		iks_sha256_hex_string((unsigned char *)secret, strlen(secret), secret_hash);
-		data = (unsigned char *)switch_mprintf("%s %s %s", receiving_server, originating_server, stream_id);
-		HMAC(EVP_sha256(), secret_hash, SHA256_DIGEST_LENGTH * 2, data, strlen((char *)data), dialback_key, &dialback_key_len);
-		free(data);
-		if (dialback_key_len) {
-			iks_hash_to_hex_string(dialback_key, dialback_key_len, dialback_key);
-			return (char *)dialback_key;
-		}
-		free(dialback_key);
+		message = (unsigned char *)switch_mprintf("%s %s %s", receiving_server, originating_server, stream_id);
+		iks_hmac_sha256_hex_string(secret_hash, strlen((char *)secret_hash), message, strlen((char *)message), dialback_key);
+		free(message);
+		return (char *)dialback_key;
 	}
 	return NULL;
 }
