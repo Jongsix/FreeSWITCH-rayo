@@ -60,6 +60,7 @@ typedef struct rayo_message *(* rayo_actor_send_fn)(struct rayo_actor *, struct 
  * Type of actor
  */
 enum rayo_actor_type {
+	RAT_PEER_SERVER,
 	RAT_CLIENT,
 	RAT_SERVER,
 	RAT_CALL,
