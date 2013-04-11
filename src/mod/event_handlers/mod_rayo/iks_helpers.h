@@ -70,6 +70,8 @@ extern const char *iks_node_type_to_string(int type);
 extern const char *iks_net_error_to_string(int err);
 extern iks *iks_insert_attrib_printf(iks *xml, const char *name, const char *fmt, ...);
 
+extern char *iks_server_dialback_key(const char *secret, const char *receiving_server, const char *originating_server, const char *stream_id);
+
 /** A function to validate attribute value */
 typedef int (*iks_attrib_validation_function)(const char *);
 
@@ -79,7 +81,6 @@ typedef int (*iks_attrib_validation_function)(const char *);
 #define ELEMENT_END return result; }
 
 extern int value_matches(const char *value, const char *rule);
-
 
 #define ATTRIB_RULE(rule) inline int iks_attrib_is_ ## rule (const char *value)
 
