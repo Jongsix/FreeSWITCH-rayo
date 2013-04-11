@@ -129,8 +129,8 @@ struct rayo_stream {
 	switch_queue_t *msg_queue;
 	/** true if no activity last poll */
 	int idle;
-	/** map of JID to client */
-	switch_hash_t *clients;
+	/** map of JID to actor */
+	switch_hash_t *actors;
 };
 
 /**
@@ -2247,7 +2247,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 		if (stream->s2s) {
 			/* previously unknown client - add it */
 			actor = RAYO_ACTOR(rayo_client_create(stream->jid, RCS_OFFLINE, rayo_client_send, 0, 0));
-			switch_core_hash_insert(stream->clients, RAYO_JID(actor), actor);
+			switch_core_hash_insert(stream->actors, RAYO_JID(actor), actor);
 		} else {
 			/* bad from address over c2s connection */
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", stream->jid, from);
@@ -2341,7 +2341,7 @@ static iks *on_iq_set_xmpp_session(struct rayo_stream *stream, iks *node)
 
 			/* accept client commands now */
 			client = rayo_client_create(stream->jid, RCS_OFFLINE, rayo_client_send, 0, 1);
-			switch_core_hash_insert(stream->clients, RAYO_JID(client), client);
+			switch_core_hash_insert(stream->actors, RAYO_JID(client), client);
 			break;
 		}
 		case RSS_AUTHENTICATED:
@@ -2790,7 +2790,7 @@ static void on_outbound_server_stream_start(struct rayo_stream *stream, iks *nod
 
 			/* make server routable from console by JID */
 			server = rayo_peer_server_create(stream->jid);
-			switch_core_hash_insert(stream->clients, RAYO_JID(server), server);
+			switch_core_hash_insert(stream->actors, RAYO_JID(server), server);
 
 			break;
 		}
@@ -2839,7 +2839,9 @@ static void on_inbound_server_stream_start(struct rayo_stream *stream, iks *node
 		case RSS_BIDI:
 			rayo_send_server_header_auth(stream);
 			break;
-		case RSS_AUTHENTICATED:
+		case RSS_AUTHENTICATED: {
+			struct rayo_peer_server *server;
+
 			/* all set */
 			rayo_send_server_header_features(stream);
 			stream->state = RSS_READY;
@@ -2848,7 +2850,12 @@ static void on_inbound_server_stream_start(struct rayo_stream *stream, iks *node
 			switch_mutex_lock(globals.clients_mutex);
 			switch_core_hash_insert(globals.streams, stream->jid, stream);
 			switch_mutex_unlock(globals.clients_mutex);
+
+			/* make server routable from console by JID */
+			server = rayo_peer_server_create(stream->jid);
+			switch_core_hash_insert(stream->actors, RAYO_JID(server), server);
 			break;
+		}
 		case RSS_SHUTDOWN:
 			/* strange... I expect IKS_NODE_STOP, this is a workaround. */
 			stream->state = RSS_DESTROY;
@@ -3383,17 +3390,15 @@ static void rayo_stream_destroy(struct rayo_stream *stream)
 	}
 
 	/* destroy clients associated with this connection */
-	if (stream->clients) {
+	if (stream->actors) {
 		switch_hash_index_t *hi;
-		for (hi = switch_hash_first(NULL, stream->clients); hi; hi = switch_hash_next(hi)) {
-			struct rayo_client *rclient;
+		for (hi = switch_hash_first(NULL, stream->actors); hi; hi = switch_hash_next(hi)) {
 			const void *key;
-			void *val;
-			switch_hash_this(hi, &key, NULL, &val);
-			rclient = RAYO_CLIENT(val);
-			switch_assert(rclient);
-			RAYO_UNLOCK(rclient);
-			RAYO_DESTROY(rclient);
+			void *actor;
+			switch_hash_this(hi, &key, NULL, &actor);
+			switch_assert(actor);
+			RAYO_UNLOCK(actor);
+			RAYO_DESTROY(actor);
 		}
 	}
 
@@ -3506,7 +3511,7 @@ static void rayo_stream_new_id(struct rayo_stream *stream)
 static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_memory_pool_t *pool, const char *address, int port, int s2s, int incoming)
 {
 	stream->pool = pool;
-	switch_core_hash_init(&stream->clients, pool);
+	switch_core_hash_init(&stream->actors, pool);
 	rayo_stream_new_id(stream);
 	switch_mutex_init(&stream->mutex, SWITCH_MUTEX_NESTED, pool);
 	if (!zstr(address)) {
