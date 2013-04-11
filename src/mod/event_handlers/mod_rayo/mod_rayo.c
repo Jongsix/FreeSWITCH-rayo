@@ -3374,7 +3374,7 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "New %s connection\n", stream->s2s ? "server" : "client");
 
-	if (!stream->incoming) {
+	if (stream->s2s && !stream->incoming) {
 		rayo_send_outbound_server_header(stream);
 	}
 
@@ -3544,14 +3544,19 @@ static void *SWITCH_THREAD_FUNC rayo_outbound_stream_thread(switch_thread_t *thr
 
 	/* connect to server */
 	while (!globals.shutdown) {
+		struct rayo_stream *new_stream = NULL;
+		switch_memory_pool_t *pool;
 		switch_sockaddr_t *sa;
+
 		if (switch_sockaddr_info_get(&sa, stream->address, SWITCH_UNSPEC, stream->port, 0, stream->pool) != SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "failed to get sockaddr info!\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%s:%i, failed to get sockaddr info!\n", stream->address, stream->port);
 			goto fail;
 		}
 
 		if (switch_socket_create(&socket, switch_sockaddr_get_family(sa), SOCK_STREAM, SWITCH_PROTO_TCP, stream->pool) != SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "failed to create socket!\n");
+			if (!warned) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "%s:%i, failed to create socket!\n", stream->address, stream->port);
+			}
 			goto sock_fail;
 		}
 
@@ -3559,21 +3564,34 @@ static void *SWITCH_THREAD_FUNC rayo_outbound_stream_thread(switch_thread_t *thr
 		switch_socket_opt_set(socket, SWITCH_SO_TCP_NODELAY, 1);
 
 		if (switch_socket_connect(socket, sa) != SWITCH_STATUS_SUCCESS) {
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "Socket Error!\n");
+			if (!warned) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "%s:%i, Socket Error!\n", stream->address, stream->port);
+			}
 			goto sock_fail;
 		}
 
-		warned = 0;
+		if (warned) {
+			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_ERROR, "%s:%i, connected!\n", stream->address, stream->port);
+			warned = 0;
+		}
 
-		/* run the stream thread now */
+		/* run the stream thread */
 		rayo_stream_set_socket(stream, socket);
 		rayo_stream_thread(thread, stream);
-		rayo_stream_destroy(stream);
-		stream = NULL;
 
 		/* re-establish connection if not shutdown */
-		switch_yield(1000 * 1000); /* 1000 ms */
-		continue;
+		if (!globals.shutdown) {
+			/* create new stream for reconnection */
+			switch_core_new_memory_pool(&pool);
+			new_stream = rayo_stream_create(pool, stream->address, stream->port, 1, 0);
+			new_stream->jid = switch_core_strdup(pool, stream->jid);
+			rayo_stream_destroy(stream);
+			stream = new_stream;
+
+			switch_yield(1000 * 1000); /* 1000 ms */
+			continue;
+		}
+		break;
 
    sock_fail:
 		if (socket) {
@@ -3589,9 +3607,7 @@ static void *SWITCH_THREAD_FUNC rayo_outbound_stream_thread(switch_thread_t *thr
 
   fail:
 
-	if (stream) {
-		rayo_stream_destroy(stream);
-	}
+	rayo_stream_destroy(stream);
 
 	switch_thread_rwlock_unlock(globals.shutdown_rwlock);
 	return NULL;
