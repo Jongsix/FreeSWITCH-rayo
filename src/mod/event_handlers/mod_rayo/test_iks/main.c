@@ -132,6 +132,19 @@ static void test_iks_helper_value_matches(void)
 	ASSERT_EQUALS(NO_MATCH, value_matches("duplex", "duplex1,duplex2,duplex3"));
 }
 
+static void test_dialback_key(void)
+{
+	ASSERT_STRING_EQUALS("37c69b1cf07a3f67c04a5ef5902fa5114f2c76fe4a2686482ba5b89323075643", iks_server_dialback_key("s3cr3tf0rd14lb4ck", "xmpp.example.com", "example.org", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("", "xmpp.example.com", "example.org", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", "", "example.org", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", "xmpp.example.com", "", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", "xmpp.example.com", "example.org", ""));
+	ASSERT_NULL(iks_server_dialback_key(NULL, "xmpp.example.com", "example.org", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", NULL, "example.org", "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", "xmpp.example.com", NULL, "D60000229F"));
+	ASSERT_NULL(iks_server_dialback_key("s3cr3tf0rd14lb4ck", "xmpp.example.com", "example.org", NULL));
+}
+
 /**
  * main program
  */
@@ -145,5 +158,6 @@ int main(int argc, char **argv)
 	TEST(test_empty_cdata);
 	TEST(test_rayo_test_srgs);
 	TEST(test_iks_helper_value_matches);
+	TEST(test_dialback_key);
 	return 0;
 }

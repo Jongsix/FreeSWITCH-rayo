@@ -29,6 +29,7 @@
  */
 #include "iks_helpers.h"
 #include <switch.h>
+#include <switch_ssl.h>
 
 #undef XMPP_ERROR
 #define XMPP_ERROR(def_name, name, type) \
@@ -302,6 +303,68 @@ int value_matches(const char *value, const char *rule)
 		return value_matches(value, end);
 	}
 	return 0;
+}
+
+#define IKS_SHA256_HEX_DIGEST_LENGTH ((SHA256_DIGEST_LENGTH * 2) + 1)
+
+/**
+ * Convert hash to a hex string.
+ * @param hash hash to convert
+ * @param str buffer to store hash - this buffer must be hashlen * 2 + 1 in size.
+ */
+static void iks_hash_to_hex_string(unsigned char *hash, int hashlen, unsigned char *str)
+{
+	static const char *HEX = "0123456789abcdef";
+	int i;
+
+	/* convert to hex string with in-place algorithm */
+	for (i = hashlen - 1; i >= 0; i--) {
+		str[i * 2 + 1] = HEX[hash[i] & 0x0f];
+		str[i * 2] = HEX[(hash[i] >> 4) & 0x0f];
+	}
+	str[hashlen * 2] = '\0';
+}
+
+/**
+ * Generate SHA-256 hash of value as hex string
+ * @param data to hash
+ * @param datalen length of data to hash
+ * @return hash as a hex string
+ */
+static void iks_sha256_hex_string(const unsigned char *data, int datalen, unsigned char *hash)
+{
+	/* hash data */
+	SHA256(data, datalen, hash);
+	iks_hash_to_hex_string(hash, SHA256_DIGEST_LENGTH, hash);
+}
+
+/**
+ * Generate server dialback key.  free() the returned value
+ * @param secret originating server shared secret
+ * @param receiving_server domain
+ * @param originating_server domain
+ * @param stream_id stream ID
+ * @return the dialback key
+ */
+char *iks_server_dialback_key(const char *secret, const char *receiving_server, const char *originating_server, const char *stream_id)
+{
+	if (!zstr(secret) && !zstr(receiving_server) && !zstr(originating_server) && !zstr(stream_id)) {
+		unsigned char *data = NULL;
+		unsigned char *dialback_key = malloc(sizeof(unsigned char *) * IKS_SHA256_HEX_DIGEST_LENGTH);
+		unsigned int dialback_key_len = SHA256_DIGEST_LENGTH;
+		unsigned char secret_hash[IKS_SHA256_HEX_DIGEST_LENGTH];
+
+		iks_sha256_hex_string((unsigned char *)secret, strlen(secret), secret_hash);
+		data = (unsigned char *)switch_mprintf("%s %s %s", receiving_server, originating_server, stream_id);
+		HMAC(EVP_sha256(), secret_hash, SHA256_DIGEST_LENGTH * 2, data, strlen((char *)data), dialback_key, &dialback_key_len);
+		free(data);
+		if (dialback_key_len) {
+			iks_hash_to_hex_string(dialback_key, dialback_key_len, dialback_key);
+			return (char *)dialback_key;
+		}
+		free(dialback_key);
+	}
+	return NULL;
 }
 
 /* For Emacs:
