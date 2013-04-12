@@ -507,19 +507,19 @@ static iks *start_call_prompt_component(struct rayo_actor *client, struct rayo_a
 
 	if (!VALIDATE_RAYO_PROMPT(prompt)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad <prompt> attrib\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <prompt> attrib value");
+		return iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Bad <prompt> attrib value");
 	}
 
 	output = iks_find(prompt, "output");
 	if (!output) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <output>\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <output>");
+		return iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <output>");
 	}
 
 	input = iks_find(prompt, "input");
 	if (!input) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Missing <input>\n");
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <input>");
+		return iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Missing <input>");
 	}
 
 	/* create prompt component, linked to call */
@@ -585,7 +585,7 @@ static iks *stop_call_prompt_component(struct rayo_actor *client, struct rayo_ac
 		case PCS_START_INPUT_OUTPUT:
 		case PCS_START_INPUT_TIMERS:
 			/* ref hasn't been sent yet */
-			reply = iks_new_iq_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
+			reply = iks_new_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
 			break;
 	}
 
@@ -624,14 +624,14 @@ static iks *forward_output_component_request(struct rayo_actor *client, struct r
 		case PCS_START_OUTPUT:
 		case PCS_START_OUTPUT_BARGE:
 			/* ref hasn't been sent yet */
-			return iks_new_iq_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
+			return iks_new_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
 			break;
 		case PCS_START_INPUT:
 		case PCS_STOP_OUTPUT:
 		case PCS_DONE_STOP_OUTPUT:
 		case PCS_INPUT:
 		case PCS_DONE:
-			return iks_new_iq_error_detailed(iq, STANZA_ERROR_UNEXPECTED_REQUEST, "output is finished");
+			return iks_new_error_detailed(iq, STANZA_ERROR_UNEXPECTED_REQUEST, "output is finished");
 	}
 
 	return NULL;

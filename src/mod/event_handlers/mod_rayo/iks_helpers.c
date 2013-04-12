@@ -60,21 +60,21 @@ iks *iks_new_presence(const char *name, const char *namespace, const char *from,
 }
 
 /**
- * Create <iq> error response from <iq> request
- * @param iq the <iq> get/set request
+ * Create error response from request
+ * @param req the request
  * @param from
  * @param to
  * @param err the XMPP stanza error
- * @return the <iq> error response
+ * @return the error response
  */
-iks *iks_new_iq_error(iks *iq, const struct xmpp_error *err)
+iks *iks_new_error(iks *req, const struct xmpp_error *err)
 {
-	iks *response = iks_copy(iq);
+	iks *response = iks_copy(req);
 	iks *x;
 
 	/* <iq> */
-	iks_insert_attrib(response, "from", iks_find_attrib(iq, "to"));
-	iks_insert_attrib(response, "to", iks_find_attrib(iq, "from"));
+	iks_insert_attrib(response, "from", iks_find_attrib(req, "to"));
+	iks_insert_attrib(response, "to", iks_find_attrib(req, "from"));
 	iks_insert_attrib(response, "type", "error");
 
 	/* <error> */
@@ -89,17 +89,17 @@ iks *iks_new_iq_error(iks *iq, const struct xmpp_error *err)
 }
 
 /**
- * Create <iq> error response from <iq> request
- * @param iq the <iq> get/set request
+ * Create error response from request
+ * @param req the request
  * @param from
  * @param to
  * @param err the XMPP stanza error
  * @param detail_text optional text to include in message
  * @return the <iq> error response
  */
-iks *iks_new_iq_error_detailed(iks *iq, const struct xmpp_error *err, const char *detail_text)
+iks *iks_new_error_detailed(iks *req, const struct xmpp_error *err, const char *detail_text)
 {
-	iks *reply = iks_new_iq_error(iq, err);
+	iks *reply = iks_new_error(req, err);
 	if (!zstr(detail_text)) {
 		iks *error = iks_find(reply, "error");
 		iks *text = iks_insert(error, "text");
@@ -111,16 +111,16 @@ iks *iks_new_iq_error_detailed(iks *iq, const struct xmpp_error *err, const char
 }
 
 /**
- * Create <iq> error response from <iq> request
- * @param iq the <iq> get/set request
+ * Create error response from request
+ * @param req the request
  * @param from
  * @param to
  * @param err the XMPP stanza error
  * @param detail_text_format format string
  * @param ...
- * @return the <iq> error response
+ * @return the error response
  */
-iks *iks_new_iq_error_detailed_printf(iks *iq, const struct xmpp_error *err, const char *detail_text_format, ...)
+iks *iks_new_error_detailed_printf(iks *req, const struct xmpp_error *err, const char *detail_text_format, ...)
 {
 	iks *reply = NULL;
 	char *data;
@@ -134,7 +134,7 @@ iks *iks_new_iq_error_detailed_printf(iks *iq, const struct xmpp_error *err, con
 	if (ret == -1) {
 		return NULL;
 	}
-	reply = iks_new_iq_error_detailed(iq, err, data);
+	reply = iks_new_error_detailed(req, err, data);
 	free(data);
 	return reply;
 }

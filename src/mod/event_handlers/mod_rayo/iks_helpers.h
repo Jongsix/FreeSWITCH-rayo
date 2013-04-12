@@ -57,9 +57,9 @@ struct xmpp_error {
 /* See RFC-3920 XMPP core for error definitions */
 
 extern iks *iks_new_presence(const char *name, const char *namespace, const char *from, const char *to);
-extern iks *iks_new_iq_error(iks *iq, const struct xmpp_error *err);
-extern iks *iks_new_iq_error_detailed(iks *iq, const struct xmpp_error *err, const char *detail_text);
-extern iks *iks_new_iq_error_detailed_printf(iks *iq, const struct xmpp_error *err, const char *detail_text_format, ...);
+extern iks *iks_new_error(iks *iq, const struct xmpp_error *err);
+extern iks *iks_new_error_detailed(iks *iq, const struct xmpp_error *err, const char *detail_text);
+extern iks *iks_new_error_detailed_printf(iks *iq, const struct xmpp_error *err, const char *detail_text_format, ...);
 extern iks *iks_new_iq_result(iks *iq);
 extern const char *iks_find_attrib_soft(iks *xml, const char *attrib);
 extern const char *iks_find_attrib_default(iks *xml, const char *attrib, const char *def);
