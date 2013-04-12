@@ -129,7 +129,7 @@ static iks *start_call_output_component(struct rayo_actor *client, struct rayo_a
 
 	/* validate output attributes */
 	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	output_component = create_output_component(call, output, iks_find_attrib(iq, "from"));
@@ -147,7 +147,7 @@ static iks *start_mixer_output_component(struct rayo_actor *client, struct rayo_
 
 	/* validate output attributes */
 	if (!VALIDATE_RAYO_OUTPUT(output)) {
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	component = create_output_component(mixer, output, iks_find_attrib(iq, "from"));
@@ -300,7 +300,7 @@ static iks *seek_output_component(struct rayo_actor *client, struct rayo_actor *
 
 		return iks_new_iq_result(iq);
 	}
-	return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+	return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 }
 
 /**

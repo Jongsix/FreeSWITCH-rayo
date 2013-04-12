@@ -272,8 +272,9 @@ static struct {
 	switch_hash_t *clients;
 	/** synchronizes access to clients and streams maps */
 	switch_mutex_t *clients_mutex;
-	/** map of stream JID to stream */
+	/** map of stream JID to routable stream */
 	switch_hash_t *streams;
+
 	/** server for calls/mixers/etc */
 	struct rayo_actor *server;
 	/** Maximum idle time before call is considered abandoned */
@@ -498,7 +499,8 @@ static void on_stream_log(void *user_data, const char *data, size_t size, int is
 {
 	if (size > 0) {
 		struct rayo_stream *stream = (struct rayo_stream *)user_data;
-		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s %s %s\n", stream->jid, is_incoming ? "RECV" : "SEND", data);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s_%s %s %s %s\n", stream->s2s ? "s2s" : "c2s",
+			stream->incoming ? "in" : "out", stream->jid, is_incoming ? "RECV" : "SEND", data);
 	}
 }
 
@@ -1408,10 +1410,10 @@ static iks *rayo_server_command_ok(struct rayo_actor *rclient, struct rayo_actor
 	int bad = zstr(iks_find_attrib(node, "id"));
 
 	if (bad) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rclient->type != RAT_CLIENT) {
 		/* not a rayo client request */
-		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		response = iks_new_error(node, STANZA_ERROR_NOT_ALLOWED);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s not a client\n", RAYO_JID(rclient), RAYO_JID(server));
 	}
 
@@ -1432,7 +1434,7 @@ static iks *rayo_call_command_ok(struct rayo_actor *rclient, struct rayo_call *c
 	int bad = zstr(iks_find_attrib(node, "id"));
 
 	if (bad) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (rclient->type == RAT_CALL_COMPONENT) {
 		struct rayo_actor *client = RAYO_LOCATE(RAYO_COMPONENT(rclient)->client_jid);
 		if (client) {
@@ -1441,17 +1443,17 @@ static iks *rayo_call_command_ok(struct rayo_actor *rclient, struct rayo_call *c
 			return response;
 		}
 		/* not a client request */
-		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		response = iks_new_error(node, STANZA_ERROR_NOT_ALLOWED);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s call component client is gone\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (rclient->type != RAT_CLIENT) {
 		/* not a client request */
-		response = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+		response = iks_new_error(node, STANZA_ERROR_NOT_ALLOWED);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s not a client request\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
-		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (!rayo_client_has_call_control(RAYO_CLIENT(rclient), call, session)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		response = iks_new_error(node, STANZA_ERROR_CONFLICT);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s conflict\n", RAYO_JID(rclient), RAYO_JID(call));
 	}
 
@@ -1472,17 +1474,17 @@ static iks *rayo_component_command_ok(struct rayo_actor *rclient, struct rayo_co
 	int bad = zstr(iks_find_attrib(node, "id"));
 
 	if (bad) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s bad request\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (rclient->type != RAT_CLIENT) {
 		/* internal message is ok */
 		return NULL;
 	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
-		response = iks_new_iq_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (!RAYO_CLIENT(rclient)->is_admin && strcmp(component->client_jid, from)) {
 		/* does not have control of this component */
-		response = iks_new_iq_error(node, STANZA_ERROR_CONFLICT);
+		response = iks_new_error(node, STANZA_ERROR_CONFLICT);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s conflict\n", RAYO_JID(rclient), RAYO_JID(component));
 	}
 
@@ -1502,7 +1504,7 @@ static struct rayo_message *rayo_server_send(struct rayo_actor *client, struct r
 	handler = rayo_actor_command_handler_find(server, iq);
 	if (!handler) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no handler function for command to %s\n", RAYO_JID(client), RAYO_JID(server));
-		return rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+		return rayo_message_create(iks_new_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
 	}
 
 	/* is the command valid? */
@@ -1530,14 +1532,14 @@ static struct rayo_message *rayo_call_send(struct rayo_actor *client, struct ray
 	handler = rayo_actor_command_handler_find(call, iq);
 	if (!handler) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no handler function for command\n", RAYO_JID(call));
-		return rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+		return rayo_message_create(iks_new_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
 	}
 
 	/* is the session still available? */
 	session = switch_core_session_locate(rayo_call_get_uuid(RAYO_CALL(call)));
 	if (!session) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, session not found\n", RAYO_JID(call));
-		return rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE));
+		return rayo_message_create(iks_new_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE));
 	}
 
 	/* is the command valid? */
@@ -1568,7 +1570,7 @@ static struct rayo_message *rayo_mixer_send(struct rayo_actor *client, struct ra
 	handler = rayo_actor_command_handler_find(mixer, iq);
 	if (!handler) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no handler function for command\n", RAYO_JID(mixer));
-		return rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+		return rayo_message_create(iks_new_error(iq, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
 	}
 
 	/* execute the command */
@@ -1593,7 +1595,7 @@ static struct rayo_message *rayo_component_send(struct rayo_actor *client, struc
 		handler = rayo_actor_command_handler_find(component, xml_msg);
 		if (!handler) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, no component handler function for command\n", RAYO_JID(component));
-			return rayo_message_create(iks_new_iq_error(xml_msg, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
+			return rayo_message_create(iks_new_error(xml_msg, STANZA_ERROR_FEATURE_NOT_IMPLEMENTED));
 		}
 
 		/* is the command valid? */
@@ -1694,7 +1696,7 @@ static iks *on_rayo_redirect(struct rayo_actor *client, struct rayo_actor *call,
 	char *redirect_to = iks_find_attrib(redirect, "to");
 
 	if (zstr(redirect_to)) {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing redirect to attrib");
+		response = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing redirect to attrib");
 	} else {
 		switch_core_session_message_t msg = { 0 };
 		add_signaling_headers(session, redirect, RAYO_SIP_RESPONSE_HEADER);
@@ -1737,10 +1739,10 @@ static iks *on_rayo_hangup(struct rayo_actor *client, struct rayo_actor *call, i
 		} else if (!strcmp("error", reason_name)) {
 			hangup_cause = RAYO_CAUSE_ERROR;
 		} else {
-			response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "invalid reject reason");
+			response = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "invalid reject reason");
 		}
 	} else {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	/* do hangup */
@@ -1773,10 +1775,10 @@ static iks *join_call(struct rayo_call *call, switch_core_session_t *session, ik
 	struct rayo_call *b_call = RAYO_CALL_LOCATE(call_id);
 	if (!b_call) {
 		/* not a rayo call */
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg is not a rayo call");
+		response = iks_new_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg is not a rayo call");
 	} else if (b_call->joined) {
 		/* don't support multiple joined calls */
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_CONFLICT, "multiple joined calls not supported");
+		response = iks_new_error_detailed(node, STANZA_ERROR_CONFLICT, "multiple joined calls not supported");
 		RAYO_UNLOCK(b_call);
 	} else {
 		RAYO_UNLOCK(b_call);
@@ -1789,7 +1791,7 @@ static iks *join_call(struct rayo_call *call, switch_core_session_t *session, ik
 		if (switch_ivr_uuid_bridge(rayo_call_get_uuid(call), call_id) == SWITCH_STATUS_SUCCESS) {
 			response = iks_new_iq_result(node);
 		} else {
-			response = iks_new_iq_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed to bridge call");
+			response = iks_new_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed to bridge call");
 		}
 	}
 	return response;
@@ -1809,7 +1811,7 @@ static iks *join_mixer(struct rayo_call *call, switch_core_session_t *session, i
 	if (switch_core_session_execute_application_async(session, "conference", conf_args) == SWITCH_STATUS_SUCCESS) {
 		response = iks_new_iq_result(node);
 	} else {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed execute conference app");
+		response = iks_new_error_detailed(node, STANZA_ERROR_INTERNAL_SERVER_ERROR, "failed execute conference app");
 	}
 	switch_safe_free(conf_args);
 	return response;
@@ -1832,7 +1834,7 @@ static iks *on_rayo_join(struct rayo_actor *client, struct rayo_actor *call, iks
 	/* validate input attributes */
 	if (!VALIDATE_RAYO_JOIN(join)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Bad join attrib\n");
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 		goto done;
 	}
 	mixer_name = iks_find_attrib(join, "mixer-name");
@@ -1840,19 +1842,19 @@ static iks *on_rayo_join(struct rayo_actor *client, struct rayo_actor *call, iks
 
 	/* can't join both mixer and call */
 	if (!zstr(mixer_name) && !zstr(call_id)) {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name and call-id are mutually exclusive");
+		response = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name and call-id are mutually exclusive");
 		goto done;
 	}
 
 	/* need to join *something* */
 	if (zstr(mixer_name) && zstr(call_id)) {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name or call-id is required");
+		response = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "mixer-name or call-id is required");
 		goto done;
 	}
 
 	if (RAYO_CALL(call)->joined) {
 		/* already joined */
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_CONFLICT, "call is already joined");
+		response = iks_new_error_detailed(node, STANZA_ERROR_CONFLICT, "call is already joined");
 		goto done;
 	}
 
@@ -1888,7 +1890,7 @@ static iks *unjoin_call(struct rayo_actor *client, struct rayo_call *call, switc
 		switch_ivr_park_session(session);
 	} else {
 		/* not bridged or wrong b-leg UUID */
-		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		response = iks_new_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 	}
 
 	return response;
@@ -1914,11 +1916,11 @@ static iks *unjoin_mixer(struct rayo_actor *client, struct rayo_call *call, swit
 
 	/* not conferenced, or wrong conference */
 	if (zstr(conf_name) || strcmp(mixer_name, conf_name)) {
-		response = iks_new_iq_error_detailed_printf(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "not joined to %s", mixer_name);
+		response = iks_new_error_detailed_printf(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "not joined to %s", mixer_name);
 		goto done;
 	} else if (zstr(conf_member_id)) {
 		/* shouldn't happen */
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "channel doesn't have conference member ID");
+		response = iks_new_error_detailed(node, STANZA_ERROR_SERVICE_UNAVAILABLE, "channel doesn't have conference member ID");
 		goto done;
 	}
 
@@ -1950,17 +1952,17 @@ static iks *on_rayo_unjoin(struct rayo_actor *client, struct rayo_actor *call, i
 	const char *mixer_name = iks_find_attrib(unjoin, "mixer-name");
 
 	if (!zstr(call_id) && !zstr(mixer_name)) {
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 	} else if (!RAYO_CALL(call)->joined) {
 		/* not joined to anything */
-		response = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+		response = iks_new_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 	} else if (!zstr(call_id)) {
 		response = unjoin_call(client, RAYO_CALL(call), session, node, call_id);
 	} else if (!zstr(mixer_name)) {
 		response = unjoin_mixer(client, RAYO_CALL(call), session, node, mixer_name);
 	} else {
 		/* missing mixer or call */
-		response = iks_new_iq_error(node, STANZA_ERROR_BAD_REQUEST);
+		response = iks_new_error(node, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	return response;
@@ -2042,21 +2044,21 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 
 			if (!zstr(call_id) && !zstr(mixer_name)) {
 				/* can't join both */
-				response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+				response = iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 				goto done;
 			} else if (zstr(call_id) && zstr(mixer_name)) {
 				/* nobody to join to? */
-				response = iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+				response = iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 				goto done;
 			} else if (!zstr(call_id)) {
 				/* bridge */
 				struct rayo_call *b_call = RAYO_CALL_LOCATE(call_id);
 				/* is b-leg available? */
 				if (!b_call) {
-					response = iks_new_iq_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg not found");
+					response = iks_new_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg not found");
 					goto done;
 				} else if (b_call->joined) {
-					response = iks_new_iq_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg already joined to another call");
+					response = iks_new_error_detailed(iq, STANZA_ERROR_SERVICE_UNAVAILABLE, "b-leg already joined to another call");
 					RAYO_UNLOCK(b_call);
 					goto done;
 				}
@@ -2084,22 +2086,22 @@ static void *SWITCH_THREAD_FUNC rayo_dial_thread(switch_thread_t *thread, void *
 					/* map failure reason to iq error */
 					if (!strncmp("-ERR DESTINATION_OUT_OF_ORDER", api_stream.data, strlen("-ERR DESTINATION_OUT_OF_ORDER"))) {
 						/* this -ERR is received when out of sessions */
-						response = iks_new_iq_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
+						response = iks_new_error(iq, STANZA_ERROR_RESOURCE_CONSTRAINT);
 					} else {
-						response = iks_new_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, api_stream.data);
+						response = iks_new_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, api_stream.data);
 					}
 				}
 			}
 		} else if (call->dial_id) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to exec originate API\n");
-			response = iks_new_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to execute originate API");
+			response = iks_new_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Failed to execute originate API");
 		}
 
 		switch_safe_free(api_stream.data);
 	} else {
 		/* will only happen if misconfigured */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(rayo_call_get_uuid(call)), SWITCH_LOG_CRIT, "No dial gateway found for %s!\n", dial_to);
-		response = iks_new_iq_error_detailed_printf(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "No dial gateway found for %s!\n", dial_to);
+		response = iks_new_error_detailed_printf(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "No dial gateway found for %s!\n", dial_to);
 		goto done;
 	}
 
@@ -2139,7 +2141,7 @@ static iks *on_rayo_dial(struct rayo_actor *client, struct rayo_actor *server, i
 	iks *response = NULL;
 
 	if (rclient->state != RCS_ONLINE) {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_UNEXPECTED_REQUEST, "rayo client is not online");
+		response = iks_new_error_detailed(node, STANZA_ERROR_UNEXPECTED_REQUEST, "rayo client is not online");
 	} else if (!zstr(iks_find_attrib(dial, "to"))) {
 		iks *node_dup = iks_copy(node);
 		iks_insert_attrib(node_dup, "from", RAYO_JID(rclient)); /* save DCP jid in case it isn't specified */
@@ -2150,7 +2152,7 @@ static iks *on_rayo_dial(struct rayo_actor *client, struct rayo_actor *server, i
 		switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
 		switch_thread_create(&thread, thd_attr, rayo_dial_thread, node_dup, RAYO_POOL(rclient));
 	} else {
-		response = iks_new_iq_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "missing dial to attribute");
+		response = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "missing dial to attribute");
 	}
 
 	return response;
@@ -2248,7 +2250,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 	if (!actor) {
 		if (stream->s2s) {
 			/* previously unknown client - add it */
-			actor = RAYO_ACTOR(rayo_client_create(stream->jid, RCS_OFFLINE, rayo_client_send, 0, 0));
+			actor = RAYO_ACTOR(rayo_client_create(from, RCS_OFFLINE, rayo_client_send, 0, 0));
 			switch_core_hash_insert(stream->actors, RAYO_JID(actor), actor);
 		} else {
 			/* bad from address over c2s connection */
@@ -2350,7 +2352,7 @@ static iks *on_iq_set_xmpp_session(struct rayo_stream *stream, iks *node)
 		case RSS_READY:
 		default:
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <session>, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
-			reply = iks_new_iq_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
+			reply = iks_new_error(node, STANZA_ERROR_SERVICE_UNAVAILABLE);
 			break;
 	}
 
@@ -2391,7 +2393,7 @@ static iks *on_iq_set_xmpp_bind(struct rayo_stream *stream, iks *node)
 		}
 		default:
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_WARNING, "%s, iq UNEXPECTED <bind>\n", stream->jid);
-			reply = iks_new_iq_error(node, STANZA_ERROR_NOT_ALLOWED);
+			reply = iks_new_error(node, STANZA_ERROR_NOT_ALLOWED);
 			break;
 	}
 
@@ -2495,13 +2497,37 @@ static void rayo_send_server_header_auth(struct rayo_stream *stream)
 	char *header = switch_mprintf(
 		"<stream:stream xmlns='"IKS_NS_SERVER"' xmlns:db='"IKS_NS_XMPP_DIALBACK"'"
 		" from='%s' id='%s' xml:lang='en' version='1.0'"
-		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'><stream:features>"
+		" xmlns:stream='"IKS_NS_XMPP_STREAMS"'>"
+		"<stream:features>"
+#if 0
 		"<bidi xmlns='"IKS_NS_BIDI_FEATURE"'/>"
 		"<mechanisms xmlns='"IKS_NS_XMPP_SASL"'>"
 		"<mechanism>PLAIN</mechanism>"
-		"</mechanisms></stream:features>", RAYO_JID(globals.server), stream->id);
+		"</mechanisms>"
+#endif
+		"</stream:features>",
+		RAYO_JID(globals.server), stream->id);
 	iks_send_raw(stream->parser, header);
 	free(header);
+}
+
+/**
+ * Send dialback to receiving server
+ */
+static void rayo_send_dialback_key(struct rayo_stream *stream)
+{
+	char *dialback_key = iks_server_dialback_key(globals.dialback_secret, stream->jid, RAYO_JID(globals.server), stream->id);
+	if (dialback_key) {
+		char *dialback = switch_mprintf(
+			"<db:result from='%s' to='%s'>%s</db:result>",
+			RAYO_JID(globals.server), stream->jid,
+			dialback_key);
+		iks_send_raw(stream->parser, dialback);
+		free(dialback);
+		free(dialback_key);
+	} else {
+		/* TODO missing shared secret */
+	}
 }
 
 /**
@@ -2616,10 +2642,10 @@ static void rayo_client_command_recv(struct rayo_client *rclient, iks *iq)
 			}
 			RAYO_UNLOCK(actor);
 		} else {
-			RAYO_SEND(globals.server, rclient, rayo_message_create(iks_new_iq_error(iq, STANZA_ERROR_ITEM_NOT_FOUND)));
+			RAYO_SEND(globals.server, rclient, rayo_message_create(iks_new_error(iq, STANZA_ERROR_ITEM_NOT_FOUND)));
 		}
 	} else {
-		RAYO_SEND(globals.server, rclient, rayo_message_create(iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "empty IQ request")));
+		RAYO_SEND(globals.server, rclient, rayo_message_create(iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "empty IQ request")));
 	}
 }
 
@@ -2633,7 +2659,7 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 	switch(stream->state) {
 		case RSS_CONNECT:
 		case RSS_BIDI: {
-			iks *error = iks_new_iq_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
+			iks *error = iks_new_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
 			iks_send(stream->parser, error);
 			iks_delete(error);
 			break;
@@ -2647,7 +2673,7 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 					iks_delete(reply);
 				}
 			} else {
-				iks *error = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+				iks *error = iks_new_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
 				iks_send(stream->parser, error);
 				iks_delete(error);
 			}
@@ -2662,7 +2688,7 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 					iks_delete(reply);
 				}
 			} else {
-				iks *error = iks_new_iq_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
+				iks *error = iks_new_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
 				iks_send(stream->parser, error);
 				iks_delete(error);
 			}
@@ -2681,14 +2707,14 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 					rayo_client_command_recv(RAYO_CLIENT(rclient), iq);
 				} else {
 					/* client doesn't exist until after authentication */
-					iks *error = iks_new_iq_error(iq, STANZA_ERROR_NOT_ALLOWED);
+					iks *error = iks_new_error(iq, STANZA_ERROR_NOT_ALLOWED);
 					iks_send(stream->parser, error);
 					iks_delete(error);
 				}
 				RAYO_UNLOCK(rclient);
 			} else {
 				/* client doesn't exist until after authentication */
-				iks *error = iks_new_iq_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
+				iks *error = iks_new_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
 				iks_send(stream->parser, error);
 				iks_delete(error);
 			}
@@ -2697,7 +2723,7 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 		case RSS_SHUTDOWN:
 		case RSS_DESTROY:
 		case RSS_ERROR: {
-			iks *error = iks_new_iq_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
+			iks *error = iks_new_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
 			iks_send(stream->parser, error);
 			iks_delete(error);
 			break;
@@ -2767,6 +2793,216 @@ static void on_client_stream_start(struct rayo_stream *stream, iks *node)
 }
 
 /**
+ * Handle <db:result type='valid'>
+ */
+static void on_stream_dialback_result_valid(struct rayo_stream *stream, iks *node)
+{
+	struct rayo_peer_server *server;
+
+	/* TODO check domain pair and allow access if pending request exists */
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, valid dialback result\n", stream->jid);
+
+	/* this stream is routable */
+	stream->state = RSS_READY;
+
+	/* add to available streams */
+	switch_mutex_lock(globals.clients_mutex);
+	switch_core_hash_insert(globals.streams, stream->jid, stream);
+	switch_mutex_unlock(globals.clients_mutex);
+
+	/* make server routable from console by JID */
+	server = rayo_peer_server_create(stream->jid);
+	switch_core_hash_insert(stream->actors, RAYO_JID(server), server);
+}
+
+/**
+ * Handle <db:result type='valid'>
+ */
+static void on_stream_dialback_result_invalid(struct rayo_stream *stream, iks *node)
+{
+	/* close stream */
+	stream->state = RSS_ERROR;
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, invalid dialback result!\n", stream->jid);
+}
+
+/**
+ * Handle <db:result type='error'>
+ */
+static void on_stream_dialback_result_error(struct rayo_stream *stream, iks *node)
+{
+	/* close stream */
+	stream->state = RSS_ERROR;
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, error dialback result!\n", stream->jid);
+}
+
+/**
+ * Handle <db:result>
+ */
+static void on_stream_dialback_result_key(struct rayo_stream *stream, iks *node)
+{
+	const char *from = iks_find_attrib_soft(node, "from");
+	const char *to = iks_find_attrib_soft(node, "to");
+	iks *cdata = iks_child(node);
+	iks *reply;
+	const char *dialback_key = NULL;
+
+	if (cdata && iks_type(cdata) == IKS_CDATA) {
+		dialback_key = iks_cdata(cdata);
+	}
+	if (zstr(dialback_key)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing dialback key");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback result missing key!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	if (zstr(from)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing from");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback result missing from!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	if (zstr(to)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing to");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback result missing to!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	if (strcmp(RAYO_JID(globals.server), to)) {
+		iks *error = iks_new_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, invalid domain!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	/* TODO validate key */
+	reply = iks_new("db:result");
+	iks_insert_attrib(reply, "from", to);
+	iks_insert_attrib(reply, "to", from);
+	iks_insert_attrib(reply, "type", "valid");
+	iks_send(stream->parser, reply);
+	iks_delete(reply);
+
+	/* this stream is not routable */
+	stream->state = RSS_READY;
+
+	/* TODO add to available streams for status logging */
+}
+
+/**
+ * Handle <db:result>
+ */
+static void on_stream_dialback_result(struct rayo_stream *stream, iks *node)
+{
+	const char *type = iks_find_attrib_soft(node, "type");
+
+	if (stream->state == RSS_ERROR || stream->state == RSS_DESTROY) {
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	if (zstr(type)) {
+		on_stream_dialback_result_key(stream, node);
+	} else if (!strcmp("valid", type)) {
+		on_stream_dialback_result_valid(stream, node);
+	} else if (!strcmp("invalid", type)) {
+		on_stream_dialback_result_invalid(stream, node);
+	} else if (!strcmp("error", type)) {
+		on_stream_dialback_result_error(stream, node);
+	}
+}
+
+/**
+ * Handle <db:verify>
+ */
+static void on_stream_dialback_verify(struct rayo_stream *stream, iks *node)
+{
+	const char *from = iks_find_attrib_soft(node, "from");
+	const char *id = iks_find_attrib_soft(node, "id");
+	const char *to = iks_find_attrib_soft(node, "to");
+	iks *cdata = iks_child(node);
+	iks *reply;
+	const char *dialback_key = NULL;
+	char *expected_key = NULL;
+	int valid;
+
+	if (stream->state == RSS_ERROR || stream->state == RSS_DESTROY) {
+		stream->state = RSS_ERROR;
+		return;
+	}
+
+	if (cdata && iks_type(cdata) == IKS_CDATA) {
+		dialback_key = iks_cdata(cdata);
+	}
+	if (zstr(dialback_key)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing dialback key");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback verify missing key!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		return;
+	}
+
+	if (zstr(id)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing id");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback verify missing stream ID!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		return;
+	}
+
+	if (zstr(from)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing from");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback verify missing from!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		return;
+	}
+
+	if (zstr(to)) {
+		iks *error = iks_new_error_detailed(node, STANZA_ERROR_BAD_REQUEST, "Missing to");
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, dialback verify missing to!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		return;
+	}
+
+	if (strcmp(RAYO_JID(globals.server), to)) {
+		iks *error = iks_new_error(node, STANZA_ERROR_ITEM_NOT_FOUND);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, invalid domain!\n", stream->jid);
+		iks_send(stream->parser, error);
+		iks_delete(error);
+		return;
+	}
+
+	expected_key = iks_server_dialback_key(globals.dialback_secret, from, to, id);
+	valid = expected_key && !strcmp(expected_key, dialback_key);
+
+	reply = iks_new("db:verify");
+	iks_insert_attrib(reply, "from", to);
+	iks_insert_attrib(reply, "to", from);
+	iks_insert_attrib(reply, "id", id);
+	iks_insert_attrib(reply, "type", valid ? "valid" : "invalid");
+	iks_send(stream->parser, reply);
+	iks_delete(reply);
+	free(expected_key);
+
+	if (!valid) {
+		/* close the stream */
+		stream->state = RSS_ERROR;
+	}
+}
+
+/**
  * Handle <stream> from an outbound peer server
  */
 static void on_outbound_server_stream_start(struct rayo_stream *stream, iks *node)
@@ -2782,18 +3018,17 @@ static void on_outbound_server_stream_start(struct rayo_stream *stream, iks *nod
 
 	switch (stream->state) {
 		case RSS_CONNECT: {
-			struct rayo_peer_server *server;
-			stream->state = RSS_READY;
+			/* get stream ID and send dialback */
+			const char *id = iks_find_attrib_soft(node, "id");
+			if (zstr(id)) {
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_INFO, "%s, missing stream ID!\n", stream->jid);
+				stream->state = RSS_ERROR;
+				return;
+			}
+			stream->id = switch_core_strdup(stream->pool, id);
 
-			/* add to available streams */
-			switch_mutex_lock(globals.clients_mutex);
-			switch_core_hash_insert(globals.streams, stream->jid, stream);
-			switch_mutex_unlock(globals.clients_mutex);
-
-			/* make server routable from console by JID */
-			server = rayo_peer_server_create(stream->jid);
-			switch_core_hash_insert(stream->actors, RAYO_JID(server), server);
-
+			/* send dialback */
+			rayo_send_dialback_key(stream);
 			break;
 		}
 		case RSS_SHUTDOWN:
@@ -2838,8 +3073,9 @@ static void on_inbound_server_stream_start(struct rayo_stream *stream, iks *node
 
 	switch (stream->state) {
 		case RSS_CONNECT:
-		case RSS_BIDI:
 			rayo_send_server_header_auth(stream);
+			break;
+		case RSS_BIDI:
 			break;
 		case RSS_AUTHENTICATED: {
 			struct rayo_peer_server *server;
@@ -2917,6 +3153,10 @@ static int on_stream(void *user_data, int type, iks *node)
 					on_stream_auth(stream, node);
 				} else if (!strcmp("bidi", name)) {
 					on_stream_bidi(stream, node);
+				} else if (!strcmp("db:result", name)) {
+					on_stream_dialback_result(stream, node);
+				} else if (!strcmp("db:verify", name)) {
+					on_stream_dialback_verify(stream, node);
 				} else {
 					/* unknown first-level element */
 					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown first-level element: %s\n", stream->jid, name);
@@ -3422,7 +3662,7 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 		switch_thread_rwlock_rdlock(globals.shutdown_rwlock);
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "New %s connection\n", stream->s2s ? "server" : "client");
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "New %s_%s connection\n", stream->s2s ? "s2s" : "c2s", stream->incoming ? "in" : "out");
 
 	if (stream->s2s && !stream->incoming) {
 		rayo_send_outbound_server_header(stream);
@@ -3514,7 +3754,9 @@ static struct rayo_stream *rayo_stream_init(struct rayo_stream *stream, switch_m
 {
 	stream->pool = pool;
 	switch_core_hash_init(&stream->actors, pool);
-	rayo_stream_new_id(stream);
+	if (incoming) {
+		rayo_stream_new_id(stream);
+	}
 	switch_mutex_init(&stream->mutex, SWITCH_MUTEX_NESTED, pool);
 	if (!zstr(address)) {
 		stream->address = switch_core_strdup(pool, address);
@@ -4241,7 +4483,7 @@ static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *st
  */
 static void rayo_stream_dump(struct rayo_stream *s, switch_stream_handle_t *stream)
 {
-	stream->write_function(stream, "TYPE='%s',ID='%s',JID='%s',STATE='%s'", s->s2s ? "s2s" : "c2s", s->id, s->jid, rayo_stream_state_to_string(s->state));
+	stream->write_function(stream, "TYPE='%s_%s',ID='%s',JID='%s',STATE='%s'", s->s2s ? "s2s" : "c2s", s->incoming ? "in" : "out", s->id, s->jid, rayo_stream_state_to_string(s->state));
 }
 
 /**
