@@ -1212,6 +1212,7 @@ static void rayo_stream_send(const char *jid, iks *msg, const char *file, int li
 				}
 			} else {
 				switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, "", line, "", SWITCH_LOG_DEBUG, "%s stream is gone\n", jid);
+				/* TODO automatically open connection if valid domain JID? */
 			}
 			switch_mutex_unlock(globals.clients_mutex);
 		} else {
@@ -1236,6 +1237,24 @@ static struct rayo_message *rayo_client_send(struct rayo_actor *from, struct ray
 		rayo_stream_send(RAYO_DOMAIN(client), msg->payload, file, line);
 	}
 	return NULL;
+}
+
+/**
+ * Send stanza to stream
+ * @param stream the stream
+ * @param msg the stanza
+ */
+static void rayo_stanza_send(struct rayo_stream *stream, iks *msg)
+{
+	/* send directly if client or outbound s2s stream */
+	if (!stream->s2s || !stream->incoming) {
+		iks_send(stream->parser, msg);
+		iks_delete(msg);
+	} else {
+		/* route message to outbound server stream */
+		rayo_stream_send(stream->jid, msg, __FILE__, __LINE__);
+		iks_delete(msg);
+	}
 }
 
 /**
@@ -2216,6 +2235,11 @@ static void on_client_presence(struct rayo_stream *stream, struct rayo_client *r
 		rclient->state = RCS_OFFLINE;
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
 	}
+
+	if (!rclient->is_local && rclient->state == RCS_OFFLINE) {
+		RAYO_DESTROY(rclient);
+		RAYO_UNLOCK(rclient);
+	}
 }
 
 /**
@@ -2227,6 +2251,7 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 {
 	struct rayo_actor *actor;
 	const char *from = iks_find_attrib(node, "from");
+	int locked = 0;
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, presence, state = %s\n", stream->jid, rayo_stream_state_to_string(stream->state));
 
@@ -2257,16 +2282,18 @@ static void on_stream_presence(struct rayo_stream *stream, iks *node)
 			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown client: %s\n", stream->jid, from);
 			return;
 		}
+	} else {
+		locked = 1;
 	}
 	if (actor->type == RAT_CLIENT) {
 		on_client_presence(stream, RAYO_CLIENT(actor), node);
 	} else {
 		/* TODO error */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, %s is not a client\n", stream->jid, from);
-		RAYO_UNLOCK(actor);
-		return;
 	}
-	RAYO_UNLOCK(actor);
+	if (locked) {
+		RAYO_UNLOCK(actor);
+	}
 }
 
 /**
@@ -2660,22 +2687,17 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 		case RSS_CONNECT:
 		case RSS_BIDI: {
 			iks *error = iks_new_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
-			iks_send(stream->parser, error);
-			iks_delete(error);
+			rayo_stanza_send(stream, error);
 			break;
 		}
 		case RSS_AUTHENTICATED: {
 			iks *cmd = iks_first_tag(iq);
 			if (cmd && !strcmp("bind", iks_name(cmd)) && !strcmp(IKS_NS_XMPP_BIND, iks_find_attrib_soft(cmd, "xmlns"))) {
 				iks *reply = on_iq_set_xmpp_bind(stream, iq);
-				if (reply) {
-					iks_send(stream->parser, reply);
-					iks_delete(reply);
-				}
+				rayo_stanza_send(stream, reply);
 			} else {
 				iks *error = iks_new_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
-				iks_send(stream->parser, error);
-				iks_delete(error);
+				rayo_stanza_send(stream, error);
 			}
 			break;
 		}
@@ -2683,14 +2705,10 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 			iks *cmd = iks_first_tag(iq);
 			if (cmd && !strcmp("session", iks_name(cmd)) && !strcmp(IKS_NS_XMPP_SESSION, iks_find_attrib_soft(cmd, "xmlns"))) {
 				iks *reply = on_iq_set_xmpp_session(stream, iq);
-				if (reply) {
-					iks_send(stream->parser, reply);
-					iks_delete(reply);
-				}
+				rayo_stanza_send(stream, reply);
 			} else {
 				iks *error = iks_new_error(iq, STANZA_ERROR_SERVICE_UNAVAILABLE);
-				iks_send(stream->parser, error);
-				iks_delete(error);
+				rayo_stanza_send(stream, error);
 			}
 			break;
 		}
@@ -2708,24 +2726,21 @@ static void on_stream_iq(struct rayo_stream *stream, iks *iq)
 				} else {
 					/* client doesn't exist until after authentication */
 					iks *error = iks_new_error(iq, STANZA_ERROR_NOT_ALLOWED);
-					iks_send(stream->parser, error);
-					iks_delete(error);
+					rayo_stanza_send(stream, error);
 				}
 				RAYO_UNLOCK(rclient);
 			} else {
 				/* client doesn't exist until after authentication */
 				iks *error = iks_new_error(iq, STANZA_ERROR_NOT_AUTHORIZED);
-				iks_send(stream->parser, error);
-				iks_delete(error);
+				rayo_stanza_send(stream, error);
 			}
 			break;
 		}
 		case RSS_SHUTDOWN:
 		case RSS_DESTROY:
 		case RSS_ERROR: {
-			iks *error = iks_new_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);
-			iks_send(stream->parser, error);
-			iks_delete(error);
+			iks *error = iks_new_error(iq, STANZA_ERROR_UNEXPECTED_REQUEST);\
+			rayo_stanza_send(stream, error);
 			break;
 		}
 	};
@@ -2895,6 +2910,7 @@ static void on_stream_dialback_result_key(struct rayo_stream *stream, iks *node)
 
 	/* this stream is not routable */
 	stream->state = RSS_READY;
+	stream->jid = switch_core_strdup(stream->pool, from);
 
 	/* TODO add to available streams for status logging */
 }
@@ -3696,11 +3712,17 @@ static void *SWITCH_THREAD_FUNC rayo_stream_thread(switch_thread_t *thread, void
 			}
 		}
 
-		/* handle all queued messages */
-		while (switch_queue_trypop(stream->msg_queue, (void *)&msg) == SWITCH_STATUS_SUCCESS) {
-			iks_send_raw(stream->parser, msg);
-			iks_free(msg);
-			stream->idle = 0;
+		/* send queued stanzas once stream is authorized for outbound stanzas */
+		if (stream->s2s && stream->state == RSS_READY) {
+			while (switch_queue_trypop(stream->msg_queue, (void *)&msg) == SWITCH_STATUS_SUCCESS) {
+				if (stream->s2s && !stream->incoming) {
+					iks_send_raw(stream->parser, msg);
+				} else {
+					/* TODO sent out wrong stream! */
+				}
+				iks_free(msg);
+				stream->idle = 0;
+			}
 		}
 
 		/* check for shutdown */
