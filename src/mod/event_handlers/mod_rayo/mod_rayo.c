@@ -143,6 +143,8 @@ struct rayo_listener {
 	char *addr;
 	/** listen port */
 	switch_port_t port;
+	/** access control list */
+	const char *acl;
 	/** listen socket */
 	switch_socket_t *socket;
 	/** pollset for listen socket */
@@ -4105,6 +4107,23 @@ static void *SWITCH_THREAD_FUNC rayo_listener_thread(switch_thread_t *thread, vo
 
 			errs = 0;
 
+			/* check if connection is allowed */
+			if (listener->acl) {
+				switch_sockaddr_t *sa = NULL;
+				int allowed = 0;
+				char remote_ip[50] = { 0 };
+				if (switch_socket_addr_get(&sa, SWITCH_TRUE, socket) == SWITCH_STATUS_SUCCESS && sa) {
+            		switch_get_addr(remote_ip, sizeof(remote_ip), sa);
+					allowed = switch_check_network_list_ip(remote_ip, listener->acl);
+				}
+				if (!allowed) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "ACL %s denies access to %s.\n", listener->acl, remote_ip);
+					switch_socket_shutdown(socket, SWITCH_SHUTDOWN_READWRITE);
+					switch_socket_close(socket);
+					continue;
+				}
+			}
+
 			/* start connection thread */
 			if (!(stream = rayo_stream_create(pool, NULL, 0, listener->s2s, 1))) {
 				switch_socket_shutdown(socket, SWITCH_SHUTDOWN_READWRITE);
@@ -4156,9 +4175,10 @@ static struct rayo_actor *rayo_server_create(const char *domain)
  * @param addr the IP address
  * @param port the port
  * @param type c2s or s2s
+ * @param acl name of optional access control list
  * @return SWITCH_STATUS_SUCCESS if successful
  */
-static switch_status_t rayo_listener_create(const char *addr, const char *port, const char *type)
+static switch_status_t rayo_listener_create(const char *addr, const char *port, const char *type, const char *acl)
 {
 	switch_memory_pool_t *pool;
 	struct rayo_listener *new_listener = NULL;
@@ -4173,6 +4193,9 @@ static switch_status_t rayo_listener_create(const char *addr, const char *port, 
 	new_listener = switch_core_alloc(pool, sizeof(*new_listener));
 	new_listener->pool = pool;
 	new_listener->addr = switch_core_strdup(pool, addr);
+	if (!zstr(acl)) {
+		new_listener->acl = switch_core_strdup(pool, acl);
+	}
 
 	if (!strcmp("s2s", type)) {
 		new_listener->s2s = 1;
@@ -4474,6 +4497,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 				const char *address = switch_xml_attr_soft(l, "address");
 				const char *port = switch_xml_attr_soft(l, "port");
 				const char *type = switch_xml_attr_soft(l, "type");
+				const char *acl = switch_xml_attr_soft(l, "acl");
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s listener: %s:%s\n", type, address, port);
 				if (strcmp("c2s", type) && strcmp("s2s", type)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Type must be \"c2s\" or \"s2s\"!\n");
@@ -4487,7 +4511,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Port must be an integer!\n");
 					return SWITCH_STATUS_FALSE;
 				}
-				if (rayo_listener_create(address, port, type) != SWITCH_STATUS_SUCCESS) {
+				if (rayo_listener_create(address, port, type, acl) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create %s listener: %s:%s\n", type, address, port);
  				}
 			}
@@ -4546,6 +4570,8 @@ static int dump_api(const char *cmd, switch_stream_handle_t *stream)
 	if (!zstr(cmd)) {
 		return 0;
 	}
+
+	stream->write_function(stream, "\nENTITIES\n");
 	switch_mutex_lock(globals.actors_mutex);
 	for (hi = switch_core_hash_first(globals.actors); hi; hi = switch_core_hash_next(hi)) {
 		struct rayo_actor *actor = NULL;
