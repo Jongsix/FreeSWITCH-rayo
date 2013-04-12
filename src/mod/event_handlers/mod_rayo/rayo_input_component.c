@@ -295,7 +295,7 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Failed to parse grammar body\n");
 		RAYO_UNLOCK(component);
 		RAYO_DESTROY(component);
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
+		return iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, "Failed to parse grammar body");
 	}
 
 	/* is this voice or dtmf srgs grammar? */
@@ -317,7 +317,7 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 		if (!jsgf_path) {
 			RAYO_UNLOCK(component);
 			RAYO_DESTROY(component);
-			return iks_new_iq_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Grammar error");
+			return iks_new_error_detailed(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR, "Grammar error");
 		}
 
 		/* acknowledge command */
@@ -352,7 +352,7 @@ static iks *start_call_input_component(struct rayo_actor *client, struct rayo_ac
 	const char *error = NULL;
 
 	if (!validate_call_input(input, &error)) {
-		return iks_new_iq_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, error);
+		return iks_new_error_detailed(iq, STANZA_ERROR_BAD_REQUEST, error);
 	}
 
 	/* create component */

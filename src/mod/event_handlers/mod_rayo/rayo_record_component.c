@@ -257,7 +257,7 @@ static iks *start_call_record_component(struct rayo_actor *client, struct rayo_a
 
 	component = record_component_create(call, iks_find_attrib(iq, "from"), record);
 	if (!component) {
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	if (start_call_record(session, component)) {
@@ -265,7 +265,7 @@ static iks *start_call_record_component(struct rayo_actor *client, struct rayo_a
 	} else {
 		RAYO_UNLOCK(component);
 		RAYO_DESTROY(component);
-		return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		return iks_new_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 
 	return NULL;
@@ -378,14 +378,14 @@ static iks *start_mixer_record_component(struct rayo_actor *client, struct rayo_
 
 	component = record_component_create(mixer, iks_find_attrib(iq, "from"), record);
 	if (!component) {
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	/* mixer doesn't allow "send" */
 	if (!strcmp("send", iks_find_attrib_soft(record, "direction"))) {
 		RAYO_UNLOCK(component);
 		RAYO_DESTROY(component);
-		return iks_new_iq_error(iq, STANZA_ERROR_BAD_REQUEST);
+		return iks_new_error(iq, STANZA_ERROR_BAD_REQUEST);
 	}
 
 	if (start_mixer_record(component)) {
@@ -393,7 +393,7 @@ static iks *start_mixer_record_component(struct rayo_actor *client, struct rayo_
 	} else {
 		RAYO_UNLOCK(component);
 		RAYO_DESTROY(component);
-		return iks_new_iq_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
+		return iks_new_error(iq, STANZA_ERROR_INTERNAL_SERVER_ERROR);
 	}
 
 	return NULL;
