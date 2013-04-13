@@ -17,6 +17,11 @@
 
 		<!-- servers to connect to -->
 		<connect port="5269" address="node.example.com" domain="example.com"/>
+
+		<!-- Authorized users -->
+		<users>
+			<user name="usera" password="1"/>
+		</users>
 	</domain>
 
 	<!-- URI mapping to endpoint / gateway -->
@@ -28,10 +33,5 @@
 		<dial-gateway uriprefix="user" dialprefix="" strip=""/>
 		<dial-gateway uriprefix="sofia" dialprefix="" strip=""/>
 	</dial-gateways>
-
-	<!-- Authorized users -->
-	<users>
-		<user name="usera" password="1"/>
-	</users>
 
 </configuration>
