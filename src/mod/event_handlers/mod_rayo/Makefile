@@ -15,7 +15,8 @@ LOCAL_OBJS= $(IKS_LA) \
 	rayo_prompt_component.o \
 	rayo_record_component.o \
 	sasl.o \
-	srgs.o
+	srgs.o \
+	xmpp_streams.o
 LOCAL_SOURCES=	\
 	iks_helpers.c \
 	nlsml.c \
@@ -25,7 +26,8 @@ LOCAL_SOURCES=	\
 	rayo_prompt_component.c \
 	rayo_record_component.c \
 	sasl.c \
-	srgs.c
+	srgs.c \
+	xmpp_streams.c
 include $(BASE)/build/modmake.rules
 
 $(IKS_LA): $(IKS_DIR) $(IKS_DIR)/.update
