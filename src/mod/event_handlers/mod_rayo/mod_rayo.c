@@ -175,8 +175,6 @@ struct rayo_mixer_subscriber {
 static struct {
 	/** module memory pool */
 	switch_memory_pool_t *pool;
-	/** users mapped to passwords */
-	switch_hash_t *users;
 	/** Rayo <iq> set commands mapped to functions */
 	switch_hash_t *command_handlers;
 	/** Rayo <presence> events mapped to functions */
