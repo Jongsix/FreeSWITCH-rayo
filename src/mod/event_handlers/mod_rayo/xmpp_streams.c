@@ -1083,7 +1083,6 @@ static int on_stream(void *user_data, int type, iks *node)
 				} else {
 					/* unknown first-level element */
 					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, unknown first-level element: %s\n", stream->jid, name);
-					stream->state = XSS_ERROR;
 				}
 			}
 			break;
