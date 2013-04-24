@@ -1138,6 +1138,8 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 	switch_event_t *event;
 	switch_frame_t *nframe;
 	switch_size_t len;
+	int mask = switch_core_media_bug_test_flag(bug, SMBF_MASK);
+	unsigned char null_data[SWITCH_RECOMMENDED_BUFFER_SIZE] = {0};
 
 	switch (type) {
 	case SWITCH_ABC_TYPE_INIT:
@@ -1157,7 +1159,9 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			if (rh->rready && rh->wready) {
 				nframe = switch_core_media_bug_get_native_read_frame(bug);
 				len = nframe->datalen;
-				switch_core_file_write(&rh->in_fh, nframe->data, &len);
+
+				
+				switch_core_file_write(&rh->in_fh, mask ? null_data : nframe->data, &len);
 			}
 		}
 		break;
@@ -1168,7 +1172,8 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			if (rh->rready && rh->wready) {			
 				nframe = switch_core_media_bug_get_native_write_frame(bug);
 				len = nframe->datalen;
-				switch_core_file_write(&rh->out_fh, nframe->data, &len);
+				switch_core_file_write(&rh->out_fh, mask ? null_data : nframe->data, &len);
+
 			}
 		}
 		break;
@@ -1196,7 +1201,7 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 				while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
 					len = (switch_size_t) frame.datalen / 2;
 
-					if (len && switch_core_file_write(rh->fh, data, &len) != SWITCH_STATUS_SUCCESS && rh->hangup_on_error) {
+					if (len && switch_core_file_write(rh->fh, mask ? null_data : data, &len) != SWITCH_STATUS_SUCCESS && rh->hangup_on_error) {
 						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error writing %s\n", rh->file);
 						switch_channel_hangup(channel, SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER);
 						switch_core_session_reset(session, SWITCH_TRUE, SWITCH_TRUE);
@@ -1219,9 +1224,9 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 				switch_event_fire(&event);
 			}
 
-			switch_channel_execute_on(channel, "record_post_process_exec_app");
+			switch_channel_execute_on(channel, SWITCH_RECORD_POST_PROCESS_EXEC_APP_VARIABLE);
 
-			if ((var = switch_channel_get_variable(channel, "record_post_process_exec_api"))) {
+			if ((var = switch_channel_get_variable(channel, SWITCH_RECORD_POST_PROCESS_EXEC_API_VARIABLE))) {
 				char *cmd = switch_core_session_strdup(session, var);
 				char *data, *expanded = NULL;
 				switch_stream_handle_t stream = { 0 };
@@ -1265,7 +1270,7 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 				
 				len = (switch_size_t) frame.datalen / 2;
 
-				if (len && switch_core_file_write(rh->fh, data, &len) != SWITCH_STATUS_SUCCESS && rh->hangup_on_error) {
+				if (len && switch_core_file_write(rh->fh, mask ? null_data : data, &len) != SWITCH_STATUS_SUCCESS && rh->hangup_on_error) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error writing %s\n", rh->file);
 					switch_channel_hangup(channel, SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER);
 					switch_core_session_reset(session, SWITCH_TRUE, SWITCH_TRUE);
@@ -1308,6 +1313,22 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 	return SWITCH_TRUE;
 }
 
+SWITCH_DECLARE(switch_status_t) switch_ivr_record_session_mask(switch_core_session_t *session, const char *file, switch_bool_t on)
+{
+	switch_media_bug_t *bug;
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+
+	if ((bug = switch_channel_get_private(channel, file))) {
+		if (on) {
+			switch_core_media_bug_set_flag(bug, SMBF_MASK);
+		} else {
+			switch_core_media_bug_clear_flag(bug, SMBF_MASK);
+		}
+		return SWITCH_STATUS_SUCCESS;
+	}
+	return SWITCH_STATUS_FALSE;
+}
+
 SWITCH_DECLARE(switch_status_t) switch_ivr_stop_record_session(switch_core_session_t *session, const char *file)
 {
 	switch_media_bug_t *bug;
@@ -1320,6 +1341,31 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_stop_record_session(switch_core_sessi
 		return SWITCH_STATUS_SUCCESS;
 	}
 	return SWITCH_STATUS_FALSE;
+}
+
+static void* switch_ivr_record_user_data_dup(switch_core_session_t *session, void *user_data) 
+{
+	struct record_helper *rh = (struct record_helper *) user_data, *dup = NULL;
+
+	dup = switch_core_session_alloc(session, sizeof(*dup));
+	memcpy(dup, rh, sizeof(*rh));
+	dup->file = switch_core_session_strdup(session, rh->file);
+
+	return dup;
+}
+
+SWITCH_DECLARE(switch_status_t) switch_ivr_transfer_recordings(switch_core_session_t *orig_session, switch_core_session_t *new_session)
+{
+	const char *var = NULL;
+	switch_channel_t *orig_channel = switch_core_session_get_channel(orig_session);
+	switch_channel_t *new_channel = switch_core_session_get_channel(new_session);
+
+	if ((var = switch_channel_get_variable(orig_channel, SWITCH_RECORD_POST_PROCESS_EXEC_API_VARIABLE))) {
+		switch_channel_set_variable(new_channel, SWITCH_RECORD_POST_PROCESS_EXEC_API_VARIABLE, var);
+	}
+	switch_channel_transfer_variable_prefix(orig_channel, new_channel, SWITCH_RECORD_POST_PROCESS_EXEC_APP_VARIABLE);
+	
+	return switch_core_media_bug_transfer_callback(orig_session, new_session, record_callback, switch_ivr_record_user_data_dup);
 }
 
 struct eavesdrop_pvt {
@@ -1535,7 +1581,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_eavesdrop_session(switch_core_session
 		switch_codec_implementation_t tread_impl = { 0 }, read_impl = { 0 };
 		switch_core_session_message_t msg = { 0 };
 		char cid_buf[1024] = "";
-		switch_caller_profile_t *cp = NULL;
+		switch_caller_profile_t *cp = NULL, *my_cp = NULL;
 		uint32_t sanity = 600;
 
 		if (!switch_channel_media_up(channel)) {
@@ -1657,25 +1703,28 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_eavesdrop_session(switch_core_session
 		msg.message_id = SWITCH_MESSAGE_INDICATE_BRIDGE;
 		switch_core_session_receive_message(session, &msg);
 		cp = switch_channel_get_caller_profile(tchannel);
+		my_cp = switch_channel_get_caller_profile(channel);
 		name = cp->caller_id_name;
 		num = cp->caller_id_number;
 
 		if (flags & ED_COPY_DISPLAY) {
-			const char *tmp_name = NULL, *tmp_num = NULL;
-			name = cp->callee_id_name;
-			num = cp->callee_id_number;
-			
-			if (!((tmp_name = switch_channel_get_variable(tchannel, "last_sent_callee_id_name")) 
-				  && (tmp_num = switch_channel_get_variable(tchannel, "last_sent_callee_id_number")))) {
-				
-				tmp_name = switch_channel_get_variable(tchannel, "callee_id_name");
-				tmp_num = switch_channel_get_variable(tchannel, "callee_id_number");
+			if (switch_channel_test_flag(tchannel, CF_BRIDGE_ORIGINATOR) || !switch_channel_test_flag(tchannel, CF_BRIDGED)) {
+				name = cp->callee_id_name;
+				num = cp->callee_id_number;
+			} else {
+				name = cp->caller_id_name;
+				num = cp->caller_id_number;
 			}
-			
-			if (tmp_name) name = tmp_name;
-			if (tmp_num) num = tmp_num;
-			
+
+			my_cp->callee_id_name = switch_core_strdup(my_cp->pool, name);
+			my_cp->callee_id_number = switch_core_strdup(my_cp->pool, num);
 		}
+
+		sanity = 300;
+		while(switch_channel_up(channel) && !switch_channel_media_ack(channel) && --sanity) {
+			switch_yield(10000);
+		}
+
 
 		switch_snprintf(cid_buf, sizeof(cid_buf), "%s|%s", name, num);
 		msg.string_arg = cid_buf;
@@ -3660,7 +3709,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_play_and_detect_speech(switch_core_se
 	}
 
 	/* start speech detection */
-	if (switch_ivr_detect_speech(session, mod_name, grammar, grammar, NULL, NULL) != SWITCH_STATUS_SUCCESS) {
+	if (switch_ivr_detect_speech(session, mod_name, grammar, "", NULL, NULL) != SWITCH_STATUS_SUCCESS) {
 		goto done;
 	}
 	recognizing = 1;

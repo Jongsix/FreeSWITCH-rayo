@@ -57,12 +57,11 @@ SWITCH_DECLARE_CONSTRUCTOR EventConsumer::EventConsumer(const char *event_name, 
 	switch_core_new_memory_pool(&pool);	
 	switch_queue_create(&events, len, pool);
 	node_index = 0;
+	ready = 1;
 	
 	if (!zstr(event_name)) {
 		bind(event_name, subclass_name);
 	}
-
-	ready = 1;
 }
 
 SWITCH_DECLARE(int) EventConsumer::bind(const char *event_name, const char *subclass_name)
@@ -252,11 +251,13 @@ SWITCH_DECLARE(const char *) API::executeString(const char *cmd)
 {
 	char *arg;
 	switch_stream_handle_t stream = { 0 };
-	char *mycmd = strdup(cmd);
-
-	switch_assert(mycmd);
+	char *mycmd = NULL;
 
 	this_check("");
+
+	mycmd = strdup(cmd);
+
+	switch_assert(mycmd);
 
 	if ((arg = strchr(mycmd, ' '))) {
 		*arg++ = '\0';

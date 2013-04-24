@@ -29,6 +29,7 @@
  * Bret McDanel <trixter AT 0xdecafbad.com>
  * Marcel Barbulescu <marcelbarbulescu@gmail.com>
  * Raymond Chandler <intralanman@gmail.com>
+ * Emmanuel Schmidbauer <e.schmidbauer@gmail.com> 
  *
  *
  * mod_sofia.h -- SOFIA SIP Endpoint
@@ -112,10 +113,10 @@ typedef struct private_object private_object_t;
 #define SOFIA_DEFAULT_PORT "5060"
 #define SOFIA_DEFAULT_TLS_PORT "5061"
 #define SOFIA_REFER_TO_VARIABLE "sip_refer_to"
-#define SOFIA_SECURE_MEDIA_VARIABLE "sip_secure_media"
-#define SOFIA_SECURE_MEDIA_CONFIRMED_VARIABLE "sip_secure_media_confirmed"
+#define SOFIA_SECURE_MEDIA_VARIABLE "rtp_secure_media"
+#define SOFIA_SECURE_MEDIA_CONFIRMED_VARIABLE "rtp_secure_media_confirmed"
 #define SOFIA_SECURE_VIDEO_CONFIRMED_VARIABLE "sip_secure_video_confirmed"
-//#define SOFIA_HAS_CRYPTO_VARIABLE "sip_has_crypto"
+//#define SOFIA_HAS_CRYPTO_VARIABLE "rtp_has_crypto"
 //#define SOFIA_HAS_VIDEO_CRYPTO_VARIABLE "sip_has_video_crypto"
 //#define SOFIA_CRYPTO_MANDATORY_VARIABLE "sip_crypto_mandatory"
 #define FREESWITCH_SUPPORT "update_display,send_info"
@@ -307,7 +308,6 @@ typedef enum {
 	TFLAG_3PCC_HAS_ACK,
 	TFLAG_UPDATING_DISPLAY,
 	TFLAG_ENABLE_SOA,
-	TFLAG_T38_PASSTHRU,
 	TFLAG_RECOVERED,
 	TFLAG_AUTOFLUSH_DURING_BRIDGE,
 	TFLAG_3PCC_INVITE,
@@ -876,7 +876,7 @@ void sofia_presence_event_handler(switch_event_t *event);
 void sofia_presence_cancel(void);
 switch_status_t config_sofia(sofia_config_t reload, char *profile_name);
 void sofia_reg_auth_challenge(sofia_profile_t *profile, nua_handle_t *nh, sofia_dispatch_event_t *de,
-							  sofia_regtype_t regtype, const char *realm, int stale);
+							  sofia_regtype_t regtype, const char *realm, int stale, long exptime);
 auth_res_t sofia_reg_parse_auth(sofia_profile_t *profile, sip_authorization_t const *authorization,
 								sip_t const *sip,
 								sofia_dispatch_event_t *de, const char *regstr, char *np, size_t nplen, char *ip, switch_event_t **v_event,
@@ -932,6 +932,7 @@ extern switch_endpoint_interface_t *sofia_endpoint_interface;
 void sofia_presence_set_chat_hash(private_object_t *tech_pvt, sip_t const *sip);
 switch_status_t sofia_on_hangup(switch_core_session_t *session);
 char *sofia_glue_get_url_from_contact(char *buf, uint8_t to_dup);
+char *sofia_glue_get_path_from_contact(char *buf);
 void sofia_presence_set_hash_key(char *hash_key, int32_t len, sip_t const *sip);
 void sofia_glue_sql_close(sofia_profile_t *profile, time_t prune);
 int sofia_glue_init_sql(sofia_profile_t *profile);

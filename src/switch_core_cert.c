@@ -102,6 +102,28 @@ static const EVP_MD *get_evp_by_name(const char *name)
 
 	return NULL;
 }
+#ifdef _MSC_VER
+/* Visual C do not have strsep? */
+char
+    *strsep(char **stringp, const char *delim)
+{
+	char *res;
+
+	if (!stringp || !*stringp || !**stringp)
+		return (char *) 0;
+
+	res = *stringp;
+	while (**stringp && !strchr(delim, **stringp))
+		++(*stringp);
+
+	if (**stringp) {
+		**stringp = '\0';
+		++(*stringp);
+	}
+
+	return res;
+}
+#endif
 
 SWITCH_DECLARE(int) switch_core_cert_verify(dtls_fingerprint_t *fp)
 {
@@ -141,7 +163,7 @@ SWITCH_DECLARE(int) switch_core_cert_expand_fingerprint(dtls_fingerprint_t *fp, 
 SWITCH_DECLARE(int) switch_core_cert_extract_fingerprint(X509* x509, dtls_fingerprint_t *fp)
 {
 	const EVP_MD *evp;
-	int i, j;
+	unsigned int i, j;
 
 	evp = get_evp_by_name(fp->type);
 	
@@ -245,7 +267,7 @@ SWITCH_DECLARE(int) switch_core_gen_certs(const char *prefix)
 		
 	//bio_err=BIO_new_fp(stderr, BIO_NOCLOSE);
 		
-	mkcert(&x509, &pkey, 512, 0, 365);
+	mkcert(&x509, &pkey, 2048, 0, 365);
 
 	//RSA_print_fp(stdout, pkey->pkey.rsa, 0);
 	//X509_print_fp(stdout, x509);
@@ -260,15 +282,13 @@ SWITCH_DECLARE(int) switch_core_gen_certs(const char *prefix)
 	} else {
 		if ((fp = fopen(pvt, "w"))) {
 			PEM_write_PrivateKey(fp, pkey, NULL, NULL, 0, NULL, NULL);
+			fclose(fp);
 		}
-
-		fclose(fp);
 		
 		if ((fp = fopen(rsa, "w"))) {
 			PEM_write_X509(fp, x509);
+			fclose(fp);
 		}
-
-		fclose(fp);
 	}
 
 	X509_free(x509);
@@ -315,7 +335,6 @@ static int mkcert(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days
 			if ((pk=EVP_PKEY_new()) == NULL)
 				{
 					abort(); 
-					return(0);
 				}
 		}
 	else
@@ -371,7 +390,7 @@ static int mkcert(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days
 	add_ext(x, NID_netscape_comment, "Self-Signed CERT for DTLS");
 
 
-	if (!X509_sign(x, pk, EVP_md5()))
+	if (!X509_sign(x, pk, EVP_sha1()))
 		goto err;
 
 	*x509p=x;

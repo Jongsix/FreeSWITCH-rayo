@@ -839,43 +839,37 @@ int main(int argc, char *argv[])
                                      | T30_SUPPORT_SELECTIVE_POLLING
                                      | T30_SUPPORT_SUB_ADDRESSING);
         t30_set_supported_image_sizes(t30_state[i],
-                                      T30_SUPPORT_US_LETTER_LENGTH
-                                    | T30_SUPPORT_US_LEGAL_LENGTH
-                                    | T30_SUPPORT_UNLIMITED_LENGTH
-                                    | T30_SUPPORT_215MM_WIDTH
-                                    | T30_SUPPORT_255MM_WIDTH
-                                    | T30_SUPPORT_303MM_WIDTH);
-        t30_set_supported_resolutions(t30_state[i],
-                                      T30_SUPPORT_STANDARD_RESOLUTION
-                                    | T30_SUPPORT_FINE_RESOLUTION
-                                    | T30_SUPPORT_SUPERFINE_RESOLUTION
-                                    | T30_SUPPORT_R8_RESOLUTION
-                                    | T30_SUPPORT_R16_RESOLUTION
-                                    | T30_SUPPORT_300_300_RESOLUTION
-                                    | T30_SUPPORT_400_400_RESOLUTION
-                                    | T30_SUPPORT_600_600_RESOLUTION
-                                    | T30_SUPPORT_1200_1200_RESOLUTION
-                                    | T30_SUPPORT_300_600_RESOLUTION
-                                    | T30_SUPPORT_400_800_RESOLUTION
-                                    | T30_SUPPORT_600_1200_RESOLUTION);
-        //t30_set_rx_encoding(t30_state[i], T4_COMPRESSION_ITU_T85);
+                                      T4_SUPPORT_WIDTH_215MM
+                                    | T4_SUPPORT_WIDTH_255MM
+                                    | T4_SUPPORT_WIDTH_303MM
+                                    | T4_SUPPORT_LENGTH_US_LETTER
+                                    | T4_SUPPORT_LENGTH_US_LEGAL
+                                    | T4_SUPPORT_LENGTH_UNLIMITED);
+        t30_set_supported_bilevel_resolutions(t30_state[i],
+                                              T4_SUPPORT_RESOLUTION_R8_STANDARD
+                                            | T4_SUPPORT_RESOLUTION_R8_FINE
+                                            | T4_SUPPORT_RESOLUTION_R8_SUPERFINE
+                                            | T4_SUPPORT_RESOLUTION_R16_SUPERFINE
+                                            | T4_SUPPORT_RESOLUTION_200_100
+                                            | T4_SUPPORT_RESOLUTION_200_200
+                                            | T4_SUPPORT_RESOLUTION_200_400
+                                            | T4_SUPPORT_RESOLUTION_300_300
+                                            | T4_SUPPORT_RESOLUTION_300_600
+                                            | T4_SUPPORT_RESOLUTION_400_400
+                                            | T4_SUPPORT_RESOLUTION_400_800
+                                            | T4_SUPPORT_RESOLUTION_600_600
+                                            | T4_SUPPORT_RESOLUTION_600_1200
+                                            | T4_SUPPORT_RESOLUTION_1200_1200);
+        t30_set_supported_colour_resolutions(t30_state[i], 0);
+        t30_set_supported_output_compressions(t30_state[i], T4_SUPPORT_COMPRESSION_T4_2D);
         t30_set_ecm_capability(t30_state[i], use_ecm);
-        if (use_ecm)
-        {
-            t30_set_supported_compressions(t30_state[i],
-                                           T30_SUPPORT_T4_1D_COMPRESSION
-                                         | T30_SUPPORT_T4_2D_COMPRESSION
-                                         | T30_SUPPORT_T6_COMPRESSION
-                                         //| T30_SUPPORT_T81_COMPRESSION
-                                         | T30_SUPPORT_T85_COMPRESSION
-                                         | T30_SUPPORT_T85_L0_COMPRESSION);
-        }
-        else
-        {
-            t30_set_supported_compressions(t30_state[i],
-                                           T30_SUPPORT_T4_1D_COMPRESSION
-                                         | T30_SUPPORT_T4_2D_COMPRESSION);
-        }
+        t30_set_supported_compressions(t30_state[i],
+                                       T4_SUPPORT_COMPRESSION_T4_1D
+                                     | T4_SUPPORT_COMPRESSION_T4_2D
+                                     | T4_SUPPORT_COMPRESSION_T6
+                                     //| T4_SUPPORT_COMPRESSION_t42_T81
+                                     | T4_SUPPORT_COMPRESSION_T85
+                                     | T4_SUPPORT_COMPRESSION_T85_L0);
         t30_set_minimum_scan_line_time(t30_state[i], scan_line_time);
 
         if (mode[i] == T38_GATEWAY_FAX)
@@ -951,6 +945,10 @@ int main(int argc, char *argv[])
                 logging = fax_get_logging_state(fax_state[i]);
                 span_log_bump_samples(logging, SAMPLES_PER_CHUNK);
 
+#if 0
+                /* Mute the signal */
+                vec_zeroi16(fax_rx_buf[i], SAMPLES_PER_CHUNK);
+#endif
                 fax_rx(fax_state[i], fax_rx_buf[i], SAMPLES_PER_CHUNK);
                 if (!t30_call_active(t30_state[i]))
                 {

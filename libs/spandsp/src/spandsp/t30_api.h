@@ -439,12 +439,10 @@ SPAN_DECLARE(int) t30_set_ecm_capability(t30_state_t *s, int enabled);
 /*! Specify the output encoding for TIFF files created during FAX reception.
     \brief Specify the output encoding for TIFF files created during FAX reception.
     \param s The T.30 context.
-    \param encoding The coding required. The options are T4_COMPRESSION_ITU_T4_1D,
-           T4_COMPRESSION_ITU_T4_2D, T4_COMPRESSION_ITU_T6. T6 is usually the
-           densest option, but support for it is broken in a number of software
-           packages.
+    \param supported_compressions Bit field list of the supported compression types, for
+           output of received page images.
     \return 0 if OK, else -1. */
-SPAN_DECLARE(int) t30_set_rx_encoding(t30_state_t *s, int encoding);
+SPAN_DECLARE(int) t30_set_supported_output_compressions(t30_state_t *s, int supported_compressions);
 
 /*! Specify the minimum scan line time supported by a T.30 context.
     \brief Specify minimum scan line time.
@@ -467,12 +465,19 @@ SPAN_DECLARE(int) t30_set_supported_modems(t30_state_t *s, int supported_modems)
     \return 0 if OK, else -1. */
 SPAN_DECLARE(int) t30_set_supported_compressions(t30_state_t *s, int supported_compressions);
 
-/*! Specify which resolutions are supported by a T.30 context.
-    \brief Specify supported resolutions.
+/*! Specify which bi-level resolutions are supported by a T.30 context.
+    \brief Specify supported bi-level resolutions.
     \param s The T.30 context.
     \param supported_resolutions Bit field list of the supported resolutions.
     \return 0 if OK, else -1. */
-SPAN_DECLARE(int) t30_set_supported_resolutions(t30_state_t *s, int supported_resolutions);
+SPAN_DECLARE(int) t30_set_supported_bilevel_resolutions(t30_state_t *s, int supported_resolutions);
+
+/*! Specify which colour resolutions are supported by a T.30 context.
+    \brief Specify supported colour resolutions.
+    \param s The T.30 context.
+    \param supported_resolutions Bit field list of the supported resolutions.
+    \return 0 if OK, else -1. */
+SPAN_DECLARE(int) t30_set_supported_colour_resolutions(t30_state_t *s, int supported_resolutions);
 
 /*! Specify which images sizes are supported by a T.30 context.
     \brief Specify supported image sizes.

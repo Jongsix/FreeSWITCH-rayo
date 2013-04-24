@@ -2267,16 +2267,19 @@ SWITCH_STANDARD_APP(att_xfer_function)
 {
 	switch_core_session_t *peer_session = NULL;
 	switch_call_cause_t cause = SWITCH_CAUSE_NORMAL_CLEARING;
-	switch_channel_t *channel, *peer_channel = NULL;
+	switch_channel_t *channel = switch_core_session_get_channel(session), *peer_channel = NULL;
 	const char *bond = NULL;
 	switch_core_session_t *b_session = NULL;
+	switch_bool_t follow_recording = switch_true(switch_channel_get_variable(channel, "recording_follow_attxfer"));
 	
-	channel = switch_core_session_get_channel(session);
-
 	bond = switch_channel_get_partner_uuid(channel);
 	switch_channel_set_variable(channel, SWITCH_SOFT_HOLDING_UUID_VARIABLE, bond);
 	switch_core_event_hook_add_state_change(session, tmp_hanguphook);
 
+	if (follow_recording && (b_session = switch_core_session_locate(bond))) {
+		switch_ivr_transfer_recordings(b_session, session);
+		switch_core_session_rwunlock(b_session);
+	}
 
 	if (switch_ivr_originate(session, &peer_session, &cause, data, 0, NULL, NULL, NULL, NULL, NULL, SOF_NONE, NULL)
 		!= SWITCH_STATUS_SUCCESS || !peer_session) {
@@ -2300,23 +2303,24 @@ SWITCH_STANDARD_APP(att_xfer_function)
 	}
 
 	if (bond) {
-		char buf[128] = "";
 		int br = 0;
 
 		switch_channel_set_variable(channel, SWITCH_SIGNAL_BOND_VARIABLE, bond);
 
 		if (!switch_channel_down(peer_channel)) {
 			if (!switch_channel_ready(channel)) {
-				switch_status_t status = switch_ivr_uuid_bridge(switch_core_session_get_uuid(peer_session), bond);
+				switch_status_t status;
+
+				if (follow_recording) {
+					switch_ivr_transfer_recordings(session, peer_session);
+				}
+				status = switch_ivr_uuid_bridge(switch_core_session_get_uuid(peer_session), bond);
 				att_xfer_set_result(peer_channel, status);
 				br++;
 			} else if ((b_session = switch_core_session_locate(bond))) {
 				switch_channel_t *b_channel = switch_core_session_get_channel(b_session);
-				switch_snprintf(buf, sizeof(buf), "%s %s", switch_core_session_get_uuid(peer_session), switch_core_session_get_uuid(session));
-				switch_channel_set_variable(b_channel, "xfer_uuids", buf);
-
-				switch_snprintf(buf, sizeof(buf), "%s %s", switch_core_session_get_uuid(peer_session), bond);
-				switch_channel_set_variable(channel, "xfer_uuids", buf);
+				switch_channel_set_variable_printf(b_channel, "xfer_uuids", "%s %s", switch_core_session_get_uuid(peer_session), switch_core_session_get_uuid(session));
+				switch_channel_set_variable_printf(channel, "xfer_uuids", "%s %s", switch_core_session_get_uuid(peer_session), bond);
 
 				switch_core_event_hook_add_state_change(session, hanguphook);
 				switch_core_event_hook_add_state_change(b_session, hanguphook);
@@ -2785,6 +2789,16 @@ SWITCH_STANDARD_APP(record_function)
 SWITCH_STANDARD_APP(preprocess_session_function)
 {
 	switch_ivr_preprocess_session(session, (char *) data);
+}
+
+SWITCH_STANDARD_APP(record_session_mask_function)
+{
+	switch_ivr_record_session_mask(session, (char *) data, SWITCH_TRUE);
+}
+
+SWITCH_STANDARD_APP(record_session_unmask_function)
+{
+	switch_ivr_record_session_mask(session, (char *) data, SWITCH_FALSE);
 }
 
 SWITCH_STANDARD_APP(record_session_function)
@@ -5455,6 +5469,10 @@ SWITCH_STANDARD_API(page_api_function)
 #define SPEAK_DESC "Speak text to a channel via the tts interface"
 #define DISPLACE_DESC "Displace audio from a file to the channels input"
 #define SESS_REC_DESC "Starts a background recording of the entire session"
+
+#define SESS_REC_MASK_DESC "Replace audio in a recording with blank data to mask critical voice sections"
+#define SESS_REC_UNMASK_DESC "Resume normal operation after calling mask"
+
 #define STOP_SESS_REC_DESC "Stops a background recording of the entire session"
 #define SCHED_TRANSF_DESCR "Schedule a transfer in the future"
 #define SCHED_BROADCAST_DESCR "Schedule a broadcast in the future"
@@ -5686,6 +5704,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_dptools_load)
 				   "\n\t<min> <max> <tries> <timeout> <terminators> <file> <invalid_file> <var_name> <regexp> [<digit_timeout>] ['<failure_ext> [failure_dp [failure_context]]']", SAF_NONE);
 	SWITCH_ADD_APP(app_interface, "stop_record_session", "Stop Record Session", STOP_SESS_REC_DESC, stop_record_session_function, "<path>", SAF_NONE);
 	SWITCH_ADD_APP(app_interface, "record_session", "Record Session", SESS_REC_DESC, record_session_function, "<path> [+<timeout>]", SAF_MEDIA_TAP);
+	SWITCH_ADD_APP(app_interface, "record_session_mask", "Mask audio in recording", SESS_REC_MASK_DESC, record_session_mask_function, "<path>", SAF_MEDIA_TAP);
+	SWITCH_ADD_APP(app_interface, "record_session_unmask", "Resume recording", SESS_REC_UNMASK_DESC, record_session_unmask_function, "<path>", SAF_MEDIA_TAP);
 	SWITCH_ADD_APP(app_interface, "record", "Record File", "Record a file from the channels input", record_function,
 				   "<path> [<time_limit_secs>] [<silence_thresh>] [<silence_hits>]", SAF_NONE);
 	SWITCH_ADD_APP(app_interface, "preprocess", "pre-process", "pre-process", preprocess_session_function, "", SAF_NONE);

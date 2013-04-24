@@ -1219,7 +1219,9 @@ switch_status_t skinny_handle_stimulus_message(listener_t *listener, skinny_mess
 			break;
 		case SKINNY_BUTTON_SPEED_DIAL:
 			skinny_speed_dial_get(listener, request->data.stimulus.instance, &button_speed_dial);
-			if(strlen(button_speed_dial->line) > 0) {
+
+			session = skinny_profile_find_session(listener->profile, listener, &line_instance, 0);
+			if(!session && strlen(button_speed_dial->line) > 0) {
 				skinny_create_incoming_session(listener, &line_instance, &session);
 				skinny_session_process_dest(session, listener, line_instance, button_speed_dial->line, '\0', 0);
 			}
@@ -2106,8 +2108,8 @@ switch_status_t skinny_handle_request(listener_t *listener, skinny_message_t *re
 {
 	if (listener->profile->debug >= 10 || request->type != KEEP_ALIVE_MESSAGE) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-				"Received %s (type=%x,length=%d) from %s:%d.\n", skinny_message_type2str(request->type), request->type, request->length,
-				listener->device_name, listener->device_instance);
+				"Received %s (type=%x,length=%d) from %s:%d at %s:%d.\n", skinny_message_type2str(request->type), request->type, request->length,
+				listener->device_name, listener->device_instance, listener->remote_ip, listener->remote_port);
 	}
 	if(zstr(listener->device_name) && request->type != REGISTER_MESSAGE && request->type != ALARM_MESSAGE && request->type != XML_ALARM_MESSAGE) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,

@@ -464,6 +464,7 @@ Recommends:
  freeswitch-mod-spandsp (= \${binary:Version}),
  freeswitch-mod-spy (= \${binary:Version}),
  freeswitch-mod-stress (= \${binary:Version}),
+ freeswitch-mod-translate (= \${binary:Version}),
  freeswitch-mod-valet-parking (= \${binary:Version}),
  freeswitch-mod-vmd (= \${binary:Version}),
  freeswitch-mod-voicemail (= \${binary:Version}),
@@ -808,7 +809,7 @@ print_lang_control () {
 Package: freeswitch-lang-${lang//_/-}
 Architecture: all
 Depends: \${misc:Depends}
-Recommends: freeswitch-sounds-en-${lang} (= \${binary:Version})
+Recommends: freeswitch-sounds-${lang} (= \${binary:Version})
 Description: ${lang_name} language files for FreeSWITCH
  $(debian_wrap "${fs_description}")
  .

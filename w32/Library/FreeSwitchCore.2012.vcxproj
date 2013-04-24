@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -92,8 +92,8 @@
     </PreBuildEvent>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;PCRE_STATIC;STATICLIB;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;..\..\libs\openssl-1.0.1c\include;..\..\libs\sofia-sip\libsofia-sip-ua\sdp;..\..\libs\sofia-sip\libsofia-sip-ua\su;..\..\libs\sofia-sip\win32;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;PCRE_STATIC;STATICLIB;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;LIBSOFIA_SIP_UA_STATIC;HAVE_OPENSSL;HAVE_OPENSSL_DTLS_SRTP;HAVE_OPENSSL_DTLS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -138,6 +138,9 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
 
 </Command>
     </PostBuildEvent>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)src\include</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <BuildLog />
@@ -150,8 +153,8 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;PCRE_STATIC;STATICLIB;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;..\..\libs\openssl-1.0.1c\include;..\..\libs\sofia-sip\libsofia-sip-ua\sdp;..\..\libs\sofia-sip\libsofia-sip-ua\su;..\..\libs\sofia-sip\win32;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;PCRE_STATIC;STATICLIB;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;LIBSOFIA_SIP_UA_STATIC;HAVE_OPENSSL;HAVE_OPENSSL_DTLS_SRTP;HAVE_OPENSSL_DTLS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -202,8 +205,8 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
     </PreBuildEvent>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;STATICLIB;CRASH_PROT;PCRE_STATIC;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;..\..\libs\openssl-1.0.1c\include;..\..\libs\sofia-sip\libsofia-sip-ua\sdp;..\..\libs\sofia-sip\libsofia-sip-ua\su;..\..\libs\sofia-sip\win32;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;STATICLIB;CRASH_PROT;PCRE_STATIC;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;LIBSOFIA_SIP_UA_STATIC;HAVE_OPENSSL;HAVE_OPENSSL_DTLS_SRTP;HAVE_OPENSSL_DTLS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader>Create</PrecompiledHeader>
       <PrecompiledHeaderFile>switch.h</PrecompiledHeaderFile>
@@ -251,8 +254,8 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
     </Midl>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;STATICLIB;CRASH_PROT;PCRE_STATIC;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\src\include;..\..\libs\include;..\..\libs\srtp\include;..\..\libs\srtp\crypto\include;..\..\libs\libteletone\src;..\..\libs\win32\sqlite;..\..\libs\pcre;..\..\libs\stfu;..\..\libs\speex\include;..\..\libs\spandsp\src\msvc;..\..\libs\spandsp\src;..\..\libs\tiff-4.0.2\libtiff;..\..\libs\libzrtp\include;..\..\libs\libzrtp\third_party\bgaes;..\..\libs\libzrtp\third_party\bnlib;..\..\libs\libtpl-1.5\src;..\..\libs\libtpl-1.5\src\win;..\..\libs\openssl-1.0.1c\include;..\..\libs\sofia-sip\libsofia-sip-ua\sdp;..\..\libs\sofia-sip\libsofia-sip-ua\su;..\..\libs\sofia-sip\win32;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;FREESWITCHCORE_EXPORTS;STATICLIB;CRASH_PROT;PCRE_STATIC;ENABLE_ZRTP;TPL_NOLIB;STFU_EXPORTS;LIBSOFIA_SIP_UA_STATIC;HAVE_OPENSSL;HAVE_OPENSSL_DTLS_SRTP;HAVE_OPENSSL_DTLS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader>Create</PrecompiledHeader>
       <PrecompiledHeaderFile>switch.h</PrecompiledHeaderFile>
@@ -759,7 +762,6 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
     <ClInclude Include="..\..\src\include\switch_resample.h" />
     <ClInclude Include="..\..\src\include\switch_rtp.h" />
     <ClInclude Include="..\..\src\include\switch_scheduler.h" />
-    <ClInclude Include="..\..\src\include\switch_sqlite.h" />
     <ClInclude Include="..\..\src\include\switch_stun.h" />
     <ClInclude Include="..\..\src\include\switch_types.h" />
     <ClInclude Include="..\..\src\include\switch_utils.h" />
@@ -796,6 +798,15 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
 </Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">..\..\src\include\switch.h;..\..\src\include\switch_apr.h;..\..\src\include\switch_buffer.h;..\..\src\include\switch_caller.h;..\..\src\include\switch_channel.h;..\..\src\include\switch_console.h;..\..\src\include\switch_core.h;..\..\src\include\switch_event.h;..\..\src\include\switch_frame.h;..\..\src\include\switch_ivr.h;..\..\src\include\switch_loadable_module.h;..\..\src\include\switch_log.h;..\..\src\include\switch_module_interfaces.h;..\..\src\include\switch_platform.h;..\..\src\include\switch_resample.h;..\..\src\include\switch_rtp.h;..\..\src\include\switch_sqlite.h;..\..\src\include\switch_stun.h;..\..\src\include\switch_types.h;..\..\src\include\switch_utils.h;..\..\src\include\switch_xml.h;..\..\src\switch_buffer.c;..\..\src\switch_caller.c;..\..\src\switch_channel.c;..\..\src\switch_config.c;..\..\src\switch_console.c;..\..\src\switch_core.c;..\..\src\switch_event.c;..\..\src\switch_ivr.c;..\..\src\switch_loadable_module.c;..\..\src\switch_log.c;..\..\src\switch_resample.c;..\..\src\switch_rtp.c;..\..\src\switch_stun.c;..\..\src\switch_utils.c;..\..\src\switch_xml.c;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">..\..\src\include\switch_version.h;lastversion;%(Outputs)</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="switch_version.inc.template">
+      <Message>Generating switch_version.inc</Message>
+      <Command>cscript /nologo "$(ProjectDir)..\..\libs\win32\util.vbs" Version  "$(ProjectDir)" "$(ProjectDir)..\..\" "$(ProjectDir)switch_version.inc.template" "$(ProjectDir)switch_version.inc"</Command>
+      <Outputs>$(ProjectDir)switch_version.inc</Outputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$ProjectDir)include\switch_version.h;$(ProjectDir)lastversion</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$ProjectDir)include\switch_version.h;$(ProjectDir)lastversion</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$ProjectDir)include\switch_version.h;$(ProjectDir)lastversion</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$ProjectDir)include\switch_version.h;$(ProjectDir)lastversion</AdditionalInputs>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
@@ -846,6 +857,19 @@ if not exist "$(OutDir)htdocs" xcopy "$(SolutionDir)htdocs\*.*" "$(OutDir)htdocs
       <Project>{6edfefd5-3596-4fa9-8eba-b331547b35a3}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="FreeSwitchCoreLib.rc">
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">_DEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+      </PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_WIN64;_DEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">_WIN64</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(ProjectDir)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="switch_version.rc2" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

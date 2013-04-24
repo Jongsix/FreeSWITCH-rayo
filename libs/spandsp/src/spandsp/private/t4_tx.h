@@ -82,6 +82,10 @@ typedef struct
     int x_resolution;
     /*! \brief Row-to-row (Y) resolution in pixels per metre on the wire. */
     int y_resolution;
+    /*! \brief Code for the combined X and Y resolution of the image in the file. */
+    int resolution_code;
+    /*! \brief Image type - bi-level, gray, colour, etc. */
+    int image_type;
 } t4_tx_metadata_t;
 
 /*!
@@ -97,10 +101,6 @@ struct t4_tx_state_s
 
     /*! \brief The type of compression used between the FAX machines. */
     int line_encoding;
-
-    int line_encoding_bilevel;
-    int line_encoding_gray;
-    int line_encoding_colour;
 
     /*! \brief When superfine and fine resolution images need to be squahed vertically
                to a lower resolution, this value sets the number of source rows which
@@ -146,11 +146,17 @@ struct t4_tx_state_s
     union
     {
         t4_t6_encode_state_t t4_t6;
+        t85_encode_state_t t85;
+#if defined(SPANDSP_SUPPORT_T88)
+        t88_encode_state_t t88;
+#endif
         t42_encode_state_t t42;
 #if defined(SPANDSP_SUPPORT_T43)
         t43_encode_state_t t43;
 #endif
-        t85_encode_state_t t85;
+#if defined(SPANDSP_SUPPORT_T45)
+        t45_encode_state_t t45;
+#endif
     } encoder;
 
     image_translate_state_t translator;
@@ -159,6 +165,11 @@ struct t4_tx_state_s
     lab_params_t lab_params;
     uint8_t *colour_map;
     int colour_map_entries;
+
+    uint8_t *pre_encoded_buf;
+    int pre_encoded_len;
+    int pre_encoded_ptr;
+    int pre_encoded_bit;
 
     /* Supporting information, like resolutions, which the backend may want. */
     t4_tx_metadata_t metadata;

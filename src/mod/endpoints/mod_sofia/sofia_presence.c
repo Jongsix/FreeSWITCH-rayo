@@ -2091,6 +2091,7 @@ static void _send_presence_notify(sofia_profile_t *profile,
 	char *route_uri = NULL, *o_contact_dup = NULL, *tmp, *to_uri, *dcs = NULL;
 	const char *tp;
 	char *cparams = NULL;
+	char *path = NULL;
 
 	if (zstr(full_to) || zstr(full_from) || zstr(o_contact)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "MISSING DATA TO SEND NOTIFY.\n");
@@ -2100,14 +2101,13 @@ static void _send_presence_notify(sofia_profile_t *profile,
 	if ((cparams = strstr(o_contact, ";_;"))) {
 		cparams += 3;
 	}
-		
 
+	path = sofia_glue_get_path_from_contact((char *) o_contact);
 
-	
-    tmp = (char *)o_contact;
+	tmp = (char *)o_contact;
 	o_contact_dup = sofia_glue_get_url_from_contact(tmp, 1);
 
-	
+
 	if ((tp = switch_stristr("transport=", o_contact_dup))) {
 		tp += 10;
 	}
@@ -2253,7 +2253,7 @@ static void _send_presence_notify(sofia_profile_t *profile,
 			   TAG_IF(route_uri, NUTAG_PROXY(route_uri)), 
 			   TAG_IF(dst->route, SIPTAG_ROUTE_STR(dst->route)),
 			   TAG_IF(user_via, SIPTAG_VIA_STR(user_via)),
-
+			   TAG_IF(path, SIPTAG_RECORD_ROUTE_STR(path)),
 			   
 			   SIPTAG_FROM_STR(full_to),
 			   SIPTAG_TO_STR(full_from),
@@ -2279,8 +2279,7 @@ static void _send_presence_notify(sofia_profile_t *profile,
 	switch_safe_free(o_contact_dup);
 	switch_safe_free(send_contact);
 	switch_safe_free(our_contact_dup);
-
-
+	switch_safe_free(path);
 }
 
 
@@ -2701,12 +2700,17 @@ static int sofia_presence_sub_callback(void *pArg, int argc, char **argv, char *
 		const char *to_user = switch_str_nil(switch_event_get_header(helper->event, "variable_sip_to_user"));
 		const char *from_user = switch_str_nil(switch_event_get_header(helper->event, "variable_sip_from_user"));
 		const char *disable_early = switch_str_nil(switch_event_get_header(helper->event, "variable_presence_disable_early"));
+		const char *answer_epoch = switch_str_nil(switch_event_get_header(helper->event, "variable_answer_epoch"));
+		int answered = 0;
 		char *clean_to_user = NULL;
 		char *clean_from_user = NULL;
 		int force_status = 0;
-		
-		char *call_info_state = switch_event_get_header(helper->event, "presence-call-info-state");
 		int term = 0;
+
+		if (answer_epoch) {
+			answered = atoi(answer_epoch);
+		}
+
 
 		if (user_agent && switch_stristr("snom", user_agent) && uuid) {
 			default_dialog = "full" ;
@@ -2846,7 +2850,8 @@ static int sofia_presence_sub_callback(void *pArg, int argc, char **argv, char *
 
 
 			if ((sofia_test_pflag(profile, PFLAG_PRESENCE_DISABLE_EARLY) || switch_true(disable_early)) && 
-				(!zstr(call_info_state) && (!strcasecmp(call_info_state, "alterting") || !strcasecmp(call_info_state, "progressing")))) {
+				((!zstr(astate) && (!strcasecmp(astate, "early") || !strcasecmp(astate, "ringing") || (!strcasecmp(astate, "terminated") && !answered))))) {
+				switch_safe_free(stream.data);
 				goto end;
 			}
 			
@@ -3276,26 +3281,22 @@ static int broadsoft_sla_gather_state_callback(void *pArg, int argc, char **argv
 
 	data = switch_core_hash_find(sh->hash, key);
 
-	if (uuid && (session = switch_core_session_locate(uuid))) {
+	if (strcasecmp(state, "idle") && uuid && (session = switch_core_session_locate(uuid))) {
 		switch_channel_t *channel = switch_core_session_get_channel(session);
 
-		if (switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_INBOUND) {
+		if (switch_channel_test_flag(channel, CF_BRIDGE_ORIGINATOR)) {
+			callee_name = switch_channel_get_variable(channel, "callee_id_name");
+			callee_number = switch_channel_get_variable(channel, "callee_id_number");
 
-			if (zstr((callee_name = switch_channel_get_variable(channel, "effective_callee_id_name"))) &&
-				zstr((callee_name = switch_channel_get_variable(channel, "sip_callee_id_name")))) {
-				callee_name = switch_channel_get_variable(channel, "callee_id_name");
-			}
-			
-			if (zstr((callee_number = switch_channel_get_variable(channel, "effective_callee_id_number"))) &&
-				zstr((callee_number = switch_channel_get_variable(channel, "sip_callee_id_number"))) &&
-				zstr((callee_number = switch_channel_get_variable(channel, "callee_id_number")))) {
+			if (zstr(callee_number)) {
 				callee_number = switch_channel_get_variable(channel, "destination_number");
 			}
+				
 		} else {
 			callee_name = switch_channel_get_variable(channel, "caller_id_name");
 			callee_number = switch_channel_get_variable(channel, "caller_id_number");
 		}
-		
+
 		if (zstr(callee_name) && !zstr(callee_number)) {
 			callee_name = callee_number;
 		}
@@ -3307,8 +3308,19 @@ static int broadsoft_sla_gather_state_callback(void *pArg, int argc, char **argv
 		if (!zstr(callee_name)) {
 			callee_name = switch_sanitize_number(switch_core_session_strdup(session, callee_name));
 		}
+
+
+		//if (switch_channel_get_state(channel) != CS_EXECUTE) {
+			//callee_number = NULL;
+		//}
+
 		switch_core_session_rwunlock(session);
 	}
+
+	if (data && strstr(data, info)) {
+		return 0;
+	}
+
 
 	if (!zstr(callee_number)) {
 		if (zstr(callee_name)) {
@@ -3671,9 +3683,9 @@ void sofia_presence_handle_sip_i_subscribe(int status,
 		sstr = switch_mprintf("active;expires=%ld", exp_delta);
 		
 		sql = switch_mprintf("update sip_subscriptions "
-							 "set expires=%ld,contact='%q' "
+							 "set expires=%ld "
 							 "where hostname='%q' and profile_name='%q' and call_id='%q' and profile_name='%q'",
-							 (long) switch_epoch_time_now(NULL) + exp_delta, contact_str, mod_sofia_globals.hostname, profile->name,
+							 (long) switch_epoch_time_now(NULL) + exp_delta, mod_sofia_globals.hostname, profile->name,
 							 call_id, profile->name);
 
 		if (mod_sofia_globals.debug_presence > 0 || mod_sofia_globals.debug_sla > 0) {
@@ -4246,6 +4258,10 @@ void sofia_presence_handle_sip_i_publish(nua_t *nua, sofia_profile_t *profile, n
 		switch_event_t *event;
 		char *sql;
 		char *full_agent = NULL;
+		char network_ip[80];
+		int network_port = 0;
+
+		sofia_glue_get_addr(de->data->e_msg, network_ip, sizeof(network_ip), &network_port);
 			
 		pd_dup = strdup(payload->pl_data);
 
@@ -4287,15 +4303,19 @@ void sofia_presence_handle_sip_i_publish(nua_t *nua, sofia_profile_t *profile, n
 				rpid = note_txt = "Unregistered";
 				if (sofia_test_pflag(profile, PFLAG_MULTIREG)) {
 					count = sofia_reg_reg_count(profile, from_user, from_host);
-					sub_count = sofia_presence_contact_count(profile, contact_str);
+
+					if (count != 1) {
+						/* Don't broadcast offline when there is more than one client or one signing off makes them all appear to sign off on some clients */
+						count = 0;
+					} else {
+						sub_count = sofia_presence_contact_count(profile, contact_str);
+					}
 				}
 			}
 
-			/* if (count > 1) let's not and say we did or all the clients who subscribe to their own presence will think they selves is offline */
-
 			event_type = sip_header_as_string(nh->nh_home, (void *) sip->sip_event);
 
-			if (count != 1) {
+			if (count) {
 				if ((sql = switch_mprintf("delete from sip_presence where sip_user='%q' and sip_host='%q' "
 										  " and profile_name='%q' and hostname='%q'", 
 										  from_user, from_host, profile->name, mod_sofia_globals.hostname))) {
@@ -4303,10 +4323,10 @@ void sofia_presence_handle_sip_i_publish(nua_t *nua, sofia_profile_t *profile, n
 				}
 					
 				if (sub_count > 0 && (sql = switch_mprintf("insert into sip_presence (sip_user, sip_host, status, rpid, expires, user_agent,"
-														   " profile_name, hostname, open_closed) "
-														   "values ('%q','%q','%q','%q',%ld,'%q','%q','%q','%q')",
+														   " profile_name, hostname, open_closed, network_ip, network_port) "
+														   "values ('%q','%q','%q','%q',%ld,'%q','%q','%q','%q','%q','%d')",
 														   from_user, from_host, note_txt, rpid, exp, full_agent, profile->name, 
-														   mod_sofia_globals.hostname, open_closed))) {
+														   mod_sofia_globals.hostname, open_closed, network_ip, network_port))) {
 					
 					sofia_glue_execute_sql_now(profile, &sql, SWITCH_TRUE);
 				}

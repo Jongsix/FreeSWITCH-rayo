@@ -50,10 +50,16 @@ struct t30_state_s
     int iaf;
     /*! \brief A bit mask of the currently supported modem types. */
     int supported_modems;
-    /*! \brief A bit mask of the currently supported image compression modes. */
+    /*! \brief A bit mask of the currently supported image compression modes for use
+               between FAX entities. */
     int supported_compressions;
-    /*! \brief A bit mask of the currently supported image resolutions. */
-    int supported_resolutions;
+    /*! \brief A bit mask of the currently supported image compression modes for the output
+               of received page images. */
+    int supported_output_compressions;
+    /*! \brief A bit mask of the currently supported bi-level image resolutions. */
+    int supported_bilevel_resolutions;
+    /*! \brief A bit mask of the currently supported gray-scale and colour image resolutions. */
+    int supported_colour_resolutions;
     /*! \brief A bit mask of the currently supported image sizes. */
     int supported_image_sizes;
     /*! \brief A bit mask of the currently supported T.30 special features. */
@@ -157,8 +163,6 @@ struct t30_state_s
     int local_dis_dtc_len;
     /*! \brief The last DIS or DTC message received form the far end. */
     uint8_t far_dis_dtc_frame[T30_MAX_DIS_DTC_DCS_LEN];
-    /*! \brief The length of the last DIS or DTC message received form the far end. */
-    int far_dis_dtc_len;
     /*! \brief TRUE if a valid DIS has been received from the far end. */
     int dis_received;
 
@@ -218,18 +222,24 @@ struct t30_state_s
 
     /*! \brief TRUE if a local T.30 interrupt is pending. */
     int local_interrupt_pending;
-    /*! \brief The image coding to be used on the line for non-bilevel images. */
-    int multilevel_line_encoding;
+    /*! \brief The common ground in compression schemes between the local and far ends. */
+    int mutual_compressions;
+    /*! \brief The common group of supported bi-level image resolutions. */
+    int mutual_bilevel_resolutions;
+    /*! \brief The common group of supported colour image resolutions. */
+    int mutual_colour_resolutions;
+    /*! \brief The common group of supported image sizes. */
+    int mutual_image_sizes;
     /*! \brief The image coding being used on the line. */
     int line_encoding;
-    /*! \brief The image coding being used for output files. */
-    int output_encoding;
     /*! \brief The current DCS message minimum scan time code. */
     uint8_t min_scan_time_code;
     /*! \brief The X direction resolution of the current image, in pixels per metre. */
     int x_resolution;
     /*! \brief The Y direction resolution of the current image, in pixels per metre. */
     int y_resolution;
+    /*! \brief The resolution code for the current page. */
+    int current_page_resolution;
     /*! \brief The width of the current image, in pixels. */
     t4_image_width_t image_width;
     /*! \brief Current number of retries of the action in progress. */

@@ -139,6 +139,8 @@ SWITCH_BEGIN_EXTERN_C
 #define SWITCH_TRANSFER_HISTORY_VARIABLE "transfer_history"
 #define SWITCH_TRANSFER_SOURCE_VARIABLE "transfer_source"
 #define SWITCH_SENSITIVE_DTMF_VARIABLE "sensitive_dtmf"
+#define SWITCH_RECORD_POST_PROCESS_EXEC_APP_VARIABLE "record_post_process_exec_app"
+#define SWITCH_RECORD_POST_PROCESS_EXEC_API_VARIABLE "record_post_process_exec_api"
 
 #define SWITCH_CHANNEL_EXECUTE_ON_ANSWER_VARIABLE "execute_on_answer"
 #define SWITCH_CHANNEL_EXECUTE_ON_PRE_ANSWER_VARIABLE "execute_on_pre_answer"
@@ -491,6 +493,13 @@ struct switch_directories {
 
 typedef struct switch_directories switch_directories;
 SWITCH_DECLARE_DATA extern switch_directories SWITCH_GLOBAL_dirs;
+
+struct switch_filenames {
+    char *conf_name;
+};
+
+typedef struct switch_filenames switch_filenames;
+SWITCH_DECLARE_DATA extern switch_filenames SWITCH_GLOBAL_filenames;
 
 #define SWITCH_MAX_STACKS 16
 #define SWITCH_THREAD_STACKSIZE 240 * 1024
@@ -1253,6 +1262,7 @@ typedef enum {
 	CF_JITTERBUFFER,
 	CF_JITTERBUFFER_PLC,
 	CF_DIALPLAN,
+	CF_BLEG,
 	CF_BLOCK_BROADCAST_UNTIL_MEDIA,
 	CF_CNG_PLC,
 	CF_ATTENDED_TRANSFER,
@@ -1536,7 +1546,8 @@ typedef enum {
 	SMBF_LOCK = (1 << 12),
 	SMBF_TAP_NATIVE_READ = (1 << 13),
 	SMBF_TAP_NATIVE_WRITE = (1 << 14),
-	SMBF_ONE_ONLY = (1 << 15)
+	SMBF_ONE_ONLY = (1 << 15),
+	SMBF_MASK = (1 << 16)
 } switch_media_bug_flag_enum_t;
 typedef uint32_t switch_media_bug_flag_t;
 

@@ -325,19 +325,6 @@ enum
 
 enum
 {
-    T30_FRONT_END_SEND_STEP_COMPLETE = 0,
-    /*! The current receive has completed. This is only needed to report an
-        unexpected end of the receive operation, as might happen with T.38
-        dying. */
-    T30_FRONT_END_RECEIVE_COMPLETE,
-    T30_FRONT_END_SIGNAL_PRESENT,
-    T30_FRONT_END_SIGNAL_ABSENT,
-    T30_FRONT_END_CED_PRESENT,
-    T30_FRONT_END_CNG_PRESENT
-};
-
-enum
-{
     /*! Support the V.27ter modem (2400, and 4800bps) for image transfer. */
     T30_SUPPORT_V27TER = 0x01,
     /*! Support the V.29 modem (9600, and 7200bps) for image transfer. */
@@ -352,77 +339,15 @@ enum
 
 enum
 {
-    /*! No compression */
-    T30_SUPPORT_NO_COMPRESSION = 0x01,
-    /*! T.1 1D compression */
-    T30_SUPPORT_T4_1D_COMPRESSION = 0x02,
-    /*! T.4 2D compression */
-    T30_SUPPORT_T4_2D_COMPRESSION = 0x04,
-    /*! T.6 2D compression */
-    T30_SUPPORT_T6_COMPRESSION = 0x08,
-    /*! T.85 monochrome JBIG compression, with fixed L0 */
-    T30_SUPPORT_T85_COMPRESSION = 0x10,
-    /*! T.85 monochrome JBIG compression, with variable L0 */
-    T30_SUPPORT_T85_L0_COMPRESSION = 0x20,
-    /*! T.43 colour JBIG compression */
-    T30_SUPPORT_T43_COMPRESSION = 0x40,
-    /*! T.45 run length colour compression */
-    T30_SUPPORT_T45_COMPRESSION = 0x80,
-    /*! T.81 + T.30 Annex E colour JPEG compression */
-    T30_SUPPORT_T81_COMPRESSION = 0x100,
-    /*! T.81 + T.30 Annex K colour sYCC-JPEG compression */
-    T30_SUPPORT_SYCC_T81_COMPRESSION = 0x200,
-    /*! T.88 monochrome JBIG2 compression */
-    T30_SUPPORT_T88_COMPRESSION = 0x400,
-    /*! Dither a gray scale image down a simple bilevel image, with rescaling to fit a FAX page */
-    T30_SUPPORT_GRAY_TO_BILEVEL = 0x10000000,
-    /*! Dither a colour image down a simple bilevel image, with rescaling to fit a FAX page */
-    T30_SUPPORT_COLOUR_TO_BILEVEL = 0x20000000
-};
-
-enum
-{
-    /*! Support standard FAX Y-resolution 98/100dpi */
-    T30_SUPPORT_STANDARD_RESOLUTION = 0x01,
-    /*! Support fine FAX Y-resolution 196/200dpi */
-    T30_SUPPORT_FINE_RESOLUTION = 0x02,
-    /*! Support super-fine FAX Y-resolution 392/400dpi */
-    T30_SUPPORT_SUPERFINE_RESOLUTION = 0x04,
-
-    /*! Support half FAX X-resolution 100/102dpi */
-    T30_SUPPORT_R4_RESOLUTION = 0x10000,
-    /*! Support standard FAX X-resolution 200/204dpi */
-    T30_SUPPORT_R8_RESOLUTION = 0x20000,
-    /*! Support double FAX X-resolution 400dpi */
-    T30_SUPPORT_R16_RESOLUTION = 0x40000,
-
-    /*! Support 300dpi x 300 dpi */
-    T30_SUPPORT_300_300_RESOLUTION = 0x100000,
-    /*! Support 400dpi x 400 dpi */
-    T30_SUPPORT_400_400_RESOLUTION = 0x200000,
-    /*! Support 600dpi x 600 dpi */
-    T30_SUPPORT_600_600_RESOLUTION = 0x400000,
-    /*! Support 1200dpi x 1200 dpi */
-    T30_SUPPORT_1200_1200_RESOLUTION = 0x800000,
-    /*! Support 300dpi x 600 dpi */
-    T30_SUPPORT_300_600_RESOLUTION = 0x1000000,
-    /*! Support 400dpi x 800 dpi */
-    T30_SUPPORT_400_800_RESOLUTION = 0x2000000,
-    /*! Support 600dpi x 1200 dpi */
-    T30_SUPPORT_600_1200_RESOLUTION = 0x4000000
-};
-
-enum
-{
-    T30_SUPPORT_215MM_WIDTH = 0x01,
-    T30_SUPPORT_255MM_WIDTH = 0x02,
-    T30_SUPPORT_303MM_WIDTH = 0x04,
-
-    T30_SUPPORT_UNLIMITED_LENGTH = 0x10000,
-    T30_SUPPORT_A4_LENGTH = 0x20000,
-    T30_SUPPORT_B4_LENGTH = 0x40000,
-    T30_SUPPORT_US_LETTER_LENGTH = 0x80000,
-    T30_SUPPORT_US_LEGAL_LENGTH = 0x100000
+    T30_FRONT_END_SEND_STEP_COMPLETE = 0,
+    /*! The current receive has completed. This is only needed to report an
+        unexpected end of the receive operation, as might happen with T.38
+        dying. */
+    T30_FRONT_END_RECEIVE_COMPLETE,
+    T30_FRONT_END_SIGNAL_PRESENT,
+    T30_FRONT_END_SIGNAL_ABSENT,
+    T30_FRONT_END_CED_PRESENT,
+    T30_FRONT_END_CNG_PRESENT
 };
 
 enum

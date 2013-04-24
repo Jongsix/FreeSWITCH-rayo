@@ -35,7 +35,7 @@
 <html lang="en">
 <head>
 	<meta charset="utf-8">
-	<title>Bootstrap, from Twitter</title>
+	<title>FreeSWITCH Portal</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<meta name="description" content="">
 	<meta name="author" content="">
@@ -43,9 +43,15 @@
 	<!-- Le styles -->
 	<link href="assets/bootstrap/css/bootstrap.css" rel="stylesheet">
 	<style>
-	body {
-		padding-top: 60px; /* 60px to make the container go all the way to the bottom of the topbar */
-	}
+		body {
+			padding-top: 60px; /* 60px to make the container go all the way to the bottom of the topbar */
+		}
+		#container {
+			min-height: 500px;
+		}
+		#footer {
+			text-align: center;
+		}
 	</style>
 	<link href="assets/bootstrap/css/bootstrap-responsive.css" rel="stylesheet">
 
@@ -89,14 +95,81 @@
 	</div>
 
 	<div class="container" id="container">
-		<div id="calls" style="display:none"></div>
-		<div id="channels" style="display:none"></div>
+		<div id="main">
+			<div id="calls" style="display:none"></div>
+			<div id="channels" style="display:none"></div>
+		</div>
 	</div> <!-- /container -->
 
-	<div id="aa"></div>
+
+	<div class="container" id="footer">
+		&copy; <a href="http://www.freeswitch.org">FreeSWITCH.org</a>
+		Join us on <a href="http://www.cluecon.com">ClueCon</a>!
+	</div>
+
 	<script type="text/x-handlebars" data-template-name="index">
-		<h1>Welcome to FreeSWITCH Portal</h1>
-		Welcome
+		<h1>Welcome to FreeSWITCH !</h1>
+		---- The World's First Cross-Platform Scalable FREE Multi-Protocol Soft Switch
+
+		<br>
+		<br>
+		<br>
+		<br>
+		<div id="serverStatus"></div>
+	</script>
+
+	<script type="text/x-handlebars" data-template-name="showRegistrations">
+		<h1>Registrations</h1>
+		<div>
+			<table class="table">
+			<tr>
+				<th>Reg User</th>
+				<th>Realm</th>
+				<th>Expires</th>
+				<th>Network IP</th>
+				<th>Network Port</th>
+				<th>Network Proto</th>
+				<th>Hostname</th>
+				<th>Metadata</th>
+				<th>Token / Url</th>
+			</tr>
+			{{#each App.registrationsController.content}}
+			<tr>
+				<td>{{ reg_user }}</td>
+				<td>{{ realm }}</td>
+				<td>{{ expires }}</td>
+				<td>{{ network_ip }}</td>
+				<td>{{ network_port }}</td>
+				<td>{{ network_proto }}</td>
+				<td>{{ hostname }}</td>
+				<td>{{ metadata }}</td>
+				<td>{{ token }}<br>{{ url }}</td>
+			</tr>
+			{{/each}}
+			</table>
+		</div>
+	</script>
+
+	<script type="text/x-handlebars" data-template-name="showModules">
+		<h1>Modules</h1>
+		<div>
+			<table class="table">
+			<tr>
+				<th>Type</th>
+				<th>Name</th>
+				<th>iKey</th>
+				<th>Fileame</th>
+			</tr>
+			{{#each App.showModulesController.content}}
+			<tr>
+				<td>{{ type }}</td>
+				<td>{{ name }}</td>
+				<td>{{ ikey }}</td>
+				<td>{{ filename }}</td>
+			</tr>
+			{{/each}}
+			</table>
+		</div>
 	</script>
 
 	<script type="text/x-handlebars" data-template-name="showApplications">
@@ -162,20 +235,69 @@
 	</script>
 
 	<script type="text/x-handlebars" data-template-name="showFiles">
-		Unimplemented
+		<h1>Files</h1>
+		<div>
+			<table class="table">
+			<tr>
+				<th>Type</th>
+				<th>Name</th>
+				<th>iKey</th>
+			</tr>
+			{{#each App.showFilesController.content}}
+			<tr>
+				<td>{{ type }}</td>
+				<td>{{ name }}</td>
+				<td>{{ ikey }}</td>
+			</tr>
+			{{/each}}
+			</table>
+		</div>
 	</script>
 
 	<script type="text/x-handlebars" data-template-name="showAPIs">
-		Unimplemented
+		<h1>APIs</h1>
+		<div>
+			<table class="table">
+			<tr>
+				<th>Name /<br>Description</th>
+				<th>Syntax</th>
+				<th>iKey</th>
+			</tr>
+			{{#each App.showAPIsController.content}}
+			<tr>
+				<td>
+					<strong>{{ name }}</strong><br>
+					{{ description }}
+				</td>
+				<td><pre>{{ syntax }}</pre></td>
+				<td>{{ ikey }}</td>
+			</tr>
+			{{/each}}
+			</table>
+		</div>
 	</script>
 
 	<script type="text/x-handlebars" data-template-name="show">
 		<h1>Show</h1>
+		{{#linkTo "showRegistrations"}} Registrations {{/linkTo}} |
+		{{#linkTo "showModules"}} Modules {{/linkTo}} |
 		{{#linkTo "showApplications"}} Applications {{/linkTo}} |
 		{{#linkTo "showEndpoints"}} Endpoints {{/linkTo}} |
 		{{#linkTo "showCodecs"}} Codecs {{/linkTo}} |
 		{{#linkTo "showFiles"}} Files {{/linkTo}} |
-		{{#linkTo "showAPIs"}} APIs {{/linkTo}}
+		{{#linkTo "showAPIs"}} APIs {{/linkTo}} |
+
+		Aliases |
+		Complete |
+		Chat |
+		Management |
+		Nat_map |
+		Say |
+		Interfaces |
+		Interface_types |
+		Tasks |
+		Limits
+
 	</script>
 
 	<script type="text/x-handlebars" data-template-name="about">

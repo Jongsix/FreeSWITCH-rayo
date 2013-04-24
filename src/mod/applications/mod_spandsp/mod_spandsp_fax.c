@@ -839,7 +839,6 @@ static switch_status_t spanfax_init(pvt_t *pvt, transport_mode_t trans_mode)
 			t38_gateway_set_ecm_capability(pvt->t38_gateway_state, TRUE);
 		}
 
-
 		span_log_set_message_handler(t38_gateway_get_logging_state(pvt->t38_gateway_state), spanfax_log_message, pvt);
 		span_log_set_message_handler(t38_core_get_logging_state(pvt->t38_core), spanfax_log_message, pvt);
 
@@ -873,11 +872,14 @@ static switch_status_t spanfax_init(pvt_t *pvt, transport_mode_t trans_mode)
 	t30_set_phase_b_handler(t30, phase_b_handler, pvt);
 
 	t30_set_supported_image_sizes(t30,
-								  T30_SUPPORT_US_LETTER_LENGTH | T30_SUPPORT_US_LEGAL_LENGTH | T30_SUPPORT_UNLIMITED_LENGTH
-								| T30_SUPPORT_215MM_WIDTH | T30_SUPPORT_255MM_WIDTH | T30_SUPPORT_303MM_WIDTH);
-	t30_set_supported_resolutions(t30,
-								  T30_SUPPORT_STANDARD_RESOLUTION | T30_SUPPORT_FINE_RESOLUTION | T30_SUPPORT_SUPERFINE_RESOLUTION
-								| T30_SUPPORT_R8_RESOLUTION | T30_SUPPORT_R16_RESOLUTION);
+								  T4_SUPPORT_LENGTH_US_LETTER | T4_SUPPORT_LENGTH_US_LEGAL | T4_SUPPORT_LENGTH_UNLIMITED
+								| T4_SUPPORT_WIDTH_215MM | T4_SUPPORT_WIDTH_255MM | T4_SUPPORT_WIDTH_303MM);
+	t30_set_supported_bilevel_resolutions(t30,
+										  T4_SUPPORT_RESOLUTION_R8_STANDARD
+										| T4_SUPPORT_RESOLUTION_R8_FINE
+										| T4_SUPPORT_RESOLUTION_R8_SUPERFINE
+										| T4_SUPPORT_RESOLUTION_R16_SUPERFINE);
+	t30_set_supported_colour_resolutions(t30, 0);
 
 	if (pvt->disable_v17) {
 		t30_set_supported_modems(t30, T30_SUPPORT_V29 | T30_SUPPORT_V27TER);
@@ -888,11 +890,11 @@ static switch_status_t spanfax_init(pvt_t *pvt, transport_mode_t trans_mode)
 	}
 
 	if (pvt->use_ecm) {
-		t30_set_supported_compressions(t30, T30_SUPPORT_T4_1D_COMPRESSION | T30_SUPPORT_T4_2D_COMPRESSION | T30_SUPPORT_T6_COMPRESSION | T30_SUPPORT_T85_COMPRESSION | T30_SUPPORT_T85_L0_COMPRESSION);
+		t30_set_supported_compressions(t30, T4_SUPPORT_COMPRESSION_T4_1D | T4_SUPPORT_COMPRESSION_T4_2D | T4_SUPPORT_COMPRESSION_T6 | T4_SUPPORT_COMPRESSION_T85 | T4_SUPPORT_COMPRESSION_T85_L0);
 		t30_set_ecm_capability(t30, TRUE);
 		switch_channel_set_variable(channel, "fax_ecm_requested", "1");
 	} else {
-		t30_set_supported_compressions(t30, T30_SUPPORT_T4_1D_COMPRESSION | T30_SUPPORT_T4_2D_COMPRESSION);
+		t30_set_supported_compressions(t30, T4_SUPPORT_COMPRESSION_T4_1D | T4_SUPPORT_COMPRESSION_T4_2D);
 		switch_channel_set_variable(channel, "fax_ecm_requested", "0");
 	}
 

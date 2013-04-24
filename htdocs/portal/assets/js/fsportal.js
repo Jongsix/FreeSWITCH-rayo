@@ -35,6 +35,9 @@ var App = Ember.Application.create({
 	rootElement: $('#container'),
 	total: 0,
 	ready: function(){
+		$.get("/txtapi/status", function(data){
+			$('#serverStatus').html("<pre>" + data + "</pre>");
+		});
 	}
 });
 
@@ -65,16 +68,37 @@ App.ChannelsRoute = Ember.Route.extend({
 });
 
 
+App.ShowRegistrationsRoute = Ember.Route.extend({
+	setupController: function(controller) {
+		// Set the Controller's `title`
+		controller.set('title', "ShowRegistrations");
+		App.registrationsController.load();
+	}//,
+	// renderTemplate: function() {
+		// this.render('calls');
+	// }
+});
+
+App.ShowModulesRoute = Ember.Route.extend({
+	setupController: function(controller) {
+		// Set the Controller's `title`
+		App.showModulesController.load();
+  	}//,
+  	// renderTemplate: function() {
+		// this.render('calls');
+  	// }
+});
+
 App.ShowApplicationsRoute = Ember.Route.extend({
 	setupController: function(controller) {
 		// Set the Controller's `title`
 		controller.set('title', "ShowApplications");
 		console.log("showApplications");
 		App.applicationsController.load();
-  	}//,
-  	// renderTemplate: function() {
+	}//,
+	// renderTemplate: function() {
 		// this.render('calls');
-  	// }
+	// }
 });
 
 App.ShowEndpointsRoute = Ember.Route.extend({
@@ -95,6 +119,18 @@ App.ShowCodecsRoute = Ember.Route.extend({
   	}
 });
 
+App.ShowFilesRoute = Ember.Route.extend({
+	setupController: function(controller) {
+		App.showFilesController.load();
+	}
+});
+
+App.ShowAPIsRoute = Ember.Route.extend({
+	setupController: function(controller) {
+		App.showAPIsController.load();
+  	}
+});
+
 App.UsersRoute = Ember.Route.extend({
 	setupController: function(controller) {
 		App.usersController.load();
@@ -104,6 +140,8 @@ App.UsersRoute = Ember.Route.extend({
 App.Router.map(function(){
 	this.route("calls");
 	this.route("channels");
+	this.route("showRegistrations");
+	this.route("showModules");
 	this.route("showApplications");
 	this.route("showEndpoints");
 	this.route("showCodecs");
@@ -256,6 +294,25 @@ App.channelsController = Ember.ArrayController.create({
 
 });
 
+App.registrationsController = Ember.ArrayController.create({
+	content: [],
+	init: function(){
+	},
+	load: function() {
+		var me = this;
+		$.getJSON("/txtapi/show?registrations%20as%20json", function(data){
+			  // var channels = JSON.parse(data);
+			console.log(data.row_count);
+			me.set('total', data.row_count);
+			me.content.clear();
+			if (data.row_count == 0) return;
+
+			me.pushObjects(data.rows);
+
+		});
+	}
+});
+
 App.applicationsController = Ember.ArrayController.create({
 	content: [],
 	init: function(){
@@ -305,6 +362,73 @@ App.showCodecsController = Ember.ArrayController.create({
 			console.log(data.row_count);
 			me.set('total', data.row_count);
 			me.content.clear();
+			if (data.row_count == 0) return;
+
+			me.pushObjects(data.rows);
+
+		});
+	}
+});
+
+App.showFilesController = Ember.ArrayController.create({
+	content: [],
+	init: function(){
+	},
+	load: function() {
+		var me = this;
+		$.getJSON("/txtapi/show?files%20as%20json", function(data){
+			  // var channels = JSON.parse(data);
+			me.set('total', data.row_count);
+			me.content.clear();
+			if (data.row_count == 0) return;
+
+			me.pushObjects(data.rows);
+
+		});
+	}
+});
+
+App.showAPIsController = Ember.ArrayController.create({
+	content: [],
+	init: function(){
+	},
+	load: function() {
+		var me = this;
+		$.getJSON("/txtapi/show?api%20as%20json", function(data){
+			  // var channels = JSON.parse(data);
+			me.set('total', data.row_count);
+			me.content.clear();
+			if (data.row_count == 0) return;
+
+			var rows = [];
+			data.rows.forEach(function(r) {
+				if (r.name == "show") {
+					r.syntax = r.syntax.replace(/\|/g, "\n");
+				} else if (r.name == "fsctl") {
+					r.syntax = r.syntax.replace(/\]\|/g, "]\n");
+				} else {
+					r.syntax = r.syntax.replace(/\n/g, "\n");
+				}
+				// console.log(r.syntax);
+				rows.push(r);
+			});
+
+			me.pushObjects(rows);
+
+		});
+	}
+});
+
+App.showModulesController = Ember.ArrayController.create({
+	content: [],
+	init: function(){
+	},
+	load: function() {
+		var me = this;
+		$.getJSON("/txtapi/show?module%20as%20json", function(data){
+			me.set('total', data.row_count);
+			me.content.clear();
+			console.log(data);
 			if (data.row_count == 0) return;
 
 			me.pushObjects(data.rows);

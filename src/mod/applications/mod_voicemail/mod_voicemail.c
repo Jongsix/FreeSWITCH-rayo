@@ -27,6 +27,7 @@
  * Bret McDanel <trixter AT 0xdecafbad.com>
  * John Wehle (john@feith.com)
  * Raymond Chandler <intralanman@gmail.com>
+ * Kristin King <kristin.king@quentustech.com>
  *
  * mod_voicemail.c -- Voicemail Module
  *
@@ -107,6 +108,8 @@ struct vm_profile {
 	char *name;
 	char *dbname;
 	char *odbc_dsn;
+	char *play_new_messages_lifo;
+	char *play_saved_messages_lifo;
 	char terminator_key[2];
 	char play_new_messages_key[2];
 	char play_saved_messages_key[2];
@@ -548,6 +551,10 @@ vm_profile_t *profile_set_config(vm_profile_t *profile)
 						   &profile->play_new_messages_key, "1", &config_dtmf, NULL, NULL);
 	SWITCH_CONFIG_SET_ITEM(profile->config[i++], "play-saved-messages-key", SWITCH_CONFIG_STRING, CONFIG_RELOADABLE,
 						   &profile->play_saved_messages_key, "2", &config_dtmf, NULL, NULL);
+	SWITCH_CONFIG_SET_ITEM(profile->config[i++], "play-new-messages-lifo", SWITCH_CONFIG_BOOL, CONFIG_RELOADABLE,
+						   &profile->play_new_messages_lifo, SWITCH_FALSE, NULL, NULL, NULL);
+	SWITCH_CONFIG_SET_ITEM(profile->config[i++], "play-saved-messages-lifo", SWITCH_CONFIG_BOOL, CONFIG_RELOADABLE,
+						   &profile->play_saved_messages_lifo, SWITCH_FALSE, NULL, NULL, NULL);
 	SWITCH_CONFIG_SET_ITEM(profile->config[i++], "login-keys", SWITCH_CONFIG_STRING, CONFIG_RELOADABLE,
 						   &profile->login_keys, "0", &config_login_keys, NULL, NULL);
 	SWITCH_CONFIG_SET_ITEM(profile->config[i++], "main-menu-key", SWITCH_CONFIG_STRING, CONFIG_RELOADABLE,
@@ -1921,6 +1928,7 @@ static void voicemail_check_main(switch_core_session_t *session, vm_profile_t *p
 	char *convert_cmd = profile->convert_cmd;
 	char *convert_ext = profile->convert_ext;
 	char *vm_storage_dir = NULL;
+	char *storage_dir = NULL;
 	char global_buf[2] = "";
 	switch_input_args_t args = { 0 };
 	const char *caller_id_name = NULL;
@@ -2059,7 +2067,8 @@ static void voicemail_check_main(switch_core_session_t *session, vm_profile_t *p
 					{
 						switch_snprintf(sql, sizeof(sql),
 										"select created_epoch, read_epoch, username, domain, uuid, cid_name, cid_number, in_folder, file_path, message_len, flags, read_flags, forwarded_by from voicemail_msgs where username='%s' and domain='%s' and read_epoch=0"
-										" order by read_flags, created_epoch", myid, domain_name);
+										" order by read_flags, created_epoch %s", myid, domain_name,
+										profile->play_new_messages_lifo ? "desc" : "asc");
 						total_messages = total_new_messages;
 						heard_auto_new = heard_auto_saved = 1;
 					}
@@ -2069,7 +2078,8 @@ static void voicemail_check_main(switch_core_session_t *session, vm_profile_t *p
 					{
 						switch_snprintf(sql, sizeof(sql),
 										"select created_epoch, read_epoch, username, domain, uuid, cid_name, cid_number, in_folder, file_path, message_len, flags, read_flags, forwarded_by from voicemail_msgs where username='%s' and domain='%s' and read_epoch !=0"
-										" order by read_flags, created_epoch", myid, domain_name);
+										" order by read_flags, created_epoch %s", myid, domain_name,
+										profile->play_saved_messages_lifo ? "desc" : "asc");
 						total_messages = total_saved_messages;
 						heard_auto_new = heard_auto_saved = 1;
 					}
@@ -2461,9 +2471,12 @@ static void voicemail_check_main(switch_core_session_t *session, vm_profile_t *p
 						convert_cmd = switch_core_session_strdup(session, val);
 					} else if (!strcasecmp(var, "vm-convert-ext")) {
 						convert_ext = switch_core_session_strdup(session, val);
-					} else if (!strcasecmp(var, "storage-dir")) {
+					} else if (!strcasecmp(var, "vm-storage-dir")) {
 						vm_storage_dir = switch_core_session_strdup(session, val);
-
+					} else if (!strcasecmp(var, "storage-dir")) {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+										  "Using deprecated 'storage-dir' directory variable: Please use 'vm-storage-dir'.\n");
+						storage_dir = switch_core_session_strdup(session, val);
 					} else if (!strcasecmp(var, "timezone")) {
 						switch_channel_set_variable(channel, var, val);
 					}
@@ -2532,7 +2545,15 @@ static void voicemail_check_main(switch_core_session_t *session, vm_profile_t *p
 				if (auth) {
 					if (!dir_path) {
 						if (!zstr(vm_storage_dir)) {
-							dir_path = switch_core_session_sprintf(session, "%s%s%s", vm_storage_dir, SWITCH_PATH_SEPARATOR, myid);
+							/* check for absolute or relative path */
+							if (switch_is_file_path(vm_storage_dir)) {
+								dir_path = switch_core_session_strdup(session, vm_storage_dir);
+							} else {
+								dir_path = switch_core_session_sprintf(session, "%s%svoicemail%s%s", SWITCH_GLOBAL_dirs.storage_dir,
+																	   SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, vm_storage_dir);
+							}
+						} else if (!zstr(storage_dir)) {
+							dir_path = switch_core_session_sprintf(session, "%s%s%s", storage_dir, SWITCH_PATH_SEPARATOR, myid);
 						} else if (!zstr(profile->storage_dir)) {
 							dir_path =
 								switch_core_session_sprintf(session, "%s%s%s%s%s", profile->storage_dir, SWITCH_PATH_SEPARATOR, domain_name,
@@ -2644,6 +2665,7 @@ static switch_status_t deliver_vm(vm_profile_t *profile,
 	int insert_db = 1;
 	int email_attach = 0;
 	char *vm_storage_dir = NULL;
+	char *storage_dir = NULL;
 	char *myfolder = "inbox";
 	int priority = 3;
 	const char *tmp;
@@ -2703,6 +2725,12 @@ static switch_status_t deliver_vm(vm_profile_t *profile,
 			vm_email_from = switch_core_strdup(pool, val);
 		} else if (!strcasecmp(var, "vm-email-all-messages") && (send_main = switch_true(val))) {
 			send_mail++;
+		} else if (!strcasecmp(var, "vm-storage-dir")) {
+			vm_storage_dir = switch_core_strdup(pool, val);
+		} else if (!strcasecmp(var, "storage-dir")) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+							  "Using deprecated 'storage-dir' directory variable: Please use 'vm-storage-dir'.\n");
+			storage_dir = switch_core_strdup(pool, val);
 		} else if (!strcasecmp(var, "vm-notify-email-all-messages") && (send_notify = switch_true(val))) {
 			send_mail++;
 		} else if (!strcasecmp(var, "vm-keep-local-after-email")) {
@@ -2722,7 +2750,15 @@ static switch_status_t deliver_vm(vm_profile_t *profile,
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Deliver VM to %s@%s\n", myid, domain_name);
 
 	if (!zstr(vm_storage_dir)) {
-		dir_path = switch_mprintf("%s%s%s", vm_storage_dir, SWITCH_PATH_SEPARATOR, myid);
+		/* check for absolute or relative path */
+		if (switch_is_file_path(vm_storage_dir)) {
+			dir_path = switch_core_strdup(pool, vm_storage_dir);
+		} else {
+			dir_path = switch_mprintf("%s%svoicemail%s%s", SWITCH_GLOBAL_dirs.storage_dir,
+												   SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, vm_storage_dir);
+		}
+	} else if (!zstr(storage_dir)) {
+		dir_path = switch_mprintf("%s%s%s", storage_dir, SWITCH_PATH_SEPARATOR, myid);
 	} else if (!zstr(profile->storage_dir)) {
 		dir_path = switch_mprintf("%s%s%s%s%s", profile->storage_dir, SWITCH_PATH_SEPARATOR, domain_name, SWITCH_PATH_SEPARATOR, myid);
 	} else {
@@ -2843,6 +2879,7 @@ static switch_status_t deliver_vm(vm_profile_t *profile,
 		switch_event_add_header_string(params, SWITCH_STACK_BOTTOM, "voicemail_file_path", file_path);
 		switch_event_add_header_string(params, SWITCH_STACK_BOTTOM, "voicemail_read_flags", read_flags);
 		switch_event_add_header_string(params, SWITCH_STACK_BOTTOM, "voicemail_time", date);
+		switch_event_add_header_string(params, SWITCH_STACK_BOTTOM, "voicemail_uuid", use_uuid);
 
 		switch_safe_free(formatted_cid_num);
 
@@ -3261,6 +3298,7 @@ static switch_status_t voicemail_leave_main(switch_core_session_t *session, vm_p
 	switch_size_t retsize;
 	switch_time_t ts = switch_micro_time_now();
 	char *vm_storage_dir = NULL;
+	char *storage_dir = NULL;
 	char *record_macro = VM_RECORD_MESSAGE_MACRO;
 	int send_main = 0;
 	int send_notify = 0;
@@ -3308,8 +3346,12 @@ static switch_status_t voicemail_leave_main(switch_core_session_t *session, vm_p
 						email_addr = switch_core_session_strdup(session, val);
 					} else if (!strcasecmp(var, "vm-email-all-messages") && (send_main = switch_true(val))) {
 						send_mail++;
-					} else if (!strcasecmp(var, "storage-dir")) {
+					} else if (!strcasecmp(var, "vm-storage-dir")) {
 						vm_storage_dir = switch_core_session_strdup(session, val);
+					} else if (!strcasecmp(var, "storage-dir")) {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+										  "Using deprecated 'storage-dir' directory variable: Please use 'vm-storage-dir'.\n");
+						storage_dir = switch_core_session_strdup(session, val);
 					} else if (!strcasecmp(var, "vm-notify-email-all-messages") && (send_notify = switch_true(val))) {
 						send_mail++;
 					} else if (!strcasecmp(var, "vm-disk-quota")) {
@@ -3366,7 +3408,15 @@ static switch_status_t voicemail_leave_main(switch_core_session_t *session, vm_p
 	}
 
 	if (!zstr(vm_storage_dir)) {
-		dir_path = switch_core_session_sprintf(session, "%s%s%s", vm_storage_dir, SWITCH_PATH_SEPARATOR, id);
+		/* check for absolute or relative path */
+		if (switch_is_file_path(vm_storage_dir)) {
+			dir_path = switch_core_session_strdup(session, vm_storage_dir);
+		} else {
+			dir_path = switch_core_session_sprintf(session, "%s%svoicemail%s%s", SWITCH_GLOBAL_dirs.storage_dir,
+												   SWITCH_PATH_SEPARATOR, SWITCH_PATH_SEPARATOR, vm_storage_dir);
+		}
+	} else if (!zstr(storage_dir)) {
+		dir_path = switch_core_session_sprintf(session, "%s%s%s", storage_dir, SWITCH_PATH_SEPARATOR, id);
 	} else if (!zstr(profile->storage_dir)) {
 		dir_path = switch_core_session_sprintf(session, "%s%s%s%s%s", profile->storage_dir, SWITCH_PATH_SEPARATOR, domain_name, SWITCH_PATH_SEPARATOR, id);
 	} else {
@@ -5249,17 +5299,17 @@ done:
 
 /* Message API */
 
-#define VM_FSDB_MSG_LIST_USAGE "<format> <profile> <domain> <user> <folder> <filter>"
+#define VM_FSDB_MSG_LIST_USAGE "<format> <profile> <domain> <user> <folder> <filter> [msg-order = ASC | DESC]"
 SWITCH_STANDARD_API(vm_fsdb_msg_list_function)
 {
 	char *sql;
 	msg_lst_callback_t cbt = { 0 };
 	char *ebuf = NULL;
 
-	const char *id = NULL, *domain = NULL, *profile_name = NULL, *folder = NULL, *msg_type = NULL;
+	const char *id = NULL, *domain = NULL, *profile_name = NULL, *folder = NULL, *msg_type = NULL, *msg_order = NULL;
 	vm_profile_t *profile = NULL;
 
-	char *argv[6] = { 0 };
+	char *argv[7] = { 0 };
 	char *mycmd = NULL;
 
 	switch_memory_pool_t *pool;
@@ -5281,9 +5331,18 @@ SWITCH_STANDARD_API(vm_fsdb_msg_list_function)
 		folder = argv[4]; /* TODO add Support */
 	if (argv[5])
 		msg_type = argv[5];
+	if (argv[6])
+		msg_order = argv[6];
 
 	if (!profile_name || !domain || !id || !folder || !msg_type) {
 		stream->write_function(stream, "-ERR Missing Arguments\n");
+		goto done;
+	}
+
+	if (!msg_order) {
+		msg_order = "ASC";
+	} else if (strcasecmp(msg_order, "ASC") || strcasecmp(msg_order, "DESC")) {
+		stream->write_function(stream, "-ERR Bad Argument: '%s'\n", msg_order);
 		goto done;
 	}
 
@@ -5292,13 +5351,13 @@ SWITCH_STANDARD_API(vm_fsdb_msg_list_function)
 		goto done;
 	}
 	if (!strcasecmp(msg_type, "not-read")) {
-		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND read_epoch = 0 ORDER BY read_flags, created_epoch", id, domain);
+		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND read_epoch = 0 ORDER BY read_flags, created_epoch %q", id, domain, msg_order);
 	} else if (!strcasecmp(msg_type, "new")) {
-		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND flags='' ORDER BY read_flags, created_epoch", id, domain);
+		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND flags='' ORDER BY read_flags, created_epoch %q", id, domain, msg_order);
 	} else if (!strcasecmp(msg_type, "save")) {
-		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND flags='save' ORDER BY read_flags, created_epoch", id, domain);
+		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND flags='save' ORDER BY read_flags, created_epoch %q", id, domain, msg_order);
 	} else {
-		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND read_epoch != 0 ORDER BY read_flags, created_epoch", id, domain);
+		sql = switch_mprintf("SELECT uuid FROM voicemail_msgs WHERE username = '%q' AND domain = '%q' AND read_epoch != 0 ORDER BY read_flags, created_epoch %q", id, domain, msg_order);
 	}
 	memset(&cbt, 0, sizeof(cbt));
 

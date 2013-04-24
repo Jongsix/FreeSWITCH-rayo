@@ -154,6 +154,7 @@ void sofia_glue_attach_private(switch_core_session_t *session, sofia_profile_t *
 	tech_pvt->mparams.manual_rtp_bugs = profile->manual_rtp_bugs;
 	tech_pvt->mparams.manual_video_rtp_bugs = profile->manual_video_rtp_bugs;
 	tech_pvt->mparams.extsipip = profile->extsipip;
+	tech_pvt->mparams.extrtpip = profile->extrtpip;
 	tech_pvt->mparams.local_network = profile->local_network;
 	tech_pvt->mparams.mutex = tech_pvt->sofia_mutex;
 	tech_pvt->mparams.sipip = profile->sipip;
@@ -568,6 +569,10 @@ char *sofia_glue_get_extra_headers(switch_channel_t *channel, const char *prefix
 		for (; hi; hi = hi->next) {
 			const char *name = (char *) hi->name;
 			char *value = (char *) hi->value;
+			
+			if (!strcasecmp(name, "sip_geolocation")) {
+				stream.write_function(&stream, "Geolocation: %s\r\n", value);
+			}
 
 			if (!strncasecmp(name, prefix, strlen(prefix))) {
 				if ( !exclude_regex || !(proceed = switch_regex_perform(name, exclude_regex, &re, ovector, sizeof(ovector) / sizeof(ovector[0])))) {
@@ -679,7 +684,6 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 	char *record_route = NULL;
 	const char *recover_via = NULL;
 	int require_timer = 1;
-
 
 	if (switch_channel_test_flag(tech_pvt->channel, CF_RECOVERING)) {
 		const char *recover_contact = switch_channel_get_variable(tech_pvt->channel, "sip_recover_contact");
@@ -1464,6 +1468,37 @@ void sofia_glue_pass_sdp(private_object_t *tech_pvt, char *sdp)
 		}
 		switch_core_session_rwunlock(other_session);
 	}
+}
+
+char *sofia_glue_get_path_from_contact(char *buf)
+{
+	char *p, *e, *path = NULL, *contact = NULL;
+
+	if (!buf) return NULL;
+
+	contact = sofia_glue_get_url_from_contact(buf, SWITCH_TRUE);
+
+	if (!contact) return NULL;
+	
+	if ((p = strstr(contact, "fs_path="))) {
+		p += 8;
+
+		if (!zstr(p)) {
+			path = strdup(p);
+		}
+	}
+
+	if (!path) return NULL;
+
+	if ((e = strrchr(path, ';'))) {
+		*e = '\0';
+	}
+
+	switch_url_decode(path);
+
+	free(contact);
+
+	return path;
 }
 
 char *sofia_glue_get_url_from_contact(char *buf, uint8_t to_dup)

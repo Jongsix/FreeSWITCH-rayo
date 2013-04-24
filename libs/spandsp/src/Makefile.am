@@ -22,39 +22,29 @@ AM_LDFLAGS = $(COMP_VENDOR_LDFLAGS)
 DISTCLEANFILES = $(srcdir)/at_interpreter_dictionary.h \
                  $(srcdir)/cielab_luts.h \
                  $(srcdir)/math_fixed_tables.h \
-                 $(srcdir)/v17_v32bis_rx_fixed_rrc.h \
-                 $(srcdir)/v17_v32bis_rx_floating_rrc.h \
-                 $(srcdir)/v17_v32bis_tx_fixed_rrc.h \
-                 $(srcdir)/v17_v32bis_tx_floating_rrc.h \
-                 $(srcdir)/v22bis_rx_1200_fixed_rrc.h \
-                 $(srcdir)/v22bis_rx_2400_fixed_rrc.h \
-                 $(srcdir)/v22bis_rx_1200_floating_rrc.h \
-                 $(srcdir)/v22bis_rx_2400_floating_rrc.h \
-                 $(srcdir)/v22bis_tx_fixed_rrc.h \
-                 $(srcdir)/v22bis_tx_floating_rrc.h \
-                 $(srcdir)/v27ter_rx_2400_fixed_rrc.h \
-                 $(srcdir)/v27ter_rx_4800_fixed_rrc.h \
-                 $(srcdir)/v27ter_rx_2400_floating_rrc.h \
-                 $(srcdir)/v27ter_rx_4800_floating_rrc.h \
-                 $(srcdir)/v27ter_tx_2400_fixed_rrc.h \
-                 $(srcdir)/v27ter_tx_4800_fixed_rrc.h \
-                 $(srcdir)/v27ter_tx_2400_floating_rrc.h \
-                 $(srcdir)/v27ter_tx_4800_floating_rrc.h \
-                 $(srcdir)/v29rx_fixed_rrc.h \
-                 $(srcdir)/v29rx_floating_rrc.h \
-                 $(srcdir)/v29tx_fixed_rrc.h \
-                 $(srcdir)/v29tx_floating_rrc.h
+                 $(srcdir)/v17_v32bis_rx_rrc.h \
+                 $(srcdir)/v17_v32bis_tx_rrc.h \
+                 $(srcdir)/v22bis_rx_1200_rrc.h \
+                 $(srcdir)/v22bis_rx_2400_rrc.h \
+                 $(srcdir)/v22bis_tx_rrc.h \
+                 $(srcdir)/v27ter_rx_2400_rrc.h \
+                 $(srcdir)/v27ter_rx_4800_rrc.h \
+                 $(srcdir)/v27ter_tx_2400_rrc.h \
+                 $(srcdir)/v27ter_tx_4800_rrc.h \
+                 $(srcdir)/v29rx_rrc.h \
+                 $(srcdir)/v29tx_rrc.h
 
 CLEANFILES = ${DISTCLEANFILES}
 MOSTLYCLEANFILES = ${DISTCLEANFILES}
 MAINTAINERCLEANFILES = ${DISTCLEANFILES}
 
 EXTRA_DIST = floating_fudge.h \
-             libspandsp.dsp \
              libspandsp.2005.sln \
              libspandsp.2008.sln \
              libspandsp.2005.vcproj \
              libspandsp.2008.vcproj \
+             libspandsp.2010.vcproj \
+             libspandsp.2012.vcproj \
              libtiff.2005.vcproj \
              libtiff.2008.vcproj \
              filter_tools.c \
@@ -159,6 +149,7 @@ libspandsp_la_SOURCES = ademco_contactid.c \
                         t4_rx.c \
                         t4_tx.c \
                         t42.c \
+                        t43.c \
                         t81_t82_arith_coding.c \
                         t85_decode.c \
                         t85_encode.c \
@@ -250,6 +241,7 @@ nobase_include_HEADERS = spandsp/ademco_contactid.h \
                          spandsp/t4_t6_decode.h \
                          spandsp/t4_t6_encode.h \
                          spandsp/t42.h \
+                         spandsp/t43.h \
                          spandsp/t81_t82_arith_coding.h \
                          spandsp/t85.h \
                          spandsp/telephony.h \
@@ -317,6 +309,7 @@ nobase_include_HEADERS = spandsp/ademco_contactid.h \
                          spandsp/private/t4_t6_decode.h \
                          spandsp/private/t4_t6_encode.h \
                          spandsp/private/t42.h \
+                         spandsp/private/t43.h \
                          spandsp/private/t81_t82_arith_coding.h \
                          spandsp/private/t85.h \
                          spandsp/private/time_scale.h \
@@ -475,37 +468,18 @@ v29tx.lo: ${V29_TX_INCL}
 v29tx_rrc.h: make_modem_filter$(EXEEXT)
 	./make_modem_filter$(EXEEXT) -m V.29 -t >v29tx_rrc.h
 
-DSP = libspandsp.dsp
 VCPROJ8 = libspandsp.2005.vcproj
 VCPROJ9 = libspandsp.2008.vcproj
+VCPROJ10 = libspandsp.2010.vcproj
+VCPROJ12 = libspandsp.2012.vcproj
 
 WIN32SOURCES = $(libspandsp_la_SOURCES) .\\msvc\\gettimeofday.c
 WIN32HEADERS = $(nobase_include_HEADERS) spandsp.h
 
-DSPOUT = | awk '{printf("%s\r\n", $$0)}' >> $(DSP)
 VCPROJOUT8 = | awk '{printf("%s\r\n", $$0)}' >> $(VCPROJ8)
 VCPROJOUT9 = | awk '{printf("%s\r\n", $$0)}' >> $(VCPROJ9)
-
-$(DSP): msvc/msvcproj.head msvc/msvcproj.foot Makefile.am
-	echo "creating $(DSP)"
-	@(cp $(srcdir)/msvc/msvcproj.head $(DSP); \
-	echo "# Begin Group \"Source Files\"" $(DSPOUT); \
-	for file in $(WIN32SOURCES); do \
-	echo "# Begin Source File" $(DSPOUT); \
-	echo "" $(DSPOUT); \
-	echo "SOURCE=.\\"$$file $(DSPOUT); \
-	echo "# End Source File" $(DSPOUT); \
-	done; \
-	echo "# End Group" $(DSPOUT); \
-	echo "# Begin Group \"Header Files\"" $(DSPOUT); \
-	for file in $(WIN32HEADERS); do \
-	echo "# Begin Source File" $(DSPOUT); \
-	echo "" $(DSPOUT); \
-	echo "SOURCE=.\\"$$file $(DSPOUT); \
-	echo "# End Source File" $(DSPOUT); \
-	done; \
-	echo "# End Group" $(DSPOUT); \
-	cat $(srcdir)/msvc/msvcproj.foot $(DSPOUT) )
+VCPROJOUT10 = | awk '{printf("%s\r\n", $$0)}' >> $(VCPROJ10)
+VCPROJOUT12 = | awk '{printf("%s\r\n", $$0)}' >> $(VCPROJ12)
 
 $(VCPROJ8): msvc/vc8proj.head msvc/vc8proj.foot Makefile.am
 	echo "creating $(VCPROJ8)"
@@ -530,6 +504,30 @@ $(VCPROJ9): msvc/vc9proj.head msvc/vc9proj.foot Makefile.am
 		echo "<File RelativePath=\""$$file"\"></File>" $(VCPROJOUT9); \
 	done; \
 	cat $(srcdir)/msvc/vc9proj.foot $(VCPROJOUT9) )
+
+$(VCPROJ10): msvc/vc10proj.head msvc/vc10proj.foot Makefile.am
+	echo "creating $(VCPROJ10)"
+	@(cp $(srcdir)/msvc/vc10proj.head $(VCPROJ10); \
+	for file in $(WIN32SOURCES); do \
+		echo "<File RelativePath=\""$$file"\"></File>" $(VCPROJOUT10); \
+	done; \
+	echo "</Filter><Filter  Name=\"Header Files\">" $(VCPROJOUT10); \
+	for file in $(WIN32HEADERS); do \
+		echo "<File RelativePath=\""$$file"\"></File>" $(VCPROJOUT10); \
+	done; \
+	cat $(srcdir)/msvc/vc10proj.foot $(VCPROJOUT10) )
+
+$(VCPROJ12): msvc/vc12proj.head msvc/vc12proj.foot Makefile.am
+	echo "creating $(VCPROJ12)"
+	@(cp $(srcdir)/msvc/vc12proj.head $(VCPROJ12); \
+	for file in $(WIN32SOURCES); do \
+		echo "<File RelativePath=\""$$file"\"></File>" $(VCPROJOUT12); \
+	done; \
+	echo "</Filter><Filter  Name=\"Header Files\">" $(VCPROJOUT12); \
+	for file in $(WIN32HEADERS); do \
+		echo "<File RelativePath=\""$$file"\"></File>" $(VCPROJOUT12); \
+	done; \
+	cat $(srcdir)/msvc/vc12proj.foot $(VCPROJOUT12) )
 
 $(srcdir)/msvc/spandsp.h: spandsp.h.in
 	echo "creating $(srcdir)/msvc/spandsp.h"

@@ -38,6 +38,7 @@
 #endif
 
 #ifndef WIN32
+#include <poll.h>
 #ifdef HAVE_SETRLIMIT
 #include <sys/resource.h>
 #endif
@@ -87,14 +88,6 @@ static void handle_SIGILL(int sig)
 }
 
 #ifndef WIN32
-static void handle_SIGUSR2(int sig)
-{
-	if (sig) {};
-
-	system_ready = 1;
-
-	return;
-}
 
 static void handle_SIGCHLD(int sig)
 {
@@ -239,12 +232,37 @@ void WINAPI service_main(DWORD numArgs, char **args)
 
 #else
 
-static void daemonize(int do_wait)
+static int check_fd(int fd, int ms)
+{
+	struct pollfd pfds[2] = { { 0 } };
+	int s, r = 0, i = 0;
+
+	pfds[0].fd = fd;
+	pfds[0].events = POLLIN | POLLERR;
+	s = poll(pfds, 1, ms);
+
+	if (s == 0 || s == -1) {
+		r = s;
+	} else {
+		r = -1;
+
+		if ((pfds[0].revents & POLLIN)) {
+			if ((i = read(fd, &r, sizeof(r))) > -1) {
+				i = write(fd, &r, sizeof(r));
+			}
+		}
+	}
+	
+	return r;
+}
+
+static void daemonize(int *fds)
 {
 	int fd;
 	pid_t pid;
+	unsigned int sanity = 60;
 
-	if (!do_wait) {
+	if (!fds) {
 		switch (fork()) {
 		case 0:		/* child process */
 			break;
@@ -266,6 +284,9 @@ static void daemonize(int do_wait)
 
 	switch (pid) {
 	case 0:		/* child process */
+		if (fds) {
+			close(fds[0]);
+		}
 		break;
 	case -1:
 		fprintf(stderr, "Error Backgrounding (fork2)! %d - %s\n", errno, strerror(errno));
@@ -274,9 +295,10 @@ static void daemonize(int do_wait)
 	default:	/* parent process */
 		fprintf(stderr, "%d Backgrounding.\n", (int) pid);
 
-		if (do_wait) {
-			unsigned int sanity = 60;
+		if (fds) {
 			char *o;
+
+			close(fds[1]);
 
 			if ((o = getenv("FREESWITCH_BG_TIMEOUT"))) {
 				int tmp = atoi(o);
@@ -285,14 +307,21 @@ static void daemonize(int do_wait)
 				}
 			}
 
-			while (--sanity && !system_ready) {
+			do {
+				system_ready = check_fd(fds[0], 2000);
 
-				if (sanity % 2 == 0) {
+				if (system_ready == 0) {
 					printf("FreeSWITCH[%d] Waiting for background process pid:%d to be ready.....\n", (int)getpid(), (int) pid);
 				}
-				sleep(1);
-			}
-			if (!system_ready) {
+
+			} while (--sanity && system_ready == 0);
+
+			shutdown(fds[0], 2);
+			close(fds[0]);
+			fds[0] = -1;
+
+			
+			if (system_ready < 0) {
 				printf("FreeSWITCH[%d] Error starting system! pid:%d\n", (int)getpid(), (int) pid);
 				kill(pid, 9);
 				exit(EXIT_FAILURE);
@@ -300,13 +329,14 @@ static void daemonize(int do_wait)
 
 			printf("FreeSWITCH[%d] System Ready pid:%d\n", (int) getpid(), (int) pid);
 		}
+
 		exit(EXIT_SUCCESS);
 	}
 
-	if (do_wait) {
+	if (fds) {
 		setsid();
 	}
-
+	return;
 	/* redirect std* to null */
 	fd = open("/dev/null", O_RDONLY);
 	if (fd != 0) {
@@ -343,7 +373,9 @@ static const char usage[] =
 	"\t-g [group]             -- specify group to switch to\n"
 #endif
 #ifdef HAVE_SETRLIMIT
+#ifndef FS_64BIT
 	"\t-waste                 -- allow memory waste\n"
+#endif
 	"\t-core                  -- dump cores\n"
 #endif
 	"\t-help                  -- this message\n"
@@ -366,6 +398,7 @@ static const char usage[] =
 	"\t-c                     -- output to a console and stay in the foreground\n"
 	"\n\tOptions to control locations of files:\n"
 	"\t-base [basedir]         -- alternate prefix directory\n"
+	"\t-cfgname [filename]     -- alternate filename for FreeSWITCH main configuration file\n"
 	"\t-conf [confdir]         -- alternate directory for FreeSWITCH configuration files\n"
 	"\t-log [logdir]           -- alternate directory for logfiles\n"
 	"\t-run [rundir]           -- alternate directory for runtime files\n"
@@ -404,6 +437,7 @@ int main(int argc, char *argv[])
 	switch_bool_t do_wait = SWITCH_FALSE;
 	char *runas_user = NULL;
 	char *runas_group = NULL;
+	int fds[2] = { 0, 0 };
 #else
 	switch_bool_t win32_service = SWITCH_FALSE;
 #endif
@@ -427,7 +461,9 @@ int main(int argc, char *argv[])
 	switch_file_t *fd;
 	switch_memory_pool_t *pool = NULL;
 #ifdef HAVE_SETRLIMIT
+#ifndef FS_64BIT
 	switch_bool_t waste = SWITCH_FALSE;
+#endif
 #endif
 
 	for (x = 0; x < argc; x++) {
@@ -591,13 +627,17 @@ int main(int argc, char *argv[])
 		}
 
 		else if (!strcmp(local_argv[x], "-waste")) {
+#ifndef FS_64BIT
 			fprintf(stderr, "WARNING: Wasting up to 8 megs of memory per thread.\n");
 			sleep(2);
 			waste = SWITCH_TRUE;
+#endif
 		}
 
 		else if (!strcmp(local_argv[x], "-no-auto-stack")) {
+#ifndef FS_64BIT
 			waste = SWITCH_TRUE;
+#endif
 		}
 #endif
 		else if (!strcmp(local_argv[x], "-hp") || !strcmp(local_argv[x], "-rp")) {
@@ -857,6 +897,21 @@ int main(int argc, char *argv[])
 			strcpy(SWITCH_GLOBAL_dirs.sounds_dir, local_argv[x]);
 		}
 
+		else if (!strcmp(local_argv[x], "-cfgname")) {
+			x++;
+			if (switch_strlen_zero(local_argv[x]) || is_option(local_argv[x])) {
+				fprintf(stderr, "When using -cfgname you must specify a filename\n");
+				return 255;
+			}
+
+			SWITCH_GLOBAL_filenames.conf_name = (char *) malloc(strlen(local_argv[x]) + 1);
+			if (!SWITCH_GLOBAL_filenames.conf_name) {
+				fprintf(stderr, "Allocation error\n");
+				return 255;
+			}
+			strcpy(SWITCH_GLOBAL_filenames.conf_name, local_argv[x]);
+		}
+
 		/* Unknown option (always last!) */
 		else {
 			fprintf(stderr, "Unknown option '%s', see '%s -help' for a list of valid options\n",
@@ -888,7 +943,7 @@ int main(int argc, char *argv[])
 		return 255;
 	}
 
-
+#ifndef FS_64BIT
 #if defined(HAVE_SETRLIMIT) && !defined(__sun)
 	if (!waste && !(flags & SCF_VG)) {
 		struct rlimit rlp;
@@ -900,12 +955,9 @@ int main(int argc, char *argv[])
 			char buf[1024] = "";
 			int i = 0;
 
-			fprintf(stderr, "Error: stacksize %d is not optimal: run ulimit -s %d from your shell before starting the application.\nauto-adjusting stack size for optimal performance...\n",
-					(int) (rlp.rlim_cur / 1024), SWITCH_THREAD_STACKSIZE / 1024);
-
 			memset(&rlp, 0, sizeof(rlp));
 			rlp.rlim_cur = SWITCH_THREAD_STACKSIZE;
-			rlp.rlim_max = SWITCH_THREAD_STACKSIZE;
+			rlp.rlim_max = SWITCH_SYSTEM_THREAD_STACKSIZE;
 			setrlimit(RLIMIT_STACK, &rlp);
 
 			apr_terminate();
@@ -919,15 +971,29 @@ int main(int argc, char *argv[])
 		}
 	}
 #endif
-
+#endif
 	signal(SIGILL, handle_SIGILL);
 	signal(SIGTERM, handle_SIGILL);
 #ifndef WIN32
 	if (do_wait) {
-		signal(SIGUSR2, handle_SIGUSR2);
+		if (pipe(fds)) {
+			fprintf(stderr, "System Error!\n");
+			exit(-1);
+		}
+
 		signal(SIGCHLD, handle_SIGCHLD);
 	}
 #endif
+
+	if (nc) {
+#ifdef WIN32
+		FreeConsole();
+#else
+		if (!nf) {
+			daemonize(do_wait ? fds : NULL);
+		}
+#endif
+	}
 
 	switch (priority) {
 	case 2:
@@ -946,6 +1012,7 @@ int main(int argc, char *argv[])
 	
 	switch_core_setrlimits();
 
+
 #ifndef WIN32
 	if (runas_user || runas_group) {
 		if (change_user_group(runas_user, runas_group) < 0) {
@@ -955,19 +1022,7 @@ int main(int argc, char *argv[])
 			return 255;
 		}
 	}
-#endif
-
-	if (nc) {
-#ifdef WIN32
-		FreeConsole();
 #else
-		if (!nf) {
-			daemonize(do_wait);
-		}
-#endif
-	}
-
-#ifdef WIN32
 	if (win32_service) {
 		/* Attempt to start service */
 		SERVICE_TABLE_ENTRY dispatchTable[] = {
@@ -1032,7 +1087,19 @@ int main(int argc, char *argv[])
 
 #ifndef WIN32
 	if (do_wait) {
-		kill(getppid(), SIGUSR2);
+		if (fds[1] > -1) {
+			int i, v = 1;
+
+			if ((i = write(fds[1], &v, sizeof(v))) < 0) {
+				fprintf(stderr, "System Error [%s]\n", strerror(errno));
+			} else {
+				i = read(fds[1], &v, sizeof(v));
+			}
+		
+			shutdown(fds[1], 2);
+			close(fds[1]);
+			fds[1] = -1;
+		}
 	}
 #endif
 
