@@ -28,7 +28,8 @@
  */
 #include "iks_helpers.h"
 #include <switch.h>
-#include <switch_ssl.h>
+#include <openssl/hmac.h>
+#include <openssl/sha.h>
 
 #undef XMPP_ERROR
 #define XMPP_ERROR(def_name, name, type) \
