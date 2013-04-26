@@ -462,6 +462,7 @@ static void on_stream_auth(struct xmpp_stream *stream, iks *node)
 		char *authzid = NULL, *authcid, *password;
 		/* TODO use library for SASL! */
 		parse_plain_auth_message(message, &authzid, &authcid, &password);
+		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded authzid = \"%s\" authcid = \"%s\"\n", stream->jid, xmpp_stream_state_to_string(stream->state), authzid, authcid);
 		if (verify_plain_auth(context, authzid, authcid, password)) {
 			stream->jid = switch_core_strdup(stream->pool, authzid);
 			if (!stream->s2s && !strchr(stream->jid, '@')) {
@@ -469,7 +470,6 @@ static void on_stream_auth(struct xmpp_stream *stream, iks *node)
 				stream->jid = switch_core_sprintf(stream->pool, "%s@%s", stream->jid, context->domain);
 			}
 
-			switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, auth, state = %s, SASL/PLAIN decoded = %s %s\n", stream->jid, xmpp_stream_state_to_string(stream->state), authzid, authcid);
 			xmpp_send_auth_success(stream);
 			stream->state = XSS_AUTHENTICATED;
 		} else {
@@ -478,6 +478,8 @@ static void on_stream_auth(struct xmpp_stream *stream, iks *node)
 			stream->state = XSS_ERROR;
 		}
 		switch_safe_free(authzid);
+		switch_safe_free(authcid);
+		switch_safe_free(password);
 	} else {
 		/* missing message */
 		stream->state = XSS_ERROR;
