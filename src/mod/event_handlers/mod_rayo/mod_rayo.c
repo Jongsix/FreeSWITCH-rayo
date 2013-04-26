@@ -3067,7 +3067,7 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 		iks *iq = NULL;
 
 		/* is command already wrapped in IQ? */
-		if (!strcmp(iks_name(command), "iq")) {
+		if (!strcmp(iks_name(command), "iq") || !strcmp(iks_name(command), "message") || !strcmp(iks_name(command), "presence")) {
 			/* command already IQ */
 			iq = command;
 		} else {
