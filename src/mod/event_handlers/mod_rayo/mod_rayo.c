@@ -225,6 +225,9 @@ static struct rayo_message *rayo_component_send(struct rayo_actor *client, struc
 static struct rayo_message *rayo_client_send(struct rayo_actor *from, struct rayo_actor *client, struct rayo_message *msg, const char *file, int line);
 static struct rayo_message *rayo_console_client_send(struct rayo_actor *from, struct rayo_actor *client, struct rayo_message *msg, const char *file, int line);
 
+static void on_client_presence(struct rayo_client *rclient, iks *node);
+
+
 /**
  * Convert Rayo client state to string
  * @param state the Rayo client state
@@ -1331,6 +1334,11 @@ static struct rayo_message *rayo_server_send(struct rayo_actor *client, struct r
 	iks *iq = msg->payload;
 	iks *response = NULL;
 
+	if (!strcmp("presence", iks_name(iq))) {
+		on_client_presence(RAYO_CLIENT(client), iq);
+		return NULL;
+	}
+
 	/* is this a command a server supports? */
 	handler = rayo_actor_command_handler_find(server, iq);
 	if (!handler) {
@@ -2040,6 +2048,35 @@ static iks *on_iq_get_xmpp_disco(struct rayo_actor *rclient, struct rayo_actor *
 }
 
 /**
+ * Handle message from client
+ * @param rclient that sent the command
+ * @param message the message
+ */
+static void on_client_message(struct rayo_client *rclient, iks *message)
+{
+	const char *to = iks_find_attrib(message, "to");
+	struct rayo_actor *actor;
+
+	/* must be directed to a client */
+	if (zstr(to)) {
+		return;
+	}
+
+	/* assume client source */
+	if (zstr(iks_find_attrib(message, "from"))) {
+		iks_insert_attrib(message, "from", RAYO_JID(rclient));
+	}
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, recv message, state = %s\n", RAYO_JID(rclient), rayo_client_state_to_string(rclient->state));
+
+	actor = RAYO_LOCATE(to);
+	if (actor && actor->type == RAT_CLIENT) {
+		RAYO_SEND(rclient, actor, rayo_message_create_dup(message));
+	}
+	RAYO_UNLOCK(actor);
+}
+
+/**
  * Handle <presence> message from a client
  * @param rclient the client
  * @param node the presence message
@@ -2066,15 +2103,19 @@ static void on_client_presence(struct rayo_client *rclient, iks *node)
 		if (!zstr(status_str)) {
 			if (!strcmp("chat", status_str)) {
 				status = PS_ONLINE;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s got chat presence\n", RAYO_JID(rclient));
 			} else if (!strcmp("dnd", status_str)) {
 				status = PS_OFFLINE;
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s got dnd presence\n", RAYO_JID(rclient));
 			}
 		} else {
 			/* <presence/> */
 			status = PS_ONLINE;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s got empty presence\n", RAYO_JID(rclient));
 		}
 	} else if (!strcmp("unavailable", type)) {
 		status = PS_OFFLINE;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s got unavailable presence\n", RAYO_JID(rclient));
 	} else if (!strcmp("error", type)) {
 		/* TODO presence error */
 	} else if (!strcmp("probe", type)) {
@@ -2092,7 +2133,7 @@ static void on_client_presence(struct rayo_client *rclient, iks *node)
 	if (status == PS_ONLINE && rclient->state == RCS_OFFLINE) {
 		rclient->state = RCS_ONLINE;
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s is ONLINE\n", RAYO_JID(rclient));
-	} else if (status == PS_OFFLINE && rclient->state != RCS_ONLINE) {
+	} else if (status == PS_OFFLINE && rclient->state == RCS_ONLINE) {
 		rclient->state = RCS_OFFLINE;
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
 	}
@@ -2786,7 +2827,12 @@ static void on_xmpp_stream_recv(struct xmpp_stream *stream, iks *stanza)
 			RAYO_UNLOCK(actor);
 		}
 	} else if (!strcmp("message", name)) {
-		/* ignore */
+		const char *from = iks_find_attrib_soft(stanza, "from");
+		struct rayo_actor *actor = xmpp_stream_client_locate(stream, from);
+		if (actor) {
+			on_client_message(RAYO_CLIENT(actor), stanza);
+			RAYO_UNLOCK(actor);
+		}
 	}
 }
 
@@ -3067,7 +3113,7 @@ static void send_console_command(struct rayo_client *client, const char *to, con
 		iks *iq = NULL;
 
 		/* is command already wrapped in IQ? */
-		if (!strcmp(iks_name(command), "iq") || !strcmp(iks_name(command), "message") || !strcmp(iks_name(command), "presence")) {
+		if (!strcmp(iks_name(command), "iq")) {
 			/* command already IQ */
 			iq = command;
 		} else {
@@ -3119,38 +3165,111 @@ static int command_api(const char *cmd, switch_stream_handle_t *stream)
 }
 
 /**
- * Modify console client
+ * Send message from console
  */
-static int console_api(const char *cmd, switch_stream_handle_t *stream)
+static void send_console_message(struct rayo_client *client, const char *to, const char *message_str)
+{
+	struct rayo_actor *actor = RAYO_LOCATE(to);
+	if (actor) {
+		struct rayo_message *reply;
+		iks *message = NULL, *x;
+		message = iks_new("message");
+		iks_insert_attrib(message, "to", to);
+		iks_insert_attrib(message, "from", RAYO_JID(client));
+		iks_insert_attrib_printf(message, "id", "console-%i", RAYO_SEQ_NEXT(client));
+		iks_insert_attrib(message, "type", "chat");
+		x = iks_insert(message, "body");
+		iks_insert_cdata(x, message_str, strlen(message_str));
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "\nSEND: to %s, %s\n", to, iks_string(iks_stack(message), message));
+		reply = RAYO_SEND(client, actor, rayo_message_create(message));
+		if (reply) {
+			/* ignore reply */
+			rayo_message_destroy(reply);
+		}
+		RAYO_UNLOCK(actor);
+	}
+}
+
+/**
+ * Send message to rayo actor
+ */
+static int message_api(const char *msg, switch_stream_handle_t *stream)
+{
+	char *msg_dup = strdup(msg);
+	char *argv[2] = { 0 };
+	int argc = switch_separate_string(msg_dup, ' ', argv, sizeof(argv) / sizeof(argv[0]));
+
+	if (argc != 2) {
+		free(msg_dup);
+		return 0;
+	}
+
+	/* send message */
+	send_console_message(globals.console, argv[0], argv[1]);
+	stream->write_function(stream, "+OK\n");
+
+	free(msg_dup);
+	return 1;
+}
+
+/**
+ * Send presence from console
+ */
+static void send_console_presence(struct rayo_client *client, const char *to, int is_online)
+{
+	struct rayo_actor *actor = RAYO_LOCATE(to);
+	if (actor) {
+		struct rayo_message *reply;
+		iks *presence = NULL, *x;
+		presence = iks_new("presence");
+		iks_insert_attrib(presence, "to", to);
+		iks_insert_attrib(presence, "from", RAYO_JID(client));
+		iks_insert_attrib_printf(presence, "id", "console-%i", RAYO_SEQ_NEXT(client));
+		if (!is_online) {
+			iks_insert_attrib(presence, "type", "unavailable");
+		}
+		x = iks_insert(presence, "show");
+		iks_insert_cdata(x, is_online ? "chat" : "dnd", 0);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CONSOLE, "\nSEND: to %s, %s\n", to, iks_string(iks_stack(presence), presence));
+		reply = RAYO_SEND(client, actor, rayo_message_create(presence));
+		if (reply) {
+			/* ignore reply */
+			rayo_message_destroy(reply);
+		}
+		RAYO_UNLOCK(actor);
+	}
+}
+
+/**
+ * Send console presence
+ */
+static int presence_api(const char *cmd, switch_stream_handle_t *stream)
 {
 	char *cmd_dup = strdup(cmd);
-	char *argv[1] = { 0 };
+	char *argv[2] = { 0 };
 	int argc = switch_separate_string(cmd_dup, ' ', argv, sizeof(argv) / sizeof(argv[0]));
+	int is_online = 0;
 
-	if (argc != 1) {
+	if (argc != 2) {
 		free(cmd_dup);
 		return 0;
 	}
 
-	if (!strcmp("online", argv[0])) {
-		switch_mutex_lock(RAYO_ACTOR(globals.console)->mutex);
-		globals.console->state = RCS_ONLINE;
-		switch_mutex_unlock(RAYO_ACTOR(globals.console)->mutex);
-	} else if (!strcmp("offline", argv[0])) {
-		switch_mutex_lock(RAYO_ACTOR(globals.console)->mutex);
-		globals.console->state = RCS_OFFLINE;
-		switch_mutex_unlock(RAYO_ACTOR(globals.console)->mutex);
-	} else {
+	if (!strcmp("online", argv[1])) {
+		is_online = 1;
+	} else if (strcmp("offline", argv[1])) {
 		free(cmd_dup);
 		return 0;
 	}
 
+	/* send presence */
+	send_console_presence(globals.console, argv[0], is_online);
 	stream->write_function(stream, "+OK\n");
 	free(cmd_dup);
 	return 1;
 }
 
-#define RAYO_API_SYNTAX "status | (cmd <jid> <command>) | (console <online|offline>)"
+#define RAYO_API_SYNTAX "status | (cmd <jid> <command>) | (msg <jid> <message text>) | (presence <jid> <online|offline>)"
 SWITCH_STANDARD_API(rayo_api)
 {
 	int success = 0;
@@ -3158,8 +3277,10 @@ SWITCH_STANDARD_API(rayo_api)
 		success = dump_api(cmd + 6, stream);
 	} else if (!strncmp("cmd", cmd, 3)) {
 		success = command_api(cmd + 3, stream);
-	} else if (!strncmp("console", cmd, 7)) {
-		success = console_api(cmd + 7, stream);
+	} else if (!strncmp("msg", cmd, 3)) {
+		success = message_api(cmd + 3, stream);
+	} else if (!strncmp("presence", cmd, 8)) {
+		success = presence_api(cmd + 8, stream);
 	}
 
 	if (!success) {
@@ -3170,9 +3291,9 @@ SWITCH_STANDARD_API(rayo_api)
 }
 
 /**
- * Console auto-completion for all actors
+ * Console auto-completion for all internal actors
  */
-switch_status_t list_actors(const char *line, const char *cursor, switch_console_callback_match_t **matches)
+switch_status_t list_internal(const char *line, const char *cursor, switch_console_callback_match_t **matches)
 {
 	switch_hash_index_t *hi;
 	void *val;
@@ -3186,9 +3307,66 @@ switch_status_t list_actors(const char *line, const char *cursor, switch_console
 		switch_hash_this(hi, &vvar, NULL, &val);
 
 		actor = (struct rayo_actor *) val;
-		if (actor->type != RAT_CLIENT) {
+		if (actor->type != RAT_CLIENT && actor->type != RAT_PEER_SERVER) {
 			switch_console_push_match(&my_matches, (const char *) vvar);
 		}
+	}
+	switch_mutex_unlock(globals.actors_mutex);
+
+	if (my_matches) {
+		*matches = my_matches;
+		status = SWITCH_STATUS_SUCCESS;
+	}
+
+	return status;
+}
+
+/**
+ * Console auto-completion for all external actors
+ */
+switch_status_t list_external(const char *line, const char *cursor, switch_console_callback_match_t **matches)
+{
+	switch_hash_index_t *hi;
+	void *val;
+	const void *vvar;
+	switch_console_callback_match_t *my_matches = NULL;
+	switch_status_t status = SWITCH_STATUS_FALSE;
+	struct rayo_actor *actor;
+
+	switch_mutex_lock(globals.actors_mutex);
+	for (hi = switch_hash_first(NULL, globals.actors); hi; hi = switch_hash_next(hi)) {
+		switch_hash_this(hi, &vvar, NULL, &val);
+
+		actor = (struct rayo_actor *) val;
+		if (actor->type == RAT_CLIENT || actor->type == RAT_PEER_SERVER) {
+			switch_console_push_match(&my_matches, (const char *) vvar);
+		}
+	}
+	switch_mutex_unlock(globals.actors_mutex);
+
+	if (my_matches) {
+		*matches = my_matches;
+		status = SWITCH_STATUS_SUCCESS;
+	}
+
+	return status;
+}
+
+/**
+ * Console auto-completion for all actors
+ */
+switch_status_t list_all(const char *line, const char *cursor, switch_console_callback_match_t **matches)
+{
+	switch_hash_index_t *hi;
+	void *val;
+	const void *vvar;
+	switch_console_callback_match_t *my_matches = NULL;
+	switch_status_t status = SWITCH_STATUS_FALSE;
+
+	switch_mutex_lock(globals.actors_mutex);
+	for (hi = switch_hash_first(NULL, globals.actors); hi; hi = switch_hash_next(hi)) {
+		switch_hash_this(hi, &vvar, NULL, &val);
+		switch_console_push_match(&my_matches, (const char *) vvar);
 	}
 	switch_mutex_unlock(globals.actors_mutex);
 
@@ -3276,10 +3454,13 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	globals.console = rayo_console_client_create();
 
 	switch_console_set_complete("add rayo status");
-	switch_console_set_complete("add rayo cmd ::rayo::list_actors");
-	switch_console_set_complete("add rayo console online");
-	switch_console_set_complete("add rayo console offline");
-	switch_console_add_complete_func("::rayo::list_actors", list_actors);
+	switch_console_set_complete("add rayo cmd ::rayo::list_internal");
+	switch_console_set_complete("add rayo msg ::rayo::list_external");
+	switch_console_set_complete("add rayo presence ::rayo::list_all online");
+	switch_console_set_complete("add rayo presence ::rayo::list_all offline");
+	switch_console_add_complete_func("::rayo::list_internal", list_internal);
+	switch_console_add_complete_func("::rayo::list_external", list_external);
+	switch_console_add_complete_func("::rayo::list_all", list_all);
 
 	rayo_add_cmd_alias("ping", "<iq type=\"get\"><ping xmlns=\""IKS_NS_XMPP_PING"\"/></iq>");
 	rayo_add_cmd_alias("answer", "<answer xmlns=\""RAYO_NS"\"/>");
