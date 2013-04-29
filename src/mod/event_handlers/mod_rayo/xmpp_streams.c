@@ -1069,7 +1069,7 @@ static int on_stream(void *user_data, int type, iks *node)
 			/* stanza */
 			if (node) {
 				const char *name = iks_name(node);
-				if (!strcmp("iq", name)) {
+				if (!strcmp("iq", name) || !strcmp("message", name)) {
 					on_stream_iq(stream, node);
 				} else if (!strcmp("presence", name)) {
 					on_stream_presence(stream, node);
