@@ -59,6 +59,8 @@ struct input_component {
 	int speech_mode;
 	/** Number of collected digits */
 	int num_digits;
+	/** Terminating digits */
+	int term_digit_mask;
 	/** The collected digits */
 	char digits[MAX_DTMF + 1];
 	/** grammar to match */
@@ -98,6 +100,73 @@ struct input_handler {
 };
 
 /**
+ * @return digit mask
+ */
+static int get_digit_mask(char digit)
+{
+	switch(digit) {
+		case '0': return 1;
+		case '1': return 1 << 1;
+		case '2': return 1 << 2;
+		case '3': return 1 << 3;
+		case '4': return 1 << 4;
+		case '5': return 1 << 5;
+		case '6': return 1 << 6;
+		case '7': return 1 << 7;
+		case '8': return 1 << 8;
+		case '9': return 1 << 9;
+		case 'A':
+		case 'a': return 1 << 10;
+		case 'B':
+		case 'b': return 1 << 11;
+		case 'C':
+		case 'c': return 1 << 12;
+		case 'D':
+		case 'd': return 1 << 13;
+		case '#': return 1 << 14;
+		case '*': return 1 << 15;
+	}
+	return 0;
+}
+
+/**
+ * @param digit_mask to check
+ * @param digit to look for
+ * @return true if set
+ */
+static int digit_mask_test(int digit_mask, char digit)
+{
+	return digit_mask & get_digit_mask(digit);
+}
+
+/**
+ * @param digit_mask to set digit in
+ * @param digit to set
+ * @return the digit mask with the set digit
+ */
+static int digit_mask_set(int digit_mask, char digit)
+{
+	return digit_mask | get_digit_mask(digit);
+}
+
+/**
+ * @param digit_mask to set digits in
+ * @param digits to add to mask
+ * @return the digit mask with the set digits
+ */
+static int digit_mask_set_from_digits(int digit_mask, const char *digits)
+{
+	if (!zstr(digits)) {
+		int digits_len = strlen(digits);
+		int i;
+		for (i = 0; i < digits_len; i++) {
+			digit_mask = digit_mask_set(digit_mask, digits[i]);
+		}
+	}
+	return digit_mask;
+}
+
+/**
  * Send barge-in event to client
  */
 static void send_barge_event(struct rayo_component *component)
@@ -120,17 +189,35 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 	struct input_handler *handler = (struct input_handler *)switch_channel_get_private(channel, RAYO_INPUT_COMPONENT_PRIVATE_VAR);
 
 	if (handler) {
+		int is_term_digit = 0;
 		struct input_component *component;
 		enum srgs_match_type match;
+
 		switch_mutex_lock(handler->mutex);
 		component = handler->component;
-		component->digits[component->num_digits] = dtmf->digit;
-		component->num_digits++;
-		component->digits[component->num_digits] = '\0';
-		component->last_digit_time = switch_micro_time_now();
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", component->digits);
+
+		is_term_digit = digit_mask_test(component->term_digit_mask, dtmf->digit);
+
+		if (!is_term_digit) {
+			component->digits[component->num_digits] = dtmf->digit;
+			component->num_digits++;
+			component->digits[component->num_digits] = '\0';
+			component->last_digit_time = switch_micro_time_now();
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected digits = \"%s\"\n", component->digits);
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Collected term digit = \"%c\"\n", dtmf->digit);
+		}
 
 		match = srgs_grammar_match(component->grammar, component->digits);
+
+		/* adjust result if terminating digit was pressed */
+		if (is_term_digit) {
+			if (match == SMT_MATCH_PARTIAL) {
+				match = SMT_NO_MATCH;
+			} else if (match == SMT_MATCH) {
+				match = SMT_MATCH_END;
+			}
+		}
 
 		switch (match) {
 			case SMT_MATCH:
@@ -300,6 +387,7 @@ static iks *start_call_input(struct input_component *component, switch_core_sess
 	component->min_confidence = (int)ceil(iks_find_decimal_attrib(input, "min-confidence") * 100.0);
 	component->barge_event = iks_find_bool_attrib(input, "barge-event");
 	component->start_timers = iks_find_bool_attrib(input, "start-timers");
+	component->term_digit_mask = digit_mask_set_from_digits(0, iks_find_attrib_soft(input, "terminator"));
 	component->handler = handler;
 
 	/* parse the grammar */
