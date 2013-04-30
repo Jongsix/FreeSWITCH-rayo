@@ -35,9 +35,14 @@ struct srgs_parser;
 struct srgs_grammar;
 
 enum srgs_match_type {
+	/** invalid input */
 	SMT_NO_MATCH,
+	/** matches, can accept more input */
 	SMT_MATCH,
-	SMT_MATCH_PARTIAL
+	/** not yet a match, but valid input so far */
+	SMT_MATCH_PARTIAL,
+	/** matches, cannot accept more input */
+	SMT_MATCH_END
 };
 
 extern int srgs_init(void);

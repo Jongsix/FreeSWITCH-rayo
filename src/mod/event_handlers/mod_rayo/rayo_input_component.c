@@ -133,6 +133,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 		match = srgs_grammar_match(component->grammar, component->digits);
 
 		switch (match) {
+			case SMT_MATCH:
 			case SMT_MATCH_PARTIAL: {
 				/* need more digits */
 				if (component->num_digits == 1) {
@@ -148,7 +149,7 @@ static switch_status_t input_component_on_dtmf(switch_core_session_t *session, c
 				rayo_component_send_complete(RAYO_COMPONENT(component), INPUT_NOMATCH);
 				break;
 			}
-			case SMT_MATCH: {
+			case SMT_MATCH_END: {
 				iks *result = nlsml_create_dtmf_match(component->digits);
 				/* notify of match and remove input component */
 				handler->component = NULL;
@@ -187,9 +188,21 @@ static switch_bool_t input_component_bug_callback(switch_media_bug_t *bug, void 
 			if (component && component->start_timers) {
 				int elapsed_ms = (switch_micro_time_now() - component->last_digit_time) / 1000;
 				if (component->num_digits && component->inter_digit_timeout > 0 && elapsed_ms > component->inter_digit_timeout) {
+					enum srgs_match_type match;
 					handler->component = NULL;
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
-					rayo_component_send_complete(RAYO_COMPONENT(component), INPUT_INTER_DIGIT_TIMEOUT);
+
+					/* we got some input, check for match */
+					match = srgs_grammar_match(component->grammar, component->digits);
+					if (match == SMT_MATCH || match == SMT_MATCH_END) {
+						iks *result = nlsml_create_dtmf_match(component->digits);
+						/* notify of match */
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "MATCH = %s\n", component->digits);
+						rayo_component_send_complete_with_metadata(RAYO_COMPONENT(component), INPUT_MATCH, result, 0);
+						iks_delete(result);
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "inter-digit-timeout\n");
+						rayo_component_send_complete(RAYO_COMPONENT(component), INPUT_INTER_DIGIT_TIMEOUT);
+					}
 				} else if (!component->num_digits && component->initial_timeout > 0 && elapsed_ms > component->initial_timeout) {
 					handler->component = NULL;
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "initial-timeout\n");
