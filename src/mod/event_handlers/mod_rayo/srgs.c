@@ -1170,6 +1170,46 @@ struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document
 	return grammar;
 }
 
+#define MAX_INPUT_SIZE 128
+#define OVECTOR_SIZE 30
+#define WORKSPACE_SIZE 1024
+
+/**
+ * Check if no more digits can be added to input and match
+ * @param compiled_regex the regex used in the initial match
+ * @param input the input to check
+ * @return true if end of match (no more input can be added)
+ */
+static int is_match_end(pcre *compiled_regex, const char *input)
+{
+	int ovector[OVECTOR_SIZE];
+	int input_size = strlen(input);
+	char search_input[MAX_INPUT_SIZE + 2];
+	const char *search_set = "0123456789#*ABCD";
+	const char *search = strchr(search_set, input[input_size - 1]); /* start with last digit in input */
+	int i = 0;
+
+	/* For each digit in search_set, check if input + search_set digit is a potential match.
+	   If so, then this is not a match end.
+	 */
+	sprintf(search_input, "%sZ", input);
+	for (i = 0; i < 16; i++) {
+		int result;
+		if (!*search) {
+			search = search_set;
+		}
+		search_input[input_size] = *search++;
+		result = pcre_exec(compiled_regex, NULL, search_input, input_size + 1, 0, 0,
+			ovector, sizeof(ovector) / sizeof(ovector[0]));
+		if (result > 0) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "not match end\n");
+			return 0;
+		}
+	}
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "is match end\n");
+	return 1;
+}
+
 /**
  * Find a match
  * @param grammar the grammar to match
@@ -1179,9 +1219,13 @@ struct srgs_grammar *srgs_parse(struct srgs_parser *parser, const char *document
 enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char *input)
 {
 	int result = 0;
-	int ovector[30];
-	int workspace[1024];
+	int ovector[OVECTOR_SIZE];
+	int workspace[WORKSPACE_SIZE];
 	pcre *compiled_regex = get_compiled_regex(grammar);
+	if (strlen(input) > MAX_INPUT_SIZE) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "input too large: %s\n", input);
+		return SMT_NO_MATCH;
+	}
 	if (!compiled_regex) {
 		return SMT_NO_MATCH;
 	}
@@ -1190,6 +1234,9 @@ enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char
 		workspace, sizeof(workspace) / sizeof(workspace[0]));
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match = %i\n", result);
 	if (result > 0) {
+		if (is_match_end(compiled_regex, input)) {
+			return SMT_MATCH_END;
+		}
 		return SMT_MATCH;
 	}
 	if (result == PCRE_ERROR_PARTIAL) {
@@ -1320,7 +1367,6 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
 		case SNT_STRING: {
 			int len = strlen(node->value.string);
 			int i;
-			//stream->write_function(stream, " \"");
 			stream->write_function(stream, " ");
 			for (i = 0; i < len; i++) {
 				switch (node->value.string[i]) {
@@ -1346,7 +1392,6 @@ static int create_jsgf(struct srgs_grammar *grammar, struct srgs_node *node, swi
 				}
 				stream->write_function(stream, "%c", node->value.string[i]);
 			}
-			//stream->write_function(stream, "\"");
 			if (node->child) {
 				if (!create_jsgf(grammar, node->child, stream)) {
 					return 0;
