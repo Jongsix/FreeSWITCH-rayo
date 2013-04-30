@@ -1221,17 +1221,23 @@ enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char
 	int result = 0;
 	int ovector[OVECTOR_SIZE];
 	int workspace[WORKSPACE_SIZE];
-	pcre *compiled_regex = get_compiled_regex(grammar);
+	pcre *compiled_regex;
+
+	if (zstr(input)) {
+		return SMT_NO_MATCH;
+	}
 	if (strlen(input) > MAX_INPUT_SIZE) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "input too large: %s\n", input);
 		return SMT_NO_MATCH;
 	}
-	if (!compiled_regex) {
+
+	if (!(compiled_regex = get_compiled_regex(grammar))) {
 		return SMT_NO_MATCH;
 	}
 	result = pcre_dfa_exec(compiled_regex, NULL, input, strlen(input), 0, PCRE_PARTIAL,
 		ovector, sizeof(ovector) / sizeof(ovector[0]),
 		workspace, sizeof(workspace) / sizeof(workspace[0]));
+
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "match = %i\n", result);
 	if (result > 0) {
 		if (is_match_end(compiled_regex, input)) {
@@ -1242,6 +1248,7 @@ enum srgs_match_type srgs_grammar_match(struct srgs_grammar *grammar, const char
 	if (result == PCRE_ERROR_PARTIAL) {
 		return SMT_MATCH_PARTIAL;
 	}
+
 	return SMT_NO_MATCH;
 }
 
