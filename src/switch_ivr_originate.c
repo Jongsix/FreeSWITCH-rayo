@@ -465,8 +465,13 @@ static uint8_t check_channel_status(originate_global_t *oglobals, originate_stat
 				originate_status[i].peer_channel = switch_core_session_get_channel(originate_status[i].peer_session);
 				originate_status[i].caller_profile = switch_channel_get_caller_profile(originate_status[i].peer_channel);
 				switch_channel_set_flag(originate_status[i].peer_channel, CF_ORIGINATING);
-
+				
 				switch_channel_answer(originate_status[i].peer_channel);
+
+				switch_channel_execute_on(originate_status[i].peer_channel, "execute_on_pickup");
+				switch_channel_api_on(originate_status[i].peer_channel, "api_on_pickup");
+				switch_channel_set_variable(originate_status[i].peer_channel, "picked_up_uuid", switch_core_session_get_uuid(old_session));
+
 				switch_core_session_rwunlock(old_session);
 				break;
 			}
@@ -2060,7 +2065,16 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 		goto done;
 	}
 
-
+	if (var_event && (var = switch_event_get_header(var_event, "originate_delay_start"))) {
+		int tmp = atoi(var);
+		if (tmp > 0) {
+			while (tmp && (!cancel_cause || *cancel_cause == 0)) {
+				switch_cond_next();
+				tmp--;
+			}
+		}
+	}
+	
 	if (oglobals.session) {
 		switch_event_header_t *hi;
 		const char *cdr_total_var;

@@ -4625,7 +4625,7 @@ static int rtp_common_read(switch_rtp_t *rtp_session, switch_payload_t *payload_
 				my_host = switch_get_addr(bufc, sizeof(bufc), rtp_session->local_addr);
 
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG_CLEAN(rtp_session->session), SWITCH_LOG_CONSOLE,
-								  "R %s b=%ld %s:%u %s:%u %s:%u pt=%d ts=%u m=%d\n",
+								  "R %s b=%4ld %s:%u %s:%u %s:%u pt=%d ts=%u m=%d\n",
 								  switch_channel_get_name(switch_core_session_get_channel(rtp_session->session)),
 								  (long) bytes,
 								  my_host, switch_sockaddr_get_port(rtp_session->local_addr),
@@ -5466,7 +5466,7 @@ static int rtp_common_write(switch_rtp_t *rtp_session,
 				my_host = switch_get_addr(bufc, sizeof(bufc), rtp_session->local_addr);
 
 				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG_CLEAN(rtp_session->session), SWITCH_LOG_CONSOLE,
-								  "W %s b=%ld %s:%u %s:%u %s:%u pt=%d ts=%u m=%d\n",
+								  "W %s b=%4ld %s:%u %s:%u %s:%u pt=%d ts=%u m=%d\n",
 								  switch_channel_get_name(switch_core_session_get_channel(rtp_session->session)),
 								  (long) bytes,
 								  my_host, switch_sockaddr_get_port(rtp_session->local_addr),
@@ -5748,6 +5748,11 @@ SWITCH_DECLARE(switch_rtp_stats_t *) switch_rtp_get_stats(switch_rtp_t *rtp_sess
 {
 	switch_rtp_stats_t *s;
 
+	if (!rtp_session) {
+		return NULL;
+	}
+
+	switch_mutex_lock(rtp_session->flag_mutex);
 	if (pool) {
 		s = switch_core_alloc(pool, sizeof(*s));
 		*s = rtp_session->stats;
@@ -5758,6 +5763,7 @@ SWITCH_DECLARE(switch_rtp_stats_t *) switch_rtp_get_stats(switch_rtp_t *rtp_sess
 	if (rtp_session->jb) {
 		s->inbound.largest_jb_size = stfu_n_get_most_qlen(rtp_session->jb);
 	}
+	switch_mutex_unlock(rtp_session->flag_mutex);
 
 	return s;
 }

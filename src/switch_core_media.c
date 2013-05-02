@@ -884,6 +884,58 @@ SWITCH_DECLARE(void) switch_core_session_check_outgoing_crypto(switch_core_sessi
 	
 }
 
+#define add_stat(_i, _s)												\
+	switch_snprintf(var_name, sizeof(var_name), "rtp_%s_%s", switch_str_nil(prefix), _s) ; \
+	switch_snprintf(var_val, sizeof(var_val), "%" SWITCH_SIZE_T_FMT, _i); \
+	switch_channel_set_variable(channel, var_name, var_val)
+
+static void set_stats(switch_core_session_t *session, switch_media_type_t type, const char *prefix)
+{
+	switch_rtp_stats_t *stats = switch_core_media_get_stats(session, type, NULL);
+	switch_channel_t *channel = switch_core_session_get_channel(session);
+
+	char var_name[256] = "", var_val[35] = "";
+
+	if (stats) {
+
+		add_stat(stats->inbound.raw_bytes, "in_raw_bytes");
+		add_stat(stats->inbound.media_bytes, "in_media_bytes");
+		add_stat(stats->inbound.packet_count, "in_packet_count");
+		add_stat(stats->inbound.media_packet_count, "in_media_packet_count");
+		add_stat(stats->inbound.skip_packet_count, "in_skip_packet_count");
+		add_stat(stats->inbound.jb_packet_count, "in_jb_packet_count");
+		add_stat(stats->inbound.dtmf_packet_count, "in_dtmf_packet_count");
+		add_stat(stats->inbound.cng_packet_count, "in_cng_packet_count");
+		add_stat(stats->inbound.flush_packet_count, "in_flush_packet_count");
+		add_stat(stats->inbound.largest_jb_size, "in_largest_jb_size");
+
+		add_stat(stats->outbound.raw_bytes, "out_raw_bytes");
+		add_stat(stats->outbound.media_bytes, "out_media_bytes");
+		add_stat(stats->outbound.packet_count, "out_packet_count");
+		add_stat(stats->outbound.media_packet_count, "out_media_packet_count");
+		add_stat(stats->outbound.skip_packet_count, "out_skip_packet_count");
+		add_stat(stats->outbound.dtmf_packet_count, "out_dtmf_packet_count");
+		add_stat(stats->outbound.cng_packet_count, "out_cng_packet_count");
+
+		add_stat(stats->rtcp.packet_count, "rtcp_packet_count");
+		add_stat(stats->rtcp.octet_count, "rtcp_octet_count");
+
+	}
+}
+
+SWITCH_DECLARE(void) switch_core_media_set_stats(switch_core_session_t *session)
+{
+	
+	if (!session->media_handle) {
+		return;
+	}
+
+	set_stats(session, SWITCH_MEDIA_TYPE_AUDIO, "audio");
+	set_stats(session, SWITCH_MEDIA_TYPE_VIDEO, "video");
+}
+
+
+
 SWITCH_DECLARE(void) switch_media_handle_destroy(switch_core_session_t *session)
 {
 	switch_media_handle_t *smh;
@@ -894,7 +946,7 @@ SWITCH_DECLARE(void) switch_media_handle_destroy(switch_core_session_t *session)
 	if (!(smh = session->media_handle)) {
 		return;
 	}
-	
+
 	a_engine = &smh->engines[SWITCH_MEDIA_TYPE_AUDIO];
 	v_engine = &smh->engines[SWITCH_MEDIA_TYPE_VIDEO];	
 
@@ -917,8 +969,8 @@ SWITCH_DECLARE(void) switch_media_handle_destroy(switch_core_session_t *session)
 
 	switch_core_session_unset_read_codec(session);
 	switch_core_session_unset_write_codec(session);
-
 	switch_core_media_deactivate_rtp(session);
+
 
 
 }
@@ -3441,10 +3493,6 @@ SWITCH_DECLARE(void) switch_core_media_deactivate_rtp(switch_core_session_t *ses
 	a_engine = &smh->engines[SWITCH_MEDIA_TYPE_AUDIO];
 	v_engine = &smh->engines[SWITCH_MEDIA_TYPE_VIDEO];
 
-
-	if (switch_rtp_ready(a_engine->rtp_session)) {
-
-	}
 
 	if (v_engine->rtp_session) {
 		switch_rtp_destroy(&v_engine->rtp_session);
@@ -6088,7 +6136,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_receive_message(switch_core_se
 	}
 
 	a_engine = &smh->engines[SWITCH_MEDIA_TYPE_AUDIO];
-	v_engine = &smh->engines[SWITCH_MEDIA_TYPE_AUDIO];
+	v_engine = &smh->engines[SWITCH_MEDIA_TYPE_VIDEO];
 
 	switch (msg->message_id) {
 
@@ -6178,23 +6226,36 @@ SWITCH_DECLARE(switch_status_t) switch_core_media_receive_message(switch_core_se
 			}
 		}
 		break;
-	case SWITCH_MESSAGE_INDICATE_DEBUG_AUDIO:
+	case SWITCH_MESSAGE_INDICATE_DEBUG_MEDIA:
 		{
-			if (switch_rtp_ready(a_engine->rtp_session) && !zstr(msg->string_array_arg[0]) && !zstr(msg->string_array_arg[1])) {
-				int32_t flags = 0;
-				if (!strcasecmp(msg->string_array_arg[0], "read")) {
-					flags |= SWITCH_RTP_FLAG_DEBUG_RTP_READ;
-				} else if (!strcasecmp(msg->string_array_arg[0], "write")) {
-					flags |= SWITCH_RTP_FLAG_DEBUG_RTP_WRITE;
-				} else if (!strcasecmp(msg->string_array_arg[0], "both")) {
-					flags |= SWITCH_RTP_FLAG_DEBUG_RTP_READ | SWITCH_RTP_FLAG_DEBUG_RTP_WRITE;
+			switch_rtp_t *rtp = a_engine->rtp_session;
+			const char *direction = msg->string_array_arg[0];
+
+			if (direction && *direction == 'v') {
+				direction++;
+				rtp = v_engine->rtp_session;
+			}
+
+			if (switch_rtp_ready(rtp) && !zstr(direction) && !zstr(msg->string_array_arg[1])) {
+				switch_rtp_flag_t flags[SWITCH_RTP_FLAG_INVALID] = {0};
+				int both = !strcasecmp(direction, "both");
+				int set = 0;
+
+				if (both || !strcasecmp(direction, "read")) {
+					flags[SWITCH_RTP_FLAG_DEBUG_RTP_READ]++;
+					set++;
 				}
 
-				if (flags) {
+				if (both || !strcasecmp(direction, "write")) {
+					flags[SWITCH_RTP_FLAG_DEBUG_RTP_WRITE]++;
+					set++;
+				}
+
+				if (set) {
 					if (switch_true(msg->string_array_arg[1])) {
-						switch_rtp_set_flag(a_engine->rtp_session, flags);
+						switch_rtp_set_flags(rtp, flags);
 					} else {
-						switch_rtp_clear_flag(a_engine->rtp_session, flags);
+						switch_rtp_clear_flags(rtp, flags);
 					}
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Invalid Options\n");
@@ -6617,7 +6678,7 @@ SWITCH_DECLARE(switch_rtp_stats_t *) switch_core_media_get_stats(switch_core_ses
 		return NULL;
 	}
 
-	if (switch_rtp_ready(smh->engines[type].rtp_session)) {
+	if (smh->engines[type].rtp_session) {
 		return switch_rtp_get_stats(smh->engines[type].rtp_session, pool);
 	}
 

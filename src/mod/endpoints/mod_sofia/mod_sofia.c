@@ -632,9 +632,6 @@ switch_status_t sofia_on_hangup(switch_core_session_t *session)
 		*tech_pvt->sofia_private->uuid = '\0';
 	}
 
-
-	sofia_glue_set_rtp_stats(tech_pvt);
-
 	switch_mutex_unlock(tech_pvt->sofia_mutex);
 
 	return SWITCH_STATUS_SUCCESS;
@@ -971,7 +968,7 @@ static switch_status_t sofia_write_video_frame(switch_core_session_t *session, s
 		return SWITCH_STATUS_SUCCESS;
 	}
 
-	if (switch_core_media_write_frame(session, frame, flags, stream_id, SWITCH_MEDIA_TYPE_VIDEO)) {
+	if (SWITCH_STATUS_SUCCESS == switch_core_media_write_frame(session, frame, flags, stream_id, SWITCH_MEDIA_TYPE_VIDEO)) {
 		return SWITCH_STATUS_SUCCESS;
 	}
 
@@ -1665,7 +1662,11 @@ static switch_status_t sofia_receive_message(switch_core_session_t *session, swi
 							nua_info(tech_pvt->nh, SIPTAG_CONTENT_TYPE_STR("message/sipfrag"),
 									 TAG_IF(!zstr(tech_pvt->user_via), SIPTAG_VIA_STR(tech_pvt->user_via)), SIPTAG_PAYLOAD_STR(message), TAG_END());
 						} else if ((ua && (switch_stristr("polycom", ua)))) {
-							snprintf(message, sizeof(message), "P-Asserted-Identity: \"%s\" <%s>", name, number);
+							if ( switch_stristr("UA/4", ua) ) {
+								snprintf(message, sizeof(message), "P-Asserted-Identity: \"%s\" <sip:%s@%s>", name, number, tech_pvt->profile->sipip);
+							} else {
+								snprintf(message, sizeof(message), "P-Asserted-Identity: \"%s\" <%s>", name, number);
+							}
 							sofia_set_flag_locked(tech_pvt, TFLAG_UPDATING_DISPLAY);
 							nua_update(tech_pvt->nh,
 									   NUTAG_SESSION_TIMER(tech_pvt->session_timeout),

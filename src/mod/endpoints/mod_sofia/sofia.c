@@ -32,6 +32,7 @@
  * Raymond Chandler <intralanman@freeswitch.org>
  * Nathan Patrick <npatrick at corp.sonic.net>
  * Joseph Sullivan <jossulli@amazon.com>
+ * Emmanuel Schmidbauer <e.schmidbauer@gmail.com>
  *
  *
  * sofia.c -- SOFIA SIP Endpoint (sofia code)
@@ -2443,8 +2444,14 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 									 NTATAG_USE_SRV(0)),
 							  TAG_IF(sofia_test_pflag(profile, PFLAG_DISABLE_NAPTR),
 									 NTATAG_USE_NAPTR(0)),
+							  TAG_IF(sofia_test_pflag(profile, PFLAG_TCP_PINGPONG),
+									 TPTAG_PINGPONG(profile->tcp_pingpong)),
+							  TAG_IF(sofia_test_pflag(profile, PFLAG_TCP_PING2PONG),
+									 TPTAG_PINGPONG(profile->tcp_ping2pong)),
 							  TAG_IF(sofia_test_pflag(profile, PFLAG_DISABLE_SRV503),
 									 NTATAG_SRV_503(0)),									 
+							  TAG_IF(sofia_test_pflag(profile, PFLAG_TCP_KEEPALIVE),
+									 TPTAG_KEEPALIVE(profile->tcp_keepalive)),									 
 							  NTATAG_DEFAULT_PROXY(profile->outbound_proxy),
 							  NTATAG_SERVER_RPORT(profile->server_rport_level),
 							  NTATAG_CLIENT_RPORT(profile->client_rport_level),
@@ -2611,6 +2618,7 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 	}
 
 	sofia_clear_pflag_locked(profile, PFLAG_RUNNING);
+	sofia_reg_close_handles(profile);
 
 	switch_core_session_hupall_matching_var("sofia_profile_name", profile->name, SWITCH_CAUSE_MANAGER_REQUEST);
 	sanity = 10;
@@ -2628,7 +2636,7 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 	sofia_reg_unregister(profile);
 	nua_shutdown(profile->nua);
 
-	sanity = 10;
+	sanity = 100;
 	while (!sofia_test_pflag(profile, PFLAG_SHUTDOWN) || profile->queued_events > 0) {
 		su_root_step(profile->s_root, 1000);
 		if (!--sanity) {
@@ -2702,6 +2710,7 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 
 	sofia_glue_del_profile(profile);
 	switch_core_hash_destroy(&profile->chat_hash);
+	switch_core_hash_destroy(&profile->reg_nh_hash);
 	switch_core_hash_destroy(&profile->mwi_debounce_hash);
 	
 	switch_thread_rwlock_unlock(profile->rwlock);
@@ -3622,6 +3631,7 @@ switch_status_t config_sofia(sofia_config_t reload, char *profile_name)
 
 					profile->dbname = switch_core_strdup(profile->pool, url);
 					switch_core_hash_init(&profile->chat_hash, profile->pool);
+					switch_core_hash_init(&profile->reg_nh_hash, profile->pool);
 					switch_core_hash_init(&profile->mwi_debounce_hash, profile->pool);
 					switch_thread_rwlock_create(&profile->rwlock, profile->pool);
 					switch_mutex_init(&profile->flag_mutex, SWITCH_MUTEX_NESTED, profile->pool);
@@ -3692,8 +3702,17 @@ switch_status_t config_sofia(sofia_config_t reload, char *profile_name)
 					} else if (!strcasecmp(var, "sip-trace") && switch_true(val)) {
 						sofia_set_flag(profile, TFLAG_TPORT_LOG);
 					} else if (!strcasecmp(var, "sip-capture") && switch_true(val)) {
-                                                sofia_set_flag(profile, TFLAG_CAPTURE);
-                                                nua_set_params(profile->nua, TPTAG_CAPT(mod_sofia_globals.capture_server), TAG_END());
+						sofia_set_flag(profile, TFLAG_CAPTURE);
+						nua_set_params(profile->nua, TPTAG_CAPT(mod_sofia_globals.capture_server), TAG_END());						
+					} else if (!strcasecmp(var, "tcp-keepalive") && !zstr(val)) {
+						profile->tcp_keepalive = atoi(val);
+						sofia_set_pflag(profile, PFLAG_TCP_KEEPALIVE);
+					} else if (!strcasecmp(var, "tcp-pingpong") && !zstr(val)) {
+						profile->tcp_pingpong = atoi(val);
+						sofia_set_pflag(profile, PFLAG_TCP_PINGPONG);
+					} else if (!strcasecmp(var, "tcp-ping2pong") && !zstr(val)) {
+						profile->tcp_ping2pong = atoi(val);
+						sofia_set_pflag(profile, PFLAG_TCP_PING2PONG);
 					} else if (!strcasecmp(var, "odbc-dsn") && !zstr(val)) {
 						profile->odbc_dsn = switch_core_strdup(profile->pool, val);
 					} else if (!strcasecmp(var, "db-pre-trans-execute") && !zstr(val)) {
@@ -6779,6 +6798,7 @@ void sofia_handle_sip_i_refer(nua_t *nua, sofia_profile_t *profile, nua_handle_t
 						b_tech_pvt = (private_object_t *) switch_core_session_get_private(b_session);
 						channel_b = switch_core_session_get_channel(b_session);
 
+						switch_channel_set_variable(channel_a, "refer_uuid", b_private->uuid);
 						switch_channel_set_variable(channel_b, "transfer_disposition", "replaced");
 
 						br_a = switch_channel_get_partner_uuid(channel_a);

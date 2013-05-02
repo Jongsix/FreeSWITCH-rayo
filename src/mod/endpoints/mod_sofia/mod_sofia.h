@@ -268,6 +268,9 @@ typedef enum {
 	PFLAG_FIRE_MESSAGE_EVENTS,
 	PFLAG_SEND_DISPLAY_UPDATE,
 	PFLAG_RUNNING_TRANS,
+	PFLAG_TCP_KEEPALIVE,
+	PFLAG_TCP_PINGPONG,
+	PFLAG_TCP_PING2PONG,
 	/* No new flags below this line */
 	PFLAG_MAX
 } PFLAGS;
@@ -600,6 +603,7 @@ struct sofia_profile {
 	sofia_gateway_t *gateways;
 	//su_home_t *home;
 	switch_hash_t *chat_hash;
+	switch_hash_t *reg_nh_hash;
 	switch_hash_t *mwi_debounce_hash;
 	//switch_core_db_t *master_db;
 	switch_thread_rwlock_t *rwlock;
@@ -679,6 +683,9 @@ struct sofia_profile {
 	switch_port_t ws_port;
 	char *wss_ip;
 	switch_port_t wss_port;
+	int tcp_keepalive;
+	int tcp_pingpong;
+	int tcp_ping2pong;
 };
 
 
@@ -1058,7 +1065,6 @@ switch_status_t list_profiles_full(const char *line, const char *cursor, switch_
 switch_status_t list_profiles(const char *line, const char *cursor, switch_console_callback_match_t **matches);
 
 sofia_cid_type_t sofia_cid_name2type(const char *name);
-void sofia_glue_set_rtp_stats(private_object_t *tech_pvt);
 void sofia_glue_get_addr(msg_t *msg, char *buf, size_t buflen, int *port);
 sofia_destination_t *sofia_glue_get_destination(char *data);
 void sofia_glue_free_destination(sofia_destination_t *dst);
@@ -1107,6 +1113,7 @@ int sofia_glue_check_nat(sofia_profile_t *profile, const char *network_ip);
 switch_status_t sofia_glue_ext_address_lookup(sofia_profile_t *profile, char **ip, switch_port_t *port,
 											  const char *sourceip, switch_memory_pool_t *pool);
 void sofia_reg_check_socket(sofia_profile_t *profile, const char *call_id, const char *network_addr, const char *network_ip);
+void sofia_reg_close_handles(sofia_profile_t *profile);
 
 /* For Emacs:
  * Local Variables:
