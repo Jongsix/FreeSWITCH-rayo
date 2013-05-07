@@ -1697,7 +1697,7 @@ fi
 %{LIBDIR}/*.a
 %{LIBDIR}/*.la
 %{PKGCONFIGDIR}/*
-%{MODINSTDIR}/*.a
+#%{MODINSTDIR}/*.a
 %{MODINSTDIR}/*.la
 %{INCLUDEDIR}/*.h
 
