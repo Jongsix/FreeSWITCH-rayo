@@ -4,7 +4,7 @@
 #
 # Spec file for package freeswitch-sounds-en-us-callie (version 1.0.18-1)
 #
-# Copyright (c) 2009 Patrick Laimbock 
+# Copyright (c) 2009 Patrick Laimbock
 # Some fixes and additions (c) 2011 Michal Bielicki
 # This file and all modifications and additions to the pristine
 # package are under the same license as the package itself.
@@ -25,6 +25,57 @@
 
 %define fsname  freeswitch
 # you could add a version number to be more strict
+
+######################################################################################################################
+# Layout of packages FHS (Redhat/SUSE), FS (Standard FreeSWITCH layout using /usr/local)
+#
+%define packagelayout	FS
+
+%if "%{packagelayout}" == "FS"
+# disable rpath checking
+#%define __arch_install_post /usr/lib/rpm/check-buildroot
+%define _prefix   /usr/local/%{fsname}
+%define prefix    %{_prefix}
+%define sysconfdir   %{prefix}/conf
+%define _sysconfdir   %{sysconfdir}
+%define logfiledir    %{prefix}/log
+%define _logfiledir   %{logfiledir}
+%define runtimedir    %{prefix}/run
+%define _runtimedir   %{runtimedir}
+
+%define PREFIX          %{prefix}
+%define EXECPREFIX      %{PREFIX}
+%define BINDIR          %{PREFIX}/bin
+%define SBINDIR         %{PREFIX}/bin
+%define LIBEXECDIR      %{PREFIX}/bin
+%define SYSCONFDIR      %{sysconfdir}
+%define SHARESTATEDIR   %{PREFIX}
+%define LOCALSTATEDIR   %{PREFIX}
+%define LIBDIR          %{PREFIX}/lib
+%define INCLUDEDIR      %{PREFIX}/include
+%define DATAROOTDIR     %{PREFIX}
+%define DATADIR         %{PREFIX}
+%define INFODIR         %{PREFIX}/info
+%define LOCALEDIR       %{PREFIX}/locale
+%define MANDIR          %{PREFIX}/man
+%define DOCDIR          %{PREFIX}/doc
+%define HTMLDIR         %{DOCDIR}/html
+%define DVIDIR          %{DOCDIR}/dvi
+%define PDFDIR          %{DOCDIR}/pdf
+%define PSDIR           %{DOCDIR}/ps
+%define LOGFILEDIR      %{logfiledir}
+%define MODINSTDIR      %{PREFIX}/mod
+%define RUNDIR          %{runtimedir}
+%define DBDIR           %{PREFIX}/db
+%define HTDOCSDIR       %{PREFIX}/htdocs
+%define SOUNDSDIR       %{PREFIX}/sounds
+%define GRAMMARDIR      %{PREFIX}/grammar
+%define SCRIPTDIR       %{PREFIX}/scripts
+%define RECORDINGSDIR   %{PREFIX}/recordings
+%define PKGCONFIGDIR    %{PREFIX}/pkgconfig
+%define HOMEDIR         %{PREFIX}
+
+%else
 
 %define PREFIX          %{_prefix}
 %define EXECPREFIX      %{_exec_prefix}
@@ -59,6 +110,7 @@
 %define PKGCONFIGDIR    %{_datarootdir}/%{fsname}/pkgconfig
 %define HOMEDIR         %{LOCALSTATEDIR}
 
+%endif
 
 ##############################################################################
 # General
@@ -146,7 +198,7 @@ echo  '#!/bin/bash
 
 sounds_location=$1
 for rate in 32000 16000 8000
-do 
+do
     for i in ascii base256 conference currency digits directory ivr misc phonetic-ascii time voicemail zrtp
     do
 	mkdir -p $sounds_location/$i/$rate
@@ -356,7 +408,7 @@ cd %{SOUNDSDIR}/en/us/callie
 
 * Wed Dec 16 2009 Patrick Laimbock <vc-rpms@voipconsulting.nl> - 1.0.12-4
 - add freeswitch-sounds-en-us-callie-all package that pulls in the 8KHz,
-- 16KHz, 32KHz and 48KHz RPM packages 
+- 16KHz, 32KHz and 48KHz RPM packages
 
 * Tue Dec 15 2009 Patrick Laimbock <vc-rpms@voipconsulting.nl> - 1.0.12-3
 - override subpackage name with -n so it no longer builds an empty main RPM
@@ -365,7 +417,7 @@ cd %{SOUNDSDIR}/en/us/callie
 - run buildsounds-callie.sh in post to generate 8KHz, 16KHz and 32KHz prompts
 
 * Tue Dec 15 2009 Patrick Laimbock <vc-rpms@voipconsulting.nl> - 1.0.12-2
-- can't override Name in subpackage so put all versions in RPM subpackages 
+- can't override Name in subpackage so put all versions in RPM subpackages
 - with an empty main RPM package
 
 * Tue Dec 15 2009 Patrick Laimbock <vc-rpms@voipconsulting.nl> - 1.0.12-1

@@ -1,4 +1,67 @@
 %define fsname		freeswitch
+
+######################################################################################################################
+# Layout of packages FHS (Redhat/SUSE), FS (Standard FreeSWITCH layout using /usr/local)
+#
+%define packagelayout	FS
+
+%if "%{packagelayout}" == "FS"
+# disable rpath checking
+#%define __arch_install_post /usr/lib/rpm/check-buildroot
+%define _prefix   /usr/local/%{fsname}
+%define prefix    %{_prefix}
+%define sysconfdir   %{prefix}/conf
+%define _sysconfdir   %{sysconfdir}
+%define logfiledir    %{prefix}/log
+%define _logfiledir   %{logfiledir}
+%define runtimedir    %{prefix}/run
+%define _runtimedir   %{runtimedir}
+
+%define PREFIX          %{prefix}
+%define EXECPREFIX      %{PREFIX}
+%define BINDIR          %{PREFIX}/bin
+%define SBINDIR         %{PREFIX}/bin
+%define LIBEXECDIR      %{PREFIX}/bin
+%define SYSCONFDIR      %{sysconfdir}
+%define SHARESTATEDIR   %{PREFIX}
+%define LOCALSTATEDIR   %{PREFIX}
+%define LIBDIR          %{PREFIX}/lib
+%define INCLUDEDIR      %{PREFIX}/include
+%define DATAROOTDIR     %{PREFIX}
+%define DATADIR         %{PREFIX}
+%define INFODIR         %{PREFIX}/info
+%define LOCALEDIR       %{PREFIX}/locale
+%define MANDIR          %{PREFIX}/man
+%define DOCDIR          %{PREFIX}/doc
+%define HTMLDIR         %{DOCDIR}/html
+%define DVIDIR          %{DOCDIR}/dvi
+%define PDFDIR          %{DOCDIR}/pdf
+%define PSDIR           %{DOCDIR}/ps
+%define LOGFILEDIR      %{logfiledir}
+%define MODINSTDIR      %{PREFIX}/mod
+%define RUNDIR          %{runtimedir}
+%define DBDIR           %{PREFIX}/db
+%define HTDOCSDIR       %{PREFIX}/htdocs
+%define SOUNDSDIR       %{PREFIX}/sounds
+%define GRAMMARDIR      %{PREFIX}/grammar
+%define SCRIPTDIR       %{PREFIX}/scripts
+%define RECORDINGSDIR   %{PREFIX}/recordings
+%define PKGCONFIGDIR    %{PREFIX}/pkgconfig
+%define HOMEDIR         %{PREFIX}
+
+%else
+
+# disable rpath checking
+#%define __arch_install_post /usr/lib/rpm/check-buildroot
+#%define _prefix   /usr
+#%define prefix    %{_prefix}
+#%define sysconfdir	/etc/freeswitch
+#%define _sysconfdir	%{sysconfdir}
+#%define logfiledir	/var/log/freeswitch
+#%define _logfiledir	%{logfiledir}
+#%define runtimedir	/var/run/freeswitch
+#%define _runtimedir	%{runtimedir}
+
 %define PREFIX          %{_prefix}
 %define EXECPREFIX      %{_exec_prefix}
 %define BINDIR          %{_bindir}
@@ -32,6 +95,7 @@
 %define PKGCONFIGDIR    %{_datarootdir}/%{fsname}/pkgconfig
 %define HOMEDIR         %{LOCALSTATEDIR}
 
+%endif
 
 Summary:	FreeSWITCH Music on Hold soundfiles
 Name:		freeswitch-sounds-music
