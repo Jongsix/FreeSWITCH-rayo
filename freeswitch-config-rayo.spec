@@ -165,12 +165,7 @@ Requires: freeswitch-sounds-en-us-callie-8000
 Requires: freeswitch-sounds-en-us-callie-16000
 Requires: freeswitch-sounds-en-us-callie-32000
 Requires: freeswitch-sounds-en-us-callie-48000
-BuildArch: noarch
 BuildRequires: bash
-BuildRequires: autoconf
-BuildRequires: automake
-BuildRequires: pkgconfig
-BuildRequires: which
 BuildRoot:    %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 %description
