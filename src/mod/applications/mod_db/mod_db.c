@@ -312,7 +312,7 @@ static switch_status_t do_config()
 			"create index ld_realm on limit_data (realm)",
 			"create index ld_id on limit_data (id)",
 			"create index dd_realm on db_data (realm)",
-			"create index dd_data_key on db_data (data_key)",
+			"create unique index dd_data_key_realm on db_data (data_key,realm)",
 			"create index gd_groupname on group_data (groupname)",
 			"create index gd_url on group_data (url)",
 			NULL
@@ -394,6 +394,21 @@ SWITCH_STANDARD_API(db_api_function)
 		limit_execute_sql2str(sql, buf, sizeof(buf));
 		switch_safe_free(sql);
 		stream->write_function(stream, "%s", buf);
+		goto done;
+	} else if (!strcasecmp(argv[0], "exists")) {
+		char buf[256] = "";
+		if (argc < 3) {
+			goto error;
+		}
+		sql = switch_mprintf("select data from db_data where realm='%q' and data_key='%q'", argv[1], argv[2]);
+		limit_execute_sql2str(sql, buf, sizeof(buf));
+		switch_safe_free(sql);
+		if ( !strcmp(buf, "") ) {
+			stream->write_function(stream, "false");
+		}
+		else {
+			stream->write_function(stream, "true");
+		}
 		goto done;
 	}
 
@@ -617,6 +632,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_db_load)
 	switch_console_set_complete("add db insert");
 	switch_console_set_complete("add db delete");
 	switch_console_set_complete("add db select");
+	switch_console_set_complete("add db exists");
 	SWITCH_ADD_API(commands_api_interface, "group", "group [insert|delete|call]", group_api_function, "[insert|delete|call]:<group name>:<url>");
 	switch_console_set_complete("add group insert");
 	switch_console_set_complete("add group delete");

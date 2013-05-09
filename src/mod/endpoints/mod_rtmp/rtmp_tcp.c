@@ -176,8 +176,13 @@ static switch_status_t rtmp_tcp_close(rtmp_session_t *rsession)
 		switch_mutex_unlock(io->mutex);
 
 		switch_socket_close(io_pvt->socket);
-		io_pvt->socket = NULL;	
+		io_pvt->socket = NULL;
 	}
+
+	if ( io_pvt->sendq ) {
+		switch_buffer_destroy(&(io_pvt->sendq));
+	}
+	
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -276,6 +281,8 @@ void *SWITCH_THREAD_FUNC rtmp_io_tcp_thread(switch_thread_t *thread, void *obj)
 					
 					switch_socket_close(io_pvt->socket);
 					io_pvt->socket = NULL;
+
+					io->base.close(rsession);
 					
 					rtmp_session_destroy(&rsession);
 				}

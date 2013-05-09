@@ -238,13 +238,6 @@ switch_status_t rtmp_on_destroy(switch_core_session_t *session)
 		
 		switch_buffer_destroy(&tech_pvt->readbuf);
 		switch_core_timer_destroy(&tech_pvt->timer);
-
-		if (tech_pvt->rtmp_session) {
-			rtmp_session_t *rsession = tech_pvt->rtmp_session;
-			if (rsession->state != RS_DESTROY) {
-				rtmp_session_destroy(&rsession);
-			} 
-		}
 	}
 
 	return SWITCH_STATUS_SUCCESS;
@@ -774,6 +767,7 @@ switch_status_t rtmp_session_request(rtmp_profile_t *profile, rtmp_session_t **n
 	(*newsession)->in_chunksize = (*newsession)->out_chunksize = RTMP_DEFAULT_CHUNKSIZE;
 	(*newsession)->recv_ack_window = RTMP_DEFAULT_ACK_WINDOW;
 	(*newsession)->next_streamid = 1;
+	(*newsession)->io_private = NULL;
 		
 	switch_uuid_get(&uuid);
 	switch_uuid_format((*newsession)->uuid, &uuid);
@@ -870,8 +864,6 @@ switch_status_t rtmp_session_destroy(rtmp_session_t **rsession)
 
 	switch_thread_rwlock_wrlock((*rsession)->rwlock);
 	switch_thread_rwlock_unlock((*rsession)->rwlock);
-	
-	(*rsession)->profile->io->close(*rsession);
 	
 #ifdef RTMP_DEBUG_IO
 	fclose((*rsession)->io_debug_in);
@@ -1106,11 +1098,17 @@ void rtmp_add_registration(rtmp_session_t *rsession, const char *auth, const cha
 	
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RTMP_EVENT_REGISTER) == SWITCH_STATUS_SUCCESS) {
 		char *user, *domain, *dup;
+		char *url = NULL;
+		char *token = NULL;
+		char network_port_c[6];
+		snprintf(network_port_c, sizeof(network_port_c), "%d", rsession->remote_port);
 		rtmp_event_fill(rsession, event);
 		
 		dup = strdup(auth);
 		switch_split_user_domain(dup, &user, &domain);
 
+		url = switch_mprintf("rtmp/%s/%s@%s", rsession->uuid, user, domain);
+		token = switch_mprintf("rtmp/%s/%s@%s/%s", rsession->uuid, user, domain, nickname);
 
 		reg->user = switch_core_strdup(rsession->pool, user);
 		reg->domain = switch_core_strdup(rsession->pool, domain);
@@ -1119,7 +1117,10 @@ void rtmp_add_registration(rtmp_session_t *rsession, const char *auth, const cha
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Domain", domain);
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Nickname", switch_str_nil(nickname));
 		switch_event_fire(&event);
+		switch_core_add_registration(user, domain, token, url, 0, rsession->remote_address, network_port_c, "tcp", "");
 		free(dup);
+		switch_safe_free(url);
+		switch_safe_free(token);
 	}
 
 }
@@ -1162,9 +1163,13 @@ void rtmp_clear_registration(rtmp_session_t *rsession, const char *auth, const c
 		/* Reg data is pool-allocated, no need to free them */
 		switch_thread_rwlock_rdlock(rsession->account_rwlock);
 		for (account = rsession->account; account; account = account->next) {
+			char *token = NULL;
 			char buf[1024];
 			snprintf(buf, sizeof(buf), "%s@%s", account->user, account->domain);
 			rtmp_clear_reg_auth(rsession, buf, nickname);
+			token = switch_mprintf("rtmp/%s/%s@%s/%s", rsession->uuid, account->user, account->domain, nickname);
+			switch_core_del_registration(account->user, account->domain, token);
+			switch_safe_free(token);
 		}
 		switch_thread_rwlock_unlock(rsession->account_rwlock);
 	} else {
