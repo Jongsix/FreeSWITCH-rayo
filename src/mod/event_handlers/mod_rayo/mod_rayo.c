@@ -89,23 +89,6 @@ enum presence_status {
 };
 
 /**
- * A Rayo client that controls calls
- */
-struct rayo_client {
-	/** base class */
-	struct rayo_actor base;
-	/** state */
-	enum rayo_client_state state;
-	/** true if superuser */
-	int is_admin;
-	/** locally connected */
-	int is_local;
-	/** domain or full JID to route to */
-	const char *route;
-};
-#define RAYO_CLIENT(x) ((struct rayo_client *)x)
-
-/**
  * A xmpp peer server that routes messages to/from clients
  */
 struct rayo_peer_server {
@@ -115,6 +98,23 @@ struct rayo_peer_server {
 	switch_hash_t *clients;
 };
 #define RAYO_PEER_SERVER(x) ((struct rayo_peer_server *)x)
+
+/**
+ * A Rayo client that controls calls
+ */
+struct rayo_client {
+	/** base class */
+	struct rayo_actor base;
+	/** state */
+	enum rayo_client_state state;
+	/** true if superuser */
+	int is_admin;
+	/** set if reachable via s2s */
+	struct rayo_peer_server *peer_server;
+	/** domain or full JID to route to */
+	const char *route;
+};
+#define RAYO_CLIENT(x) ((struct rayo_client *)x)
 
 /**
  * A call controlled by a Rayo client
@@ -1091,6 +1091,9 @@ static void rayo_client_cleanup(struct rayo_actor *actor)
 	switch_mutex_lock(globals.clients_mutex);
 	if (!zstr(RAYO_JID(actor))) {
 		switch_core_hash_delete(globals.clients_roster, RAYO_JID(actor));
+		if (RAYO_CLIENT(actor)->peer_server) {
+   			switch_core_hash_delete(RAYO_CLIENT(actor)->peer_server->clients, RAYO_JID(actor));
+		}
 	}
 	switch_mutex_unlock(globals.clients_mutex);
 }
@@ -1103,15 +1106,15 @@ static void rayo_client_cleanup(struct rayo_actor *actor)
  * @param state of client
  * @param send message transmission function
  * @param is_admin true if admin client
- * @param is_local true if locally connected client
+ * @param peer_server NULL if locally connected client
  * @return the new client
  */
-static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_memory_pool_t *pool, const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, int is_local)
+static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_memory_pool_t *pool, const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
 {
 	RAYO_ACTOR_INIT(RAYO_ACTOR(client), pool, RAT_CLIENT, "", jid, jid, rayo_client_cleanup, send);
 	client->is_admin = is_admin;
 	client->state = state;
-	client->is_local = is_local;
+	client->peer_server = peer_server;
 	if (route) {
 		client->route = switch_core_strdup(pool, route);
 	}
@@ -1119,6 +1122,9 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
 	/* make client available for offers */
 	switch_mutex_lock(globals.clients_mutex);
 	switch_core_hash_insert(globals.clients_roster, RAYO_JID(client), client);
+	if (peer_server) {
+		switch_core_hash_insert(peer_server->clients, RAYO_JID(client), client);
+	}
 	switch_mutex_unlock(globals.clients_mutex);
 
 	return client;
@@ -1131,10 +1137,10 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
  * @param state of client
  * @param send message transmission function
  * @param is_admin true if admin client
- * @param is_local true if locally connected client
+ * @param peer_server NULL if locally connected client
  * @return the new client or NULL
  */
-static struct rayo_client *rayo_client_create(const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, int is_local)
+static struct rayo_client *rayo_client_create(const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
 {
 	switch_memory_pool_t *pool;
 	struct rayo_client *rclient = NULL;
@@ -1144,7 +1150,7 @@ static struct rayo_client *rayo_client_create(const char *jid, const char *route
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Memory Error\n");
 		return NULL;
 	}
-	return rayo_client_init(rclient, pool, jid, route, state, send, is_admin, is_local);
+	return rayo_client_init(rclient, pool, jid, route, state, send, is_admin, peer_server);
 }
 
 /**
@@ -1163,6 +1169,7 @@ static void rayo_peer_server_cleanup(struct rayo_actor *actor)
 {
 	switch_hash_index_t *hi;
 	struct rayo_peer_server *rserver = RAYO_PEER_SERVER(actor);
+	switch_mutex_lock(globals.clients_mutex);
 	for (hi = switch_core_hash_first(rserver->clients); hi; hi = switch_core_hash_next(hi)) {
 		const void *key;
 		void *client;
@@ -1171,6 +1178,7 @@ static void rayo_peer_server_cleanup(struct rayo_actor *actor)
 		RAYO_UNLOCK(client);
 		RAYO_DESTROY(client);
 	}
+	switch_mutex_unlock(globals.clients_mutex);
 }
 
 /**
@@ -2138,7 +2146,8 @@ static void on_client_presence(struct rayo_client *rclient, iks *node)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
 	}
 
-	if (!rclient->is_local && rclient->state == RCS_OFFLINE) {
+	/* destroy if not a local client (connected via peer_server) and is OFFLINE */
+	if (rclient->peer_server && rclient->state == RCS_OFFLINE) {
 		RAYO_DESTROY(rclient);
 		RAYO_UNLOCK(rclient);
 	}
@@ -2772,9 +2781,8 @@ static struct rayo_actor *xmpp_stream_client_locate(struct xmpp_stream *stream, 
 		if (!actor) {
 			/* previously unknown client - add it */
 			struct rayo_peer_server *rserver = RAYO_PEER_SERVER(xmpp_stream_get_private(stream));
-			actor = RAYO_ACTOR(rayo_client_create(jid, xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, 0));
+			actor = RAYO_ACTOR(rayo_client_create(jid, xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, rserver));
 			RAYO_RDLOCK(actor);
-			switch_core_hash_insert(rserver->clients, RAYO_JID(actor), actor);
 		} else if (actor->type != RAT_CLIENT) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, not a client: %s\n", xmpp_stream_get_jid(stream), jid);
 			RAYO_UNLOCK(actor);
@@ -2800,7 +2808,7 @@ static void on_xmpp_stream_ready(struct xmpp_stream *stream)
 		}
 	} else {
 		/* client belongs to stream */
-		xmpp_stream_set_private(stream, rayo_client_create(xmpp_stream_get_jid(stream), xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, 1));
+		xmpp_stream_set_private(stream, rayo_client_create(xmpp_stream_get_jid(stream), xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, NULL));
 	}
 }
 
@@ -3090,7 +3098,7 @@ static struct rayo_client *rayo_console_client_create(void)
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
 	switch_uuid_str(id, sizeof(id));
 	jid = switch_mprintf("%s@%s/console", id, RAYO_JID(globals.server));
-	return rayo_client_create(jid, NULL, RCS_OFFLINE, rayo_console_client_send, 1, 1);
+	return rayo_client_create(jid, NULL, RCS_OFFLINE, rayo_console_client_send, 1, NULL);
 	free(jid);
 }
 
