@@ -152,6 +152,7 @@ Requires: freeswitch-codec-celt
 Requires: freeswitch-codec-ilbc
 Requires: freeswitch-codec-opus
 Requires: freeswitch-codec-speex
+Requires: freeswitch-event-rayo
 Requires: freeswitch-format-local-stream
 Requires: freeswitch-format-mod-shout
 Requires: freeswitch-format-shell-stream
