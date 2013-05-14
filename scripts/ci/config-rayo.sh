@@ -9,7 +9,7 @@ if [ ! -d .git ]; then
 fi
 
 rpmbuild --define "VERSION_NUMBER $1" \
-  --define "BUILD_NUMBER 1" \
+  --define "BUILD_NUMBER $2" \
   --define "_topdir %(pwd)/rpmbuild" \
   --define "_rpmdir %{_topdir}" \
   --define "_srcrpmdir %{_topdir}" \
