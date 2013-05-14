@@ -96,8 +96,6 @@ struct rayo_actor {
 	rayo_actor_send_fn send_fn;
 	/** optional cleanup */
 	rayo_actor_cleanup_fn cleanup_fn;
-	/** true if raw message is allowed */
-	int accepts_raw;
 };
 
 /**

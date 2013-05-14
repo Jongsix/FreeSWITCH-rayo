@@ -1092,7 +1092,8 @@ static void rayo_client_cleanup(struct rayo_actor *actor)
 	if (!zstr(RAYO_JID(actor))) {
 		switch_core_hash_delete(globals.clients_roster, RAYO_JID(actor));
 		if (RAYO_CLIENT(actor)->peer_server) {
-   			switch_core_hash_delete(RAYO_CLIENT(actor)->peer_server->clients, RAYO_JID(actor));
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Removing %s from peer server %s\n", RAYO_JID(actor), RAYO_JID(RAYO_CLIENT(actor)->peer_server));
+			switch_core_hash_delete(RAYO_CLIENT(actor)->peer_server->clients, RAYO_JID(actor));
 		}
 	}
 	switch_mutex_unlock(globals.clients_mutex);
@@ -1123,6 +1124,7 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
 	switch_mutex_lock(globals.clients_mutex);
 	switch_core_hash_insert(globals.clients_roster, RAYO_JID(client), client);
 	if (peer_server) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Adding %s to peer server %s\n", RAYO_JID(client), RAYO_JID(peer_server));
 		switch_core_hash_insert(peer_server->clients, RAYO_JID(client), client);
 	}
 	switch_mutex_unlock(globals.clients_mutex);
@@ -1169,12 +1171,20 @@ static void rayo_peer_server_cleanup(struct rayo_actor *actor)
 {
 	switch_hash_index_t *hi;
 	struct rayo_peer_server *rserver = RAYO_PEER_SERVER(actor);
+
+	/* a little messy... client will remove itself from the peer server when it is destroyed,
+	 * however, there is no guarantee the client will actually be destroyed now so
+	 * the server must remove the client.
+	 */
 	switch_mutex_lock(globals.clients_mutex);
-	for (hi = switch_core_hash_first(rserver->clients); hi; hi = switch_core_hash_next(hi)) {
+	while ((hi = switch_core_hash_first(rserver->clients))) {
 		const void *key;
 		void *client;
 		switch_core_hash_this(hi, &key, NULL, &client);
 		switch_assert(client);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Removing %s from peer server %s\n", RAYO_JID(client), RAYO_JID(rserver));
+		switch_core_hash_delete(rserver->clients, key);
+		RAYO_CLIENT(client)->peer_server = NULL;
 		RAYO_UNLOCK(client);
 		RAYO_DESTROY(client);
 	}
@@ -3094,12 +3104,14 @@ static struct rayo_message *rayo_console_client_send(struct rayo_actor *from, st
  */
 static struct rayo_client *rayo_console_client_create(void)
 {
+	struct rayo_client *client = NULL;
 	char *jid = NULL;
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
 	switch_uuid_str(id, sizeof(id));
 	jid = switch_mprintf("%s@%s/console", id, RAYO_JID(globals.server));
-	return rayo_client_create(jid, NULL, RCS_OFFLINE, rayo_console_client_send, 1, NULL);
+	client = rayo_client_create(jid, NULL, RCS_OFFLINE, rayo_console_client_send, 1, NULL);
 	free(jid);
+	return client;
 }
 
 /**
