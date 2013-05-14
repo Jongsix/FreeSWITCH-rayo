@@ -338,6 +338,31 @@ enum nlsml_match_type nlsml_parse(const char *result, const char *uuid)
 	return NMT_BAD_XML;
 }
 
+#define NLSML_NS "http://www.ietf.org/xml/ns/mrcpv2"
+
+/**
+ * Makes NLSML result to conform to mrcpv2
+ * @param result the potentially non-conforming result
+ * @return the conforming result
+ */
+iks *nlsml_normalize(const char *result)
+{
+	iks *result_xml = NULL;
+	iksparser *p = iks_dom_new(&result_xml);
+	if (iks_parse(p, result, 0, 1) == IKS_OK && result_xml) {
+		/* for now, all that is needed is to set the proper namespace */
+		iks_insert_attrib(result_xml, "xmlns", NLSML_NS);
+	} else {
+		/* unexpected ... */
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Failed to normalize NLSML result: %s\n", result);
+		if (result_xml) {
+			iks_delete(result_xml);
+		}
+	}
+	iks_parser_delete(p);
+	return result_xml;
+}
+
 /**
  * Construct an NLSML result for digit match
  * @param digits the matching digits
@@ -346,7 +371,7 @@ enum nlsml_match_type nlsml_parse(const char *result, const char *uuid)
 iks *nlsml_create_dtmf_match(const char *digits)
 {
 	iks *result = iks_new("result");
-	iks_insert_attrib(result, "xmlns", "http://www.w3c.org/2000/11/nlsml");
+	iks_insert_attrib(result, "xmlns", NLSML_NS);
 	iks_insert_attrib(result, "xmlns:xf", "http://www.w3.org/2000/xforms");
 	if (!zstr(digits)) {
 		int first = 1;

@@ -5,18 +5,18 @@
 #include "nlsml.h"
 
 static const char *nlsml_good =
-	"<result x-model=\"http://theYesNoModel\"\n"
-	" xmlns:xf=\"http://www.w3.org/2000/xforms\"\n"
-	" grammar=\"http://theYesNoGrammar\">\n"
-	"  <interpretation>\n"
-	"    <xf:instance>\n"
-	"      <myApp:yes_no>\n"
-	"        <response>yes</response>\n"
-	"      </myApp:yes_no>\n"
-	"    </xf:instance>\n"
-	"    <input>ok</input>\n"
-	"  </interpretation>\n"
-	"</result>\n";
+	"<result x-model=\"http://theYesNoModel\""
+	" xmlns:xf=\"http://www.w3.org/2000/xforms\""
+	" grammar=\"http://theYesNoGrammar\">"
+	"<interpretation>"
+	"<xf:instance>"
+	"<myApp:yes_no>"
+	"<response>yes</response>"
+	"</myApp:yes_no>"
+	"</xf:instance>"
+	"<input>ok</input>"
+	"</interpretation>"
+	"</result>";
 
 static const char *nlsml_bad =
 	"<result grammar=\"http://grammar\" x-model=\"http://dataModel\"\n"
@@ -242,7 +242,7 @@ static void test_parse_nlsml_examples(void)
 }
 
 static const char *nlsml_dtmf_result =
-	"<result xmlns='http://www.w3c.org/2000/11/nlsml' "
+	"<result xmlns='http://www.ietf.org/xml/ns/mrcpv2' "
 	"xmlns:xf='http://www.w3.org/2000/xforms'><interpretation>"
 	"<input><input mode='dtmf' confidence='100'>1 2 3 4</input>"
 	"</input></interpretation></result>";
@@ -260,6 +260,31 @@ static void test_create_dtmf_match(void)
 	iks_free(result_str);
 }
 
+static const char *nlsml_good_normalized =
+	"<result x-model='http://theYesNoModel'"
+	" xmlns:xf='http://www.w3.org/2000/xforms'"
+	" grammar='http://theYesNoGrammar'"
+	" xmlns='http://www.ietf.org/xml/ns/mrcpv2'>"
+	"<interpretation>"
+	"<xf:instance>"
+	"<myApp:yes_no>"
+	"<response>yes</response>"
+	"</myApp:yes_no>"
+	"</xf:instance>"
+	"<input>ok</input>"
+	"</interpretation>"
+	"</result>";
+
+/**
+ * Test NLSML normalization
+ */
+static void test_normalize(void)
+{
+	iks *result = nlsml_normalize(nlsml_good);
+	ASSERT_NOT_NULL(result);
+	ASSERT_STRING_EQUALS(nlsml_good_normalized, iks_string(NULL, result));
+}
+
 /**
  * main program
  */
@@ -270,6 +295,7 @@ int main(int argc, char **argv)
 	nlsml_init();
 	TEST(test_parse_nlsml_examples);
 	TEST(test_create_dtmf_match);
+	TEST(test_normalize);
 	return 0;
 }
 

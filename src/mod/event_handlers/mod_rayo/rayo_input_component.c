@@ -545,9 +545,12 @@ static void on_detected_speech_event(switch_event_t *event)
 				case NMT_NOINPUT:
 					rayo_component_send_complete(component, INPUT_INITIAL_TIMEOUT);
 					break;
-				case NMT_MATCH:
-					rayo_component_send_complete_with_metadata_string(component, INPUT_MATCH, result, 0);
+				case NMT_MATCH: {
+					iks *result_xml = nlsml_normalize(result);
+					rayo_component_send_complete_with_metadata(component, INPUT_MATCH, result_xml, 0);
+					iks_delete(result_xml);
 					break;
+				}
 				case NMT_BAD_XML:
 					switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_WARNING, "Failed to parse NLSML result: %s!\n", result);
 					rayo_component_send_complete(component, INPUT_NOMATCH);
