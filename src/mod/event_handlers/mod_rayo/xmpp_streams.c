@@ -1156,6 +1156,8 @@ static int xmpp_stream_ready(struct xmpp_stream *stream)
 	return stream->state != XSS_ERROR && stream->state != XSS_DESTROY;
 }
 
+#define KEEP_ALIVE_INTERVAL_NS (60 * 1000 * 1000)
+
 /**
  * Thread that handles xmpp XML stream
  * @param thread this thread
@@ -1167,6 +1169,8 @@ static void *SWITCH_THREAD_FUNC xmpp_stream_thread(switch_thread_t *thread, void
 	struct xmpp_stream *stream = (struct xmpp_stream *)obj;
 	struct xmpp_stream_context *context = stream->context;
 	int err_count = 0;
+	switch_time_t last_activity = 0;
+	int ping_id = 1;
 
 	if (stream->incoming) {
 		switch_thread_rwlock_rdlock(context->shutdown_rwlock);
@@ -1181,6 +1185,7 @@ static void *SWITCH_THREAD_FUNC xmpp_stream_thread(switch_thread_t *thread, void
 	while (xmpp_stream_ready(stream)) {
 		char *msg;
 		int result;
+		switch_time_t now = switch_micro_time_now();
 
 		/* read any messages from client */
 		stream->idle = 1;
@@ -1229,8 +1234,20 @@ static void *SWITCH_THREAD_FUNC xmpp_stream_thread(switch_thread_t *thread, void
 
 		if (stream->idle) {
 			int fdr = 0;
+
+			/* send keep-alive ping if idle for a long time */
+			if (stream->s2s && !stream->incoming && stream->state == XSS_READY && now - last_activity > KEEP_ALIVE_INTERVAL_NS) {
+				char *ping = switch_mprintf("<iq to=\"%s\" from=\"%s\" type=\"get\" id=\"internal-%d\"><ping xmlns=\""IKS_NS_XMPP_PING"\"/></iq>",
+					stream->jid, stream->context->domain, ping_id++);
+				switch_log_printf(SWITCH_CHANNEL_UUID_LOG(stream->id), SWITCH_LOG_DEBUG, "%s, keep alive\n", stream->jid);
+				last_activity = now;
+				iks_send_raw(stream->parser, ping);
+				free(ping);
+			}
+
 			switch_poll(stream->pollfd, 1, &fdr, 20000);
 		} else {
+			last_activity = now;
 			switch_os_yield();
 		}
 	}
