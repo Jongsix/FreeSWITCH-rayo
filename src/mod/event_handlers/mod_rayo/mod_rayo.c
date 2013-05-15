@@ -72,14 +72,6 @@ struct rayo_xmpp_handler {
 };
 
 /**
- * Client state
- */
-enum rayo_client_state {
-	RCS_OFFLINE,
-	RCS_ONLINE
-};
-
-/**
  * Client availability
  */
 enum presence_status {
@@ -105,14 +97,16 @@ struct rayo_peer_server {
 struct rayo_client {
 	/** base class */
 	struct rayo_actor base;
-	/** state */
-	enum rayo_client_state state;
+	/** availability */
+	enum presence_status availability;
 	/** true if superuser */
 	int is_admin;
 	/** set if reachable via s2s */
 	struct rayo_peer_server *peer_server;
 	/** domain or full JID to route to */
 	const char *route;
+	/** time when last probe was sent */
+	switch_time_t last_probe;
 };
 #define RAYO_CLIENT(x) ((struct rayo_client *)x)
 
@@ -229,15 +223,17 @@ static void on_client_presence(struct rayo_client *rclient, iks *node);
 
 
 /**
- * Convert Rayo client state to string
- * @param state the Rayo client state
- * @return the string value of state or "UNKNOWN"
+ * Presence status
+ * @param status the presence status
+ * @return the string value of status
  */
-static const char *rayo_client_state_to_string(enum rayo_client_state state)
+static const char *presence_status_to_string(enum presence_status status)
 {
-	switch(state) {
-		case RCS_OFFLINE: return "OFFLINE";
-		case RCS_ONLINE: return "ONLINE";
+	switch(status) {
+		case PS_OFFLINE: return "OFFLINE";
+		case PS_ONLINE: return "ONLINE";
+		case PS_UNKNOWN:
+		default: return "UNKNOWN";
 	}
 	return "UNKNOWN";
 }
@@ -1104,18 +1100,19 @@ static void rayo_client_cleanup(struct rayo_actor *actor)
  * @param pool the memory pool for this client
  * @param jid for this client
  * @param route to this client
- * @param state of client
+ * @param availability of client
  * @param send message transmission function
  * @param is_admin true if admin client
  * @param peer_server NULL if locally connected client
  * @return the new client
  */
-static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_memory_pool_t *pool, const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
+static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_memory_pool_t *pool, const char *jid, const char *route, enum presence_status availability, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
 {
 	RAYO_ACTOR_INIT(RAYO_ACTOR(client), pool, RAT_CLIENT, "", jid, jid, rayo_client_cleanup, send);
 	client->is_admin = is_admin;
-	client->state = state;
+	client->availability = availability;
 	client->peer_server = peer_server;
+	client->last_probe = 0;
 	if (route) {
 		client->route = switch_core_strdup(pool, route);
 	}
@@ -1136,13 +1133,13 @@ static struct rayo_client *rayo_client_init(struct rayo_client *client, switch_m
  * Create a new Rayo client
  * @param jid for this client
  * @param route to this client
- * @param state of client
+ * @param availability of client
  * @param send message transmission function
  * @param is_admin true if admin client
  * @param peer_server NULL if locally connected client
  * @return the new client or NULL
  */
-static struct rayo_client *rayo_client_create(const char *jid, const char *route, enum rayo_client_state state, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
+static struct rayo_client *rayo_client_create(const char *jid, const char *route, enum presence_status availability, rayo_actor_send_fn send, int is_admin, struct rayo_peer_server *peer_server)
 {
 	switch_memory_pool_t *pool;
 	struct rayo_client *rclient = NULL;
@@ -1152,7 +1149,7 @@ static struct rayo_client *rayo_client_create(const char *jid, const char *route
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Memory Error\n");
 		return NULL;
 	}
-	return rayo_client_init(rclient, pool, jid, route, state, send, is_admin, peer_server);
+	return rayo_client_init(rclient, pool, jid, route, availability, send, is_admin, peer_server);
 }
 
 /**
@@ -1301,9 +1298,6 @@ static iks *rayo_call_command_ok(struct rayo_actor *rclient, struct rayo_call *c
 		/* not a client request */
 		response = iks_new_error(node, STANZA_ERROR_NOT_ALLOWED);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s not a client request\n", RAYO_JID(rclient), RAYO_JID(call));
-	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
-		response = iks_new_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(call));
 	} else if (!rayo_client_has_call_control(RAYO_CLIENT(rclient), call, session)) {
 		response = iks_new_error(node, STANZA_ERROR_CONFLICT);
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s conflict\n", RAYO_JID(rclient), RAYO_JID(call));
@@ -1331,9 +1325,6 @@ static iks *rayo_component_command_ok(struct rayo_actor *rclient, struct rayo_co
 	} else if (rclient->type != RAT_CLIENT) {
 		/* internal message is ok */
 		return NULL;
-	} else if (RAYO_CLIENT(rclient)->state != RCS_ONLINE) {
-		response = iks_new_error(node, STANZA_ERROR_UNEXPECTED_REQUEST);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, %s unexpected request\n", RAYO_JID(rclient), RAYO_JID(component));
 	} else if (!RAYO_CLIENT(rclient)->is_admin && strcmp(component->client_jid, from)) {
 		/* does not have control of this component */
 		response = iks_new_error(node, STANZA_ERROR_CONFLICT);
@@ -1994,9 +1985,7 @@ static iks *on_rayo_dial(struct rayo_actor *client, struct rayo_actor *server, i
 	iks *dial = iks_find(node, "dial");
 	iks *response = NULL;
 
-	if (rclient->state != RCS_ONLINE) {
-		response = iks_new_error_detailed(node, STANZA_ERROR_UNEXPECTED_REQUEST, "rayo client is not online");
-	} else if (!zstr(iks_find_attrib(dial, "to"))) {
+	if (!zstr(iks_find_attrib(dial, "to"))) {
 		iks *node_dup = iks_copy(node);
 		iks_insert_attrib(node_dup, "from", RAYO_JID(rclient)); /* save DCP jid in case it isn't specified */
 
@@ -2085,7 +2074,7 @@ static void on_client_message(struct rayo_client *rclient, iks *message)
 		iks_insert_attrib(message, "from", RAYO_JID(rclient));
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, recv message, state = %s\n", RAYO_JID(rclient), rayo_client_state_to_string(rclient->state));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, recv message, availability = %s\n", RAYO_JID(rclient), presence_status_to_string(rclient->availability));
 
 	actor = RAYO_LOCATE(to);
 	if (actor && actor->type == RAT_CLIENT) {
@@ -2148,19 +2137,20 @@ static void on_client_presence(struct rayo_client *rclient, iks *node)
 		/* TODO presence unsubscribed */
 	}
 
-	if (status == PS_ONLINE && rclient->state == RCS_OFFLINE) {
-		rclient->state = RCS_ONLINE;
+	if (status == PS_ONLINE && rclient->availability != PS_ONLINE) {
+		rclient->availability = PS_ONLINE;
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s is ONLINE\n", RAYO_JID(rclient));
-	} else if (status == PS_OFFLINE && rclient->state == RCS_ONLINE) {
-		rclient->state = RCS_OFFLINE;
+	} else if (status == PS_OFFLINE && rclient->availability != PS_OFFLINE) {
+		rclient->availability = PS_OFFLINE;
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s is OFFLINE\n", RAYO_JID(rclient));
 	}
 
 	/* destroy if not a local client (connected via peer_server) and is OFFLINE */
-	if (rclient->peer_server && rclient->state == RCS_OFFLINE) {
-		RAYO_DESTROY(rclient);
-		RAYO_UNLOCK(rclient);
-	}
+	/* TODO rethink this */
+	//if (rclient->peer_server && rclient->availability == PS_OFFLINE) {
+	//	RAYO_DESTROY(rclient);
+	//	RAYO_UNLOCK(rclient);
+	//}
 }
 
 /**
@@ -2184,7 +2174,10 @@ static void rayo_client_command_recv(struct rayo_client *rclient, iks *iq)
 		iks_insert_attrib(iq, "from", RAYO_JID(rclient));
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, recv iq, state = %s\n", RAYO_JID(rclient), rayo_client_state_to_string(rclient->state));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, recv iq, availability = %s\n", RAYO_JID(rclient), presence_status_to_string(rclient->availability));
+
+	if (rclient->availability == PS_UNKNOWN) {
+	}
 
 	if (command) {
 		struct rayo_actor *actor = RAYO_LOCATE(to);
@@ -2747,7 +2740,7 @@ SWITCH_STANDARD_APP(rayo_app)
 			switch_assert(rclient);
 
 			/* is session available to take call? */
-			if (rclient->state == RCS_ONLINE) {
+			if (rclient->availability == PS_ONLINE) {
 				ok = 1;
 				switch_core_hash_insert(call->pcps, RAYO_JID(rclient), "1");
 				iks_insert_attrib(offer, "to", RAYO_JID(rclient));
@@ -2791,7 +2784,7 @@ static struct rayo_actor *xmpp_stream_client_locate(struct xmpp_stream *stream, 
 		if (!actor) {
 			/* previously unknown client - add it */
 			struct rayo_peer_server *rserver = RAYO_PEER_SERVER(xmpp_stream_get_private(stream));
-			actor = RAYO_ACTOR(rayo_client_create(jid, xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, rserver));
+			actor = RAYO_ACTOR(rayo_client_create(jid, xmpp_stream_get_jid(stream), PS_UNKNOWN, rayo_client_send, 0, rserver));
 			RAYO_RDLOCK(actor);
 		} else if (actor->type != RAT_CLIENT) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "%s, not a client: %s\n", xmpp_stream_get_jid(stream), jid);
@@ -2818,7 +2811,39 @@ static void on_xmpp_stream_ready(struct xmpp_stream *stream)
 		}
 	} else {
 		/* client belongs to stream */
-		xmpp_stream_set_private(stream, rayo_client_create(xmpp_stream_get_jid(stream), xmpp_stream_get_jid(stream), RCS_OFFLINE, rayo_client_send, 0, NULL));
+		xmpp_stream_set_private(stream, rayo_client_create(xmpp_stream_get_jid(stream), xmpp_stream_get_jid(stream), PS_OFFLINE, rayo_client_send, 0, NULL));
+	}
+}
+
+/**
+ * Checks client availability.  If unknown, client presence is probed.
+ * @param rclient to check
+ */
+static void rayo_client_presence_check(struct rayo_client *rclient)
+{
+	if (rclient->availability == PS_UNKNOWN) {
+		/* for now, set online */
+		rclient->availability = PS_ONLINE;
+#if 0
+		/* send probe */
+		struct rayo_message *reply;
+		switch_time_t now = switch_micro_time_now();
+
+		/* throttle probes... */
+		if (now - rclient->last_probe > 1000 * 1000 * 10) {
+			iks *probe = iks_new("presence");
+			rclient->last_probe = now;
+			iks_insert_attrib(probe, "type", "probe");
+			iks_insert_attrib(probe, "from", RAYO_JID(globals.server));
+			iks_insert_attrib(probe, "to", RAYO_JID(rclient));
+			reply = RAYO_SEND(globals.server, rclient, rayo_message_create(probe));
+			if (reply) {
+				rayo_message_destroy(reply);
+			}
+		}
+	} else {
+		rclient->last_probe = 0;
+#endif
 	}
 }
 
@@ -2834,6 +2859,7 @@ static void on_xmpp_stream_recv(struct xmpp_stream *stream, iks *stanza)
 		const char *from = iks_find_attrib_soft(stanza, "from");
 		struct rayo_actor *actor = xmpp_stream_client_locate(stream, from);
 		if (actor) {
+			rayo_client_presence_check(RAYO_CLIENT(actor));
 			rayo_client_command_recv(RAYO_CLIENT(actor), stanza);
 			RAYO_UNLOCK(actor);
 		}
@@ -2848,6 +2874,7 @@ static void on_xmpp_stream_recv(struct xmpp_stream *stream, iks *stanza)
 		const char *from = iks_find_attrib_soft(stanza, "from");
 		struct rayo_actor *actor = xmpp_stream_client_locate(stream, from);
 		if (actor) {
+			rayo_client_presence_check(RAYO_CLIENT(actor));
 			on_client_message(RAYO_CLIENT(actor), stanza);
 			RAYO_UNLOCK(actor);
 		}
@@ -3034,7 +3061,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 static void rayo_actor_dump(struct rayo_actor *actor, switch_stream_handle_t *stream)
 {
 	if (actor->type == RAT_CLIENT) {
-		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',DOMAIN='%s',REFS=%i,STATUS='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), RAYO_DOMAIN(actor), actor->ref_count, rayo_client_state_to_string(RAYO_CLIENT(actor)->state));
+		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',DOMAIN='%s',REFS=%i,STATUS='%s'", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), RAYO_DOMAIN(actor), actor->ref_count, presence_status_to_string(RAYO_CLIENT(actor)->availability));
 	} else {
 		stream->write_function(stream, "TYPE='%s',SUBTYPE='%s',ID='%s',JID='%s',DOMAIN='%s',REFS=%i", rayo_actor_type_to_string(actor->type), actor->subtype, actor->id, RAYO_JID(actor), RAYO_DOMAIN(actor), actor->ref_count);
 	}
@@ -3109,7 +3136,7 @@ static struct rayo_client *rayo_console_client_create(void)
 	char id[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
 	switch_uuid_str(id, sizeof(id));
 	jid = switch_mprintf("%s@%s/console", id, RAYO_JID(globals.server));
-	client = rayo_client_create(jid, NULL, RCS_OFFLINE, rayo_console_client_send, 1, NULL);
+	client = rayo_client_create(jid, NULL, PS_OFFLINE, rayo_console_client_send, 1, NULL);
 	free(jid);
 	return client;
 }
