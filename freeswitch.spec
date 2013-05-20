@@ -1600,7 +1600,11 @@ cd ../..
 %{__install} -D -m 744 build/freeswitch.init.suse %{buildroot}/etc/rc.d/init.d/freeswitch
 %else
 # On RedHat like
+%if "%{packagelayout}" == "FS"
+%{__install} -D -m 0755 build/freeswitch.init.redhat.fs %{buildroot}/etc/rc.d/init.d/freeswitch
+%else
 %{__install} -D -m 0755 build/freeswitch.init.redhat %{buildroot}/etc/rc.d/init.d/freeswitch
+%endif
 %endif
 # On SuSE make /usr/sbin/rcfreeswitch a link to /etc/rc.d/init.d/freeswitch
 %if 0%{?suse_version} > 100
