@@ -32,6 +32,14 @@
 /* TODO timeouts / durations are affected by pause/resume */
 
 /**
+ * settings
+ */
+static struct {
+	const char *record_file_prefix;
+	const char *record_file_format;
+} globals;
+
+/**
  * A record component
  */
 struct record_component {
@@ -80,6 +88,8 @@ static void complete_record(struct rayo_component *component, const char *reason
 	char *uri = switch_mprintf("file://%s", RECORD_COMPONENT(component)->local_file_path);
 	iks *recording;
 	switch_size_t file_size = 0;
+/* TODO this doesn't work with HTTP */
+#if 0
 	switch_file_t *file;
 
 	if (switch_file_open(&file, RECORD_COMPONENT(component)->local_file_path, SWITCH_FOPEN_READ, SWITCH_FPROT_UREAD, RAYO_POOL(component)) == SWITCH_STATUS_SUCCESS) {
@@ -88,6 +98,7 @@ static void complete_record(struct rayo_component *component, const char *reason
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_INFO, "Failed to open %s.\n", RECORD_COMPONENT(component)->local_file_path);
 	}
+#endif
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(uuid), SWITCH_LOG_DEBUG, "Recording %s done.\n", RECORD_COMPONENT(component)->local_file_path);
 
@@ -149,9 +160,9 @@ static struct rayo_component *record_component_create(struct rayo_actor *actor, 
 	start_paused = iks_find_bool_attrib(record, "start-paused");
 
 	/* create record filename from session UUID and ref */
-	/* for example: 1234-1234-1234-1234/record-30.wav */
-	local_file_path = switch_mprintf("%s%s%s-%i.%s",
-		SWITCH_GLOBAL_dirs.recordings_dir, SWITCH_PATH_SEPARATOR,
+	/* for example: prefix/1234-1234-1234-1234-30.wav */
+	local_file_path = switch_mprintf("%s%s-%i.%s",
+		globals.record_file_prefix,
 		actor->id, rayo_actor_seq_next(actor), iks_find_attrib(record, "format"));
 
 	fs_file_path = switch_mprintf("{pause=%s}fileman://%s",
@@ -417,11 +428,61 @@ static iks *stop_mixer_record_component(struct rayo_actor *client, struct rayo_a
 }
 
 /**
+ * Process module XML configuration
+ * @param pool memory pool to allocate from
+ * @param config_file to use
+ * @return SWITCH_STATUS_SUCCESS on successful configuration
+ */
+static switch_status_t do_config(switch_memory_pool_t *pool, const char *config_file)
+{
+	switch_xml_t cfg, xml;
+
+	/* set defaults */
+	globals.record_file_prefix = SWITCH_GLOBAL_dirs.recordings_dir;
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Configuring module\n");
+	if (!(xml = switch_xml_open_cfg(config_file, &cfg, NULL))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "open of %s failed\n", config_file);
+		return SWITCH_STATUS_TERM;
+	}
+
+	/* get params */
+	{
+		switch_xml_t settings = switch_xml_child(cfg, "record");
+		if (settings) {
+			switch_xml_t param;
+			for (param = switch_xml_child(settings, "param"); param; param = param->next) {
+				const char *var = switch_xml_attr_soft(param, "name");
+				const char *val = switch_xml_attr_soft(param, "value");
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "param: %s = %s\n", var, val);
+				if (!strcasecmp(var, "record-file-prefix")) {
+					if (!zstr(val)) {
+						globals.record_file_prefix = switch_core_strdup(pool, val);
+					}
+				} else {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Unsupported param: %s\n", var);
+				}
+			}
+		}
+	}
+
+	switch_xml_free(xml);
+
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/**
  * Initialize record component
+ * @param pool memory pool to allocate from
+ * @param config_file to use
  * @return SWITCH_STATUS_SUCCESS if successful
  */
-switch_status_t rayo_record_component_load(void)
+switch_status_t rayo_record_component_load(switch_memory_pool_t *pool, const char *config_file)
 {
+	if (do_config(pool, config_file) != SWITCH_STATUS_SUCCESS) {
+		return SWITCH_STATUS_TERM;
+	}
+
 	switch_event_bind("rayo_record_component", SWITCH_EVENT_RECORD_STOP, NULL, on_call_record_stop_event, NULL);
 	rayo_actor_command_handler_add(RAT_CALL, "", "set:"RAYO_RECORD_NS":record", start_call_record_component);
 	rayo_actor_command_handler_add(RAT_CALL_COMPONENT, "record", "set:"RAYO_RECORD_NS":pause", pause_record_component);
