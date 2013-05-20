@@ -54,6 +54,8 @@ SWITCH_MODULE_DEFINITION(mod_rayo, mod_rayo_load, mod_rayo_shutdown, NULL);
 #define RAYO_SIP_PROVISIONAL_RESPONSE_HEADER "sip_ph_"
 #define RAYO_SIP_BYE_RESPONSE_HEADER "sip_bye_h_"
 
+#define RAYO_CONFIG_FILE "rayo.conf"
+
 struct rayo_actor;
 struct rayo_client;
 struct rayo_call;
@@ -2897,17 +2899,17 @@ static void on_xmpp_stream_destroy(struct xmpp_stream *stream)
 /**
  * Process module XML configuration
  * @param pool memory pool to allocate from
+ * @param config_file to use
  * @return SWITCH_STATUS_SUCCESS on successful configuration
  */
-static switch_status_t do_config(switch_memory_pool_t *pool)
+static switch_status_t do_config(switch_memory_pool_t *pool, const char *config_file)
 {
-	char *cf = "rayo.conf";
 	switch_xml_t cfg, xml;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Configuring module\n");
-	if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "open of %s failed\n", cf);
+	if (!(xml = switch_xml_open_cfg(config_file, &cfg, NULL))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "open of %s failed\n", config_file);
 		return SWITCH_STATUS_TERM;
 	}
 
@@ -2984,7 +2986,8 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 			const char *name = switch_xml_attr_soft(domain, "name");
 			if (zstr(name)) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing <domain name=\"... failed to configure rayo server\n");
-				return SWITCH_STATUS_FALSE;
+				status = SWITCH_STATUS_FALSE;
+				goto done;
 			}
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Rayo domain set to %s\n", name);
 
@@ -3017,15 +3020,18 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 				is_s2s = !strcmp("s2s", type);
 				if (!is_s2s && strcmp("c2s", type)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Type must be \"c2s\" or \"s2s\"!\n");
-					return SWITCH_STATUS_FALSE;
+					status = SWITCH_STATUS_FALSE;
+					goto done;
 				}
 				if (zstr(address)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Missing address!\n");
-					return SWITCH_STATUS_FALSE;
+					status = SWITCH_STATUS_FALSE;
+					goto done;
 				}
 				if (!zstr(port) && !switch_is_number(port)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Port must be an integer!\n");
-					return SWITCH_STATUS_FALSE;
+					status = SWITCH_STATUS_FALSE;
+					goto done;
 				}
 				if (xmpp_stream_context_listen(globals.xmpp_context, address, atoi(port), is_s2s, acl) != SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Failed to create %s listener: %s:%s\n", type, address, port);
@@ -3039,17 +3045,20 @@ static switch_status_t do_config(switch_memory_pool_t *pool)
 				const char *port = switch_xml_attr_soft(l, "port");
 				if (!zstr(port) && !switch_is_number(port)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Outbound server port must be an integer!\n");
-					return SWITCH_STATUS_FALSE;
+					status = SWITCH_STATUS_FALSE;
+					goto done;
 				}
 				if (zstr(address) && zstr(domain)) {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Missing outbound server address!\n");
-					return SWITCH_STATUS_FALSE;
+					status = SWITCH_STATUS_FALSE;
+					goto done;
 				}
 				xmpp_stream_context_connect(globals.xmpp_context, domain, address, atoi(port));
 			}
 		}
 	}
 
+done:
 	switch_xml_free(xml);
 
 	return status;
@@ -3490,10 +3499,12 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_rayo_load)
 	SWITCH_ADD_API(api_interface, "rayo", "Query rayo status", rayo_api, RAYO_API_SYNTAX);
 
 	/* set up rayo components */
-	rayo_components_load(module_interface, pool);
+	if (rayo_components_load(module_interface, pool, RAYO_CONFIG_FILE) != SWITCH_STATUS_SUCCESS) {
+		return SWITCH_STATUS_TERM;
+	}
 
 	/* configure / open sockets */
-	if(do_config(globals.pool) != SWITCH_STATUS_SUCCESS) {
+	if(do_config(globals.pool, RAYO_CONFIG_FILE) != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_TERM;
 	}
 
