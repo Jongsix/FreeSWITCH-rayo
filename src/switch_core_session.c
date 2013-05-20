@@ -716,6 +716,7 @@ static const char *message_names[] = {
 	"JITTER_BUFFER",
 	"RECOVERY_REFRESH",
 	"SIGNAL_DATA",
+	"MESSAGE",
 	"INFO",
 	"AUDIO_DATA",
 	"BLIND_TRANSFER_RESPONSE",
@@ -796,7 +797,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_session_perform_receive_message(swit
 		if (session->media_handle) {
 			status = switch_core_media_receive_message(session, message);
 		}
-		if (status == SWITCH_STATUS_SUCCESS) {
+		if (status == SWITCH_STATUS_SUCCESS || message->message_id == SWITCH_MESSAGE_INDICATE_SIGNAL_DATA) {
 			if (session->endpoint_interface->io_routines->receive_message) {
 				status = session->endpoint_interface->io_routines->receive_message(session, message);
 			}
@@ -2032,7 +2033,6 @@ SWITCH_DECLARE(switch_core_session_t *) switch_core_session_request_xml(switch_e
 	flags[CF_LAZY_ATTENDED_TRANSFER] = 0;
 	flags[CF_SIGNAL_DATA] = 0;
 	flags[CF_SIMPLIFY] = 0;
-	flags[CF_SECURE] = 0;
 
 
 	if (!(session = switch_core_session_request_uuid(endpoint_interface, direction, SOF_NO_LIMITS, pool, uuid))) {

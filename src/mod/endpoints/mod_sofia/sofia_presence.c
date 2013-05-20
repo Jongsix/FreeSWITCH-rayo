@@ -28,7 +28,7 @@
  * Paul D. Tinsley <pdt at jackhammer.org>
  * Bret McDanel <trixter AT 0xdecafbad.com>
  * Raymond Chandler <intralanman@freeswitch.org>
- *
+ * William King <william.king@quentustech.com>
  *
  * sofia_presence.c -- SOFIA SIP Endpoint (presence code)
  *
@@ -1071,7 +1071,7 @@ static switch_event_t *actual_sofia_presence_event_handler(switch_event_t *event
 	char *presence_source = switch_event_get_header(event, "presence-source");
 	char *call_info_state = switch_event_get_header(event, "presence-call-info-state");
 	const char *uuid = switch_event_get_header(event, "unique-id");
-	switch_console_callback_match_t *matches;
+	switch_console_callback_match_t *matches = NULL;
 	struct presence_helper helper = { 0 };			
 	int hup = 0;
 	switch_event_t *s_event = NULL;
@@ -1118,6 +1118,7 @@ static switch_event_t *actual_sofia_presence_event_handler(switch_event_t *event
 
 		
 						if (!mod_sofia_globals.profile_hash) {
+							switch_console_free_matches(&matches);
 							goto done;
 						}
 						
@@ -4548,7 +4549,7 @@ void sofia_presence_handle_sip_i_message(int status,
 				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "from_sip_port", "%d", network_port);
 				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "to", to_addr);
 				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "subject", "SIMPLE MESSAGE");
-
+				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "context", profile->context);
 				
 				if (sip->sip_content_type && sip->sip_content_type->c_subtype) {
 					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "type", sip->sip_content_type->c_type);

@@ -1090,8 +1090,6 @@ struct record_helper {
 	switch_file_handle_t in_fh;
 	switch_file_handle_t out_fh;
 	int native;
-	int rready;
-	int wready;
 	uint32_t packet_len;
 	int min_sec;
 	int final_timeout_ms;
@@ -1099,7 +1097,12 @@ struct record_helper {
 	int silence_threshold;
 	int silence_timeout_ms;
 	switch_time_t silence_time;
+	int rready;
+	int wready;
+	switch_time_t last_read_time;
+	switch_time_t last_write_time;
 	switch_bool_t hangup_on_error;
+	switch_codec_implementation_t read_impl;
 };
 
 
@@ -1151,29 +1154,68 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 		rh->silence_time = switch_micro_time_now();
 		rh->silence_timeout_ms = rh->initial_timeout_ms;
 
+		switch_core_session_get_read_impl(session, &rh->read_impl);
+
 		break;
 	case SWITCH_ABC_TYPE_TAP_NATIVE_READ:
 		{
 			rh->rready = 1;
-
+			
 			if (rh->rready && rh->wready) {
+				switch_time_t now = switch_micro_time_now();
+				switch_time_t diff;
 				nframe = switch_core_media_bug_get_native_read_frame(bug);
 				len = nframe->datalen;
-
+				
+				if (rh->last_read_time && rh->last_read_time < now) {
+					diff = ((now - rh->last_read_time) + 3000 ) / rh->read_impl.microseconds_per_packet;
+					
+					if (diff > 1) {
+						unsigned char fill_data[SWITCH_RECOMMENDED_BUFFER_SIZE] = {0};
+						switch_core_gen_encoded_silence(fill_data, &rh->read_impl, len);
+						
+						while(diff > 1) {
+							switch_size_t fill_len = len;
+							switch_core_file_write(&rh->in_fh, fill_data, &fill_len);
+							diff--;
+						}
+					}
+				}
 				
 				switch_core_file_write(&rh->in_fh, mask ? null_data : nframe->data, &len);
+				rh->last_read_time = now;
 			}
 		}
 		break;
 	case SWITCH_ABC_TYPE_TAP_NATIVE_WRITE:
 		{
 			rh->wready = 1;
+			
+			if (rh->rready && rh->wready) {
+				switch_time_t now = switch_micro_time_now();
+				switch_time_t diff;
 
-			if (rh->rready && rh->wready) {			
 				nframe = switch_core_media_bug_get_native_write_frame(bug);
 				len = nframe->datalen;
-				switch_core_file_write(&rh->out_fh, mask ? null_data : nframe->data, &len);
 
+
+				if (rh->last_write_time && rh->last_write_time < now) {
+					diff = ((now - rh->last_write_time) + 3000 ) / rh->read_impl.microseconds_per_packet;
+					
+					if (diff > 1) {
+						unsigned char fill_data[SWITCH_RECOMMENDED_BUFFER_SIZE] = {0};
+						switch_core_gen_encoded_silence(fill_data, &rh->read_impl, len);
+						
+						while(diff > 1) {
+							switch_size_t fill_len = len;
+							switch_core_file_write(&rh->out_fh, fill_data, &fill_len);
+							diff--;
+						}
+					}
+				}
+			
+				switch_core_file_write(&rh->out_fh, mask ? null_data : nframe->data, &len);
+				rh->last_write_time = now;
 			}
 		}
 		break;
@@ -1350,6 +1392,8 @@ static void* switch_ivr_record_user_data_dup(switch_core_session_t *session, voi
 	dup = switch_core_session_alloc(session, sizeof(*dup));
 	memcpy(dup, rh, sizeof(*rh));
 	dup->file = switch_core_session_strdup(session, rh->file);
+	dup->fh = switch_core_session_alloc(session, sizeof(switch_file_handle_t));
+	memcpy(dup->fh, rh->fh, sizeof(switch_file_handle_t));
 
 	return dup;
 }

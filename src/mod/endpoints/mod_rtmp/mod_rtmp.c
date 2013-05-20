@@ -238,13 +238,6 @@ switch_status_t rtmp_on_destroy(switch_core_session_t *session)
 		
 		switch_buffer_destroy(&tech_pvt->readbuf);
 		switch_core_timer_destroy(&tech_pvt->timer);
-
-		if (tech_pvt->rtmp_session) {
-			rtmp_session_t *rsession = tech_pvt->rtmp_session;
-			if (rsession->state != RS_DESTROY) {
-				rtmp_session_destroy(&rsession);
-			} 
-		}
 	}
 
 	return SWITCH_STATUS_SUCCESS;
@@ -257,6 +250,7 @@ switch_status_t rtmp_on_hangup(switch_core_session_t *session)
 	rtmp_private_t *tech_pvt = NULL;
 	rtmp_session_t *rsession = NULL;
 
+	switch_core_session_write_lock(session);
 	channel = switch_core_session_get_channel(session);
 	assert(channel != NULL);
 
@@ -290,12 +284,23 @@ switch_status_t rtmp_on_hangup(switch_core_session_t *session)
 	rtmp_notify_call_state(session);
 	rtmp_send_onhangup(session);
 	
-	switch_core_hash_delete_wrlock(rsession->session_hash, switch_core_session_get_uuid(session), rsession->session_rwlock);
+	/*
+	 * If the session_rwlock is already locked, then there is a larger possibility that the rsession
+	 * is looping through because the rsession is trying to hang them up. If that is the case, then there
+	 * is really no reason to foce this hash_delete. Just timeout, and let the rsession handle the final cleanup 
+	 * since it now checks for the existance of the FS session safely.
+	 */
+	if ( switch_thread_rwlock_trywrlock_timeout(rsession->session_rwlock, 10) == SWITCH_STATUS_SUCCESS) {
+		/*
+		 * Why the heck would rsession->session_hash ever be null here?!?
+		 * We only got here because the tech_pvt->rtmp_session wasn't null....!!!!
+		 */
+		if ( rsession->session_hash ) {
+			switch_core_hash_delete(rsession->session_hash, switch_core_session_get_uuid(session));
+		}
+		switch_thread_rwlock_unlock(rsession->session_rwlock);
+	}
 	
-	switch_mutex_lock(rsession->count_mutex);
-	rsession->active_sessions--;
-	switch_mutex_unlock(rsession->count_mutex);
-
 #ifndef RTMP_DONT_HOLD
 	if (switch_channel_test_flag(channel, CF_HOLD)) {
 		switch_channel_mark_hold(channel, SWITCH_FALSE);
@@ -306,6 +311,7 @@ switch_status_t rtmp_on_hangup(switch_core_session_t *session)
 	switch_thread_rwlock_unlock(rsession->rwlock);
 
  done:
+	switch_core_session_rwunlock(session);
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -774,6 +780,7 @@ switch_status_t rtmp_session_request(rtmp_profile_t *profile, rtmp_session_t **n
 	(*newsession)->in_chunksize = (*newsession)->out_chunksize = RTMP_DEFAULT_CHUNKSIZE;
 	(*newsession)->recv_ack_window = RTMP_DEFAULT_ACK_WINDOW;
 	(*newsession)->next_streamid = 1;
+	(*newsession)->io_private = NULL;
 		
 	switch_uuid_get(&uuid);
 	switch_uuid_format((*newsession)->uuid, &uuid);
@@ -844,6 +851,15 @@ switch_status_t rtmp_session_destroy(rtmp_session_t **rsession)
 		
 		/* At this point we don't know if the session still exists, so request a fresh pointer to it from the core. */
 		if ( (session = switch_core_session_locate((char *)key)) != NULL ) {
+			switch_core_session_rwunlock(session);
+
+			/* 
+			 * This is here so that if the FS session still exists and has the FS session write(or read) lock, then we won't destroy the rsession 
+			 * until the FS session is finished with it. But if the rsession is able to get the FS session
+			 * write lock, before the FS session is hungup, then once the FS session does get the write lock
+			 * the rsession pointer will be null, and the FS session will never try and touch the already destroyed rsession.
+			 */
+			switch_core_session_write_lock(session);
 			channel = switch_core_session_get_channel(session);
 			tech_pvt = switch_core_session_get_private(session);
 			if ( tech_pvt && tech_pvt->rtmp_session ) {
@@ -855,11 +871,6 @@ switch_status_t rtmp_session_destroy(rtmp_session_t **rsession)
 	}
 	switch_thread_rwlock_unlock((*rsession)->session_rwlock);
 	
-	/*	while ((*rsession)->active_sessions > 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Still have %d sessions, waiting\n", (*rsession)->active_sessions);
-		switch_yield(500000);
-		}*/
-	
 	switch_mutex_lock((*rsession)->profile->mutex);
 	if ( (*rsession)->profile->calls < 1 ) {
 		(*rsession)->profile->calls = 0;
@@ -870,8 +881,6 @@ switch_status_t rtmp_session_destroy(rtmp_session_t **rsession)
 
 	switch_thread_rwlock_wrlock((*rsession)->rwlock);
 	switch_thread_rwlock_unlock((*rsession)->rwlock);
-	
-	(*rsession)->profile->io->close(*rsession);
 	
 #ifdef RTMP_DEBUG_IO
 	fclose((*rsession)->io_debug_in);
@@ -1106,11 +1115,17 @@ void rtmp_add_registration(rtmp_session_t *rsession, const char *auth, const cha
 	
 	if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, RTMP_EVENT_REGISTER) == SWITCH_STATUS_SUCCESS) {
 		char *user, *domain, *dup;
+		char *url = NULL;
+		char *token = NULL;
+		char network_port_c[6];
+		snprintf(network_port_c, sizeof(network_port_c), "%d", rsession->remote_port);
 		rtmp_event_fill(rsession, event);
 		
 		dup = strdup(auth);
 		switch_split_user_domain(dup, &user, &domain);
 
+		url = switch_mprintf("rtmp/%s/%s@%s", rsession->uuid, user, domain);
+		token = switch_mprintf("rtmp/%s/%s@%s/%s", rsession->uuid, user, domain, nickname);
 
 		reg->user = switch_core_strdup(rsession->pool, user);
 		reg->domain = switch_core_strdup(rsession->pool, domain);
@@ -1119,7 +1134,10 @@ void rtmp_add_registration(rtmp_session_t *rsession, const char *auth, const cha
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Domain", domain);
 		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Nickname", switch_str_nil(nickname));
 		switch_event_fire(&event);
+		switch_core_add_registration(user, domain, token, url, 0, rsession->remote_address, network_port_c, "tcp", "");
 		free(dup);
+		switch_safe_free(url);
+		switch_safe_free(token);
 	}
 
 }
@@ -1162,9 +1180,13 @@ void rtmp_clear_registration(rtmp_session_t *rsession, const char *auth, const c
 		/* Reg data is pool-allocated, no need to free them */
 		switch_thread_rwlock_rdlock(rsession->account_rwlock);
 		for (account = rsession->account; account; account = account->next) {
+			char *token = NULL;
 			char buf[1024];
 			snprintf(buf, sizeof(buf), "%s@%s", account->user, account->domain);
 			rtmp_clear_reg_auth(rsession, buf, nickname);
+			token = switch_mprintf("rtmp/%s/%s@%s/%s", rsession->uuid, account->user, account->domain, nickname);
+			switch_core_del_registration(account->user, account->domain, token);
+			switch_safe_free(token);
 		}
 		switch_thread_rwlock_unlock(rsession->account_rwlock);
 	} else {

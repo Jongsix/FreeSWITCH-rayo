@@ -1,6 +1,6 @@
 /*
  * FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
- * Copyright (C) 2005-2012, Anthony Minessale II <anthm@freeswitch.org>
+ * Copyright (C) 2005-2013, Anthony Minessale II <anthm@freeswitch.org>
  *
  * Version: MPL 1.1
  *
@@ -34,6 +34,7 @@
  */
 #include <switch.h>
 #include <switch_curl.h>
+#include "aws.h"
 
 /* Defines module interface to FreeSWITCH */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_http_cache_shutdown);
@@ -48,6 +49,17 @@ SWITCH_STANDARD_API(http_cache_prefetch);
 #define DOWNLOAD_NEEDED "download"
 
 typedef struct url_cache url_cache_t;
+
+/**
+ * An http profile.  Defines optional credentials
+ * for access to Amazon S3.
+ */
+struct http_profile {
+	const char *name;
+	const char *aws_s3_access_key_id;
+	const char *aws_s3_secret_access_key;
+};
+typedef struct http_profile http_profile_t;
 
 /**
  * status if the cache entry
@@ -85,7 +97,7 @@ struct cached_url {
 };
 typedef struct cached_url cached_url_t;
 
-static cached_url_t *cached_url_create(url_cache_t *cache, const char *url);
+static cached_url_t *cached_url_create(url_cache_t *cache, const char *url, const char *filename);
 static void cached_url_destroy(cached_url_t *url, switch_memory_pool_t *pool);
 
 /**
@@ -99,12 +111,12 @@ struct http_get_data {
 };
 typedef struct http_get_data http_get_data_t;
 
-static switch_status_t http_get(url_cache_t *cache, cached_url_t *url, switch_core_session_t *session);
+static switch_status_t http_get(url_cache_t *cache, http_profile_t *profile, cached_url_t *url, switch_core_session_t *session);
 static size_t get_file_callback(void *ptr, size_t size, size_t nmemb, void *get);
 static size_t get_header_callback(void *ptr, size_t size, size_t nmemb, void *url);
 static void process_cache_control_header(cached_url_t *url, char *data);
 
-static switch_status_t http_put(url_cache_t *cache, switch_core_session_t *session, const char *url, const char *filename);
+static switch_status_t http_put(url_cache_t *cache, http_profile_t *profile, switch_core_session_t *session, const char *url, const char *filename, int cache_local_file);
 
 /**
  * Queue used for clock cache replacement algorithm.  This
@@ -123,7 +135,6 @@ struct simple_queue {
 };
 typedef struct simple_queue simple_queue_t;
 
-
 /**
  * The cache
  */
@@ -138,6 +149,8 @@ struct url_cache {
 	size_t size;
 	/** The location of the cache in the filesystem */
 	char *location;
+	/** HTTP profiles */
+	switch_hash_t *profiles;
 	/** Cache mapped by URL */
 	switch_hash_t *map;
 	/** Cached URLs queued for replacement */
@@ -173,7 +186,7 @@ struct url_cache {
 };
 static url_cache_t gcache;
 
-static char *url_cache_get(url_cache_t *cache, switch_core_session_t *session, const char *url, int download, switch_memory_pool_t *pool);
+static char *url_cache_get(url_cache_t *cache, http_profile_t *profile, switch_core_session_t *session, const char *url, int download, switch_memory_pool_t *pool);
 static switch_status_t url_cache_add(url_cache_t *cache, switch_core_session_t *session, cached_url_t *url);
 static void url_cache_remove(url_cache_t *cache, switch_core_session_t *session, cached_url_t *url);
 static void url_cache_remove_soft(url_cache_t *cache, switch_core_session_t *session, cached_url_t *url);
@@ -181,16 +194,22 @@ static switch_status_t url_cache_replace(url_cache_t *cache, switch_core_session
 static void url_cache_lock(url_cache_t *cache, switch_core_session_t *session);
 static void url_cache_unlock(url_cache_t *cache, switch_core_session_t *session);
 static void url_cache_clear(url_cache_t *cache, switch_core_session_t *session);
+static http_profile_t *url_cache_http_profile_find(url_cache_t *cache, const char *name);
+static void url_cache_http_profile_add(url_cache_t *cache, const char *name, const char *aws_s3_access_key_id, const char *aws_s3_secret_access_key);
+
+static switch_curl_slist_t *append_aws_s3_headers(switch_curl_slist_t *headers, http_profile_t *profile, const char *verb, const char *content_type, const char *url);
 
 /**
  * Put a file to the URL
  * @param cache the cache
+ * @param profile the HTTP profile
  * @param session the (optional) session uploading the file
  * @param url The URL
  * @param filename The file to upload
+ * @param cache_local_file true if local file should be mapped to url in cache
  * @return SWITCH_STATUS_SUCCESS if successful
  */
-static switch_status_t http_put(url_cache_t *cache, switch_core_session_t *session, const char *url, const char *filename)
+static switch_status_t http_put(url_cache_t *cache, http_profile_t *profile, switch_core_session_t *session, const char *url, const char *filename, int cache_local_file)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
@@ -215,6 +234,7 @@ static switch_status_t http_put(url_cache_t *cache, switch_core_session_t *sessi
 
 	buf = switch_mprintf("Content-Type: %s", mime_type);
 	headers = switch_curl_slist_append(headers, buf);
+	headers = append_aws_s3_headers(headers, profile, "PUT", mime_type, url);
 
 	/* open file and get the file size */
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "opening %s for upload to %s\n", filename, url);
@@ -271,6 +291,20 @@ static switch_status_t http_put(url_cache_t *cache, switch_core_session_t *sessi
 
 	if (httpRes == 200 || httpRes == 201 || httpRes == 204) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "%s saved to %s\n", filename, url);
+		if (cache_local_file) {
+			cached_url_t *u = NULL;
+			/* save to cache */
+			url_cache_lock(cache, session);
+			u = cached_url_create(cache, url, filename);
+			u->size = file_info.st_size;
+			u->status = CACHED_URL_AVAILABLE;
+			if (url_cache_add(cache, session, u) != SWITCH_STATUS_SUCCESS) {
+				/* This error should never happen */
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Failed to add URL to cache!\n");
+				cached_url_destroy(u, cache->pool);
+			}
+			url_cache_unlock(cache, session);
+		}
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Received HTTP error %ld trying to save %s to %s\n", httpRes, filename, url);
 		status = SWITCH_STATUS_GENERR;
@@ -316,6 +350,7 @@ static size_t get_file_callback(void *ptr, size_t size, size_t nmemb, void *get)
 
 	return result;
 }
+
 /**
  * trim whitespace characters from string
  * @param str the string to trim
@@ -492,13 +527,14 @@ static void url_cache_clear(url_cache_t *cache, switch_core_session_t *session)
 /**
  * Get a URL from the cache, add it if it does not exist
  * @param cache The cache
+ * @param profile optional profile
  * @param session the (optional) session requesting the URL
  * @param url The URL
  * @param download If true, the file will be downloaded if it does not exist in the cache.
  * @param pool The pool to use for allocating the filename
  * @return The filename or NULL if there is an error
  */
-static char *url_cache_get(url_cache_t *cache, switch_core_session_t *session, const char *url, int download, switch_memory_pool_t *pool)
+static char *url_cache_get(url_cache_t *cache, http_profile_t *profile, switch_core_session_t *session, const char *url, int download, switch_memory_pool_t *pool)
 {
 	char *filename = NULL;
 	cached_url_t *u = NULL;
@@ -526,7 +562,7 @@ static char *url_cache_get(url_cache_t *cache, switch_core_session_t *session, c
 		/* Set up URL entry and add to map to prevent simultaneous downloads */
 		cache->misses++;
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Cache MISS: size = %zu (%zu MB), hit ratio = %d/%d\n", cache->queue.size, cache->size / 1000000, cache->hits, cache->hits + cache->misses);
-		u = cached_url_create(cache, url);
+		u = cached_url_create(cache, url, NULL);
 		if (url_cache_add(cache, session, u) != SWITCH_STATUS_SUCCESS) {
 			/* This error should never happen */
 			url_cache_unlock(cache, session);
@@ -537,7 +573,7 @@ static char *url_cache_get(url_cache_t *cache, switch_core_session_t *session, c
 
 		/* download the file */
 		url_cache_unlock(cache, session);
-		if (http_get(cache, u, session) == SWITCH_STATUS_SUCCESS) {
+		if (http_get(cache, profile, u, session) == SWITCH_STATUS_SUCCESS) {
 			/* Got the file, let the waiters know it is available */
 			url_cache_lock(cache, session);
 			u->status = CACHED_URL_AVAILABLE;
@@ -686,37 +722,39 @@ static void url_cache_remove(url_cache_t *cache, switch_core_session_t *session,
 }
 
 /**
- * Create a cached URL entry
- * @param cache the cache
- * @param url the URL to cache
- * @return the cached URL
+ * Find a profile
  */
-static cached_url_t *cached_url_create(url_cache_t *cache, const char *url)
+static http_profile_t *url_cache_http_profile_find(url_cache_t *cache, const char *name)
 {
-	switch_uuid_t uuid;
-	char uuid_str[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
-	char *filename = NULL;
-	char uuid_dir[3] = { 0 };
-	char *dirname = NULL;
-	cached_url_t *u = NULL;
-	const char *file_extension = "";
-	const char *ext = NULL;
-
-	if (zstr(url)) {
-		return NULL;
+	if (cache && !zstr(name)) {
+		return (http_profile_t *)switch_core_hash_find(cache->profiles, name);
 	}
+	return NULL;
+}
 
-	switch_zmalloc(u, sizeof(cached_url_t));
+/**
+ * Add a profile to the cache
+ */
+static void url_cache_http_profile_add(url_cache_t *cache, const char *name, const char *aws_s3_access_key_id, const char *aws_s3_secret_access_key)
+{
+	http_profile_t *profile = switch_core_alloc(cache->pool, sizeof(*profile));
+	profile->name = switch_core_strdup(cache->pool, name);
+	if (aws_s3_access_key_id) {
+		profile->aws_s3_access_key_id = switch_core_strdup(cache->pool, aws_s3_access_key_id);
+	}
+	if (aws_s3_secret_access_key) {
+		profile->aws_s3_secret_access_key = switch_core_strdup(cache->pool, aws_s3_secret_access_key);
+	}
+	switch_core_hash_insert(cache->profiles, profile->name, profile);
+}
 
-	/* filename is constructed from UUID and is stored in cache dir (first 2 characters of UUID) */
-	switch_uuid_get(&uuid);
-	switch_uuid_format(uuid_str, &uuid);
-	strncpy(uuid_dir, uuid_str, 2);
-	dirname = switch_mprintf("%s%s%s", cache->location, SWITCH_PATH_SEPARATOR, uuid_dir);
-	filename = &uuid_str[2];
-
-	/* create sub-directory if it doesn't exist */
-	switch_dir_make_recursive(dirname, SWITCH_DEFAULT_DIR_PERMS, cache->pool);
+/**
+ * Find file extension at end of URL.
+ * @return file extension or NULL if it doesn't exist
+ */
+static const char *find_extension(const char *url)
+{
+	const char *ext;
 
 	/* find extension on the end of URL */
 	for (ext = &url[strlen(url) - 1]; ext != url; ext--) {
@@ -725,13 +763,67 @@ static cached_url_t *cached_url_create(url_cache_t *cache, const char *url)
 		}
 		if (*ext == '.') {
 			/* found it */
-			file_extension = ext;
-			break;
+			return ++ext;
 		}
 	}
+	return NULL;
+}
+
+/**
+ * Create a cached URL filename.
+ * @param cache the cache
+ * @param extension the filename extension
+ * @return the cached URL filename.  Free when done.
+ */
+static char *cached_url_filename_create(url_cache_t *cache, const char *extension)
+{
+	char *filename;
+	char *dirname;
+	char uuid_dir[3] = { 0 };
+	switch_uuid_t uuid;
+	char uuid_str[SWITCH_UUID_FORMATTED_LENGTH + 1] = { 0 };
+
+	/* filename is constructed from UUID and is stored in cache dir (first 2 characters of UUID) */
+	switch_uuid_get(&uuid);
+	switch_uuid_format(uuid_str, &uuid);
+	strncpy(uuid_dir, uuid_str, 2);
+	dirname = switch_mprintf("%s%s%s", cache->location, SWITCH_PATH_SEPARATOR, uuid_dir);
+
+	/* create sub-directory if it doesn't exist */
+	switch_dir_make_recursive(dirname, SWITCH_DEFAULT_DIR_PERMS, cache->pool);
+
+	if (!zstr(extension)) {
+		filename = switch_mprintf("%s%s%s.%s", dirname, SWITCH_PATH_SEPARATOR, &uuid_str[2], extension);
+	} else {
+		filename = switch_mprintf("%s%s%s", dirname, SWITCH_PATH_SEPARATOR, &uuid_str[2]);
+	}
+	free(dirname);
+	return filename;
+}
+
+/**
+ * Create a cached URL entry
+ * @param cache the cache
+ * @param url the URL to cache
+ * @param filename (optional) pre-defined local filename
+ * @return the cached URL
+ */
+static cached_url_t *cached_url_create(url_cache_t *cache, const char *url, const char *filename)
+{
+	cached_url_t *u = NULL;
+
+	if (zstr(url)) {
+		return NULL;
+	}
+
+	switch_zmalloc(u, sizeof(cached_url_t));
 
 	/* intialize cached URL */
-	u->filename = switch_mprintf("%s%s%s%s", dirname, SWITCH_PATH_SEPARATOR, filename, file_extension);
+	if (zstr(filename)) {
+		u->filename = cached_url_filename_create(cache, find_extension(url));
+	} else {
+		u->filename = strdup(filename);
+	}
 	u->url = switch_safe_strdup(url);
 	u->size = 0;
 	u->used = 1;
@@ -739,8 +831,6 @@ static cached_url_t *cached_url_create(url_cache_t *cache, const char *url)
 	u->waiters = 0;
 	u->download_time = switch_time_now();
 	u->max_age = cache->default_max_age;
-
-	switch_safe_free(dirname);
 
 	return u;
 }
@@ -760,15 +850,48 @@ static void cached_url_destroy(cached_url_t *url, switch_memory_pool_t *pool)
 }
 
 /**
+ * Append Amazon S3 headers to request if necessary
+ * @param headers to add to.  If NULL, new headers are created.
+ * @param profile with S3 credentials
+ * @param content_type of object (PUT only)
+ * @param verb (GET/PUT)
+ * @param url
+ * @return updated headers
+ */
+static switch_curl_slist_t *append_aws_s3_headers(switch_curl_slist_t *headers, http_profile_t *profile, const char *verb, const char *content_type, const char *url)
+{
+	/* check if Amazon headers are needed */
+	if (profile && profile->aws_s3_access_key_id && aws_s3_is_s3_url(url)) {
+		char date[256];
+		char header[1024];
+		char *authenticate;
+
+		/* Date: */
+		switch_rfc822_date(date, switch_time_now());
+		snprintf(header, 1024, "Date: %s", date);
+		headers = switch_curl_slist_append(headers, header);
+
+		/* Authorization: */
+		authenticate = aws_s3_authentication_create(verb, url, content_type, "", profile->aws_s3_access_key_id, profile->aws_s3_secret_access_key, date);
+		snprintf(header, 1024, "Authorization: %s", authenticate);
+		free(authenticate);
+		headers = switch_curl_slist_append(headers, header);
+	}
+	return headers;
+}
+
+/**
  * Fetch a file via HTTP
  * @param cache the cache
+ * @param profile the HTTP profile
  * @param url The cached URL entry
  * @param session the (optional) session
  * @return SWITCH_STATUS_SUCCESS if successful
  */
-static switch_status_t http_get(url_cache_t *cache, cached_url_t *url, switch_core_session_t *session)
+static switch_status_t http_get(url_cache_t *cache, http_profile_t *profile, cached_url_t *url, switch_core_session_t *session)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	switch_curl_slist_t *headers = NULL;  /* optional linked-list of HTTP headers */
 	switch_CURL *curl_handle = NULL;
 	http_get_data_t get_data = {0};
 	long httpRes = 0;
@@ -778,12 +901,18 @@ static switch_status_t http_get(url_cache_t *cache, cached_url_t *url, switch_co
 	get_data.fd = 0;
 	get_data.url = url;
 
+	/* add optional AWS S3 headers if necessary */
+	headers = append_aws_s3_headers(headers, profile, "GET", "", url->url);
+
 	curl_handle = switch_curl_easy_init();
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "opening %s for URL cache\n", get_data.url->filename);
 	if ((get_data.fd = open(get_data.url->filename, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR)) > -1) {
 		switch_curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_MAXREDIRS, 10);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_NOSIGNAL, 1);
+		if (headers) {
+			switch_curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, headers);
+		}
 		switch_curl_easy_setopt(curl_handle, CURLOPT_URL, get_data.url->url);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, get_file_callback);
 		switch_curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *) &get_data);
@@ -808,7 +937,8 @@ static switch_status_t http_get(url_cache_t *cache, cached_url_t *url, switch_co
 		close(get_data.fd);
 	} else {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "open() error: %s\n", strerror(errno));
-		return SWITCH_STATUS_GENERR;
+		status = SWITCH_STATUS_GENERR;
+		goto done;
 	}
 
 	if (httpRes == 200) {
@@ -821,7 +951,14 @@ static switch_status_t http_get(url_cache_t *cache, cached_url_t *url, switch_co
 	} else {
 		url->size = 0; // nothing downloaded or download interrupted
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Received HTTP error %ld trying to fetch %s\n", httpRes, url->url);
-		return SWITCH_STATUS_GENERR;
+		status = SWITCH_STATUS_GENERR;
+		goto done;
+	}
+
+done:
+
+	if (headers) {
+		switch_curl_slist_free_all(headers);
 	}
 
 	return status;
@@ -858,18 +995,13 @@ static void setup_dir(url_cache_t *cache)
 	}
 }
 
-static int isUrl(const char *filename)
-{
-	return !zstr(filename) && (!strncmp("http://", filename, strlen("http://")) || !strncmp("https://", filename, strlen("https://")));
-}
-
-#define HTTP_PREFETCH_SYNTAX "<url>"
+#define HTTP_PREFETCH_SYNTAX "{param=val}<url>"
 SWITCH_STANDARD_API(http_cache_prefetch)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	char *url;
 
-	if (!isUrl(cmd)) {
+	if (zstr(cmd)) {
 		stream->write_function(stream, "USAGE: %s\n", HTTP_PREFETCH_SYNTAX);
 		return SWITCH_STATUS_SUCCESS;
 	}
@@ -887,7 +1019,7 @@ SWITCH_STANDARD_API(http_cache_prefetch)
 	return status;
 }
 
-#define HTTP_GET_SYNTAX "<url>"
+#define HTTP_GET_SYNTAX "{param=val}<url>"
 /**
  * Get a file from the cache, download if it isn't cached
  */
@@ -896,9 +1028,12 @@ SWITCH_STANDARD_API(http_cache_get)
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	switch_memory_pool_t *lpool = NULL;
 	switch_memory_pool_t *pool = NULL;
+	http_profile_t *profile = NULL;
 	char *filename;
+	switch_event_t *params = NULL;
+	char *url;
 
-	if (!isUrl(cmd)) {
+	if (zstr(cmd)) {
 		stream->write_function(stream, "USAGE: %s\n", HTTP_GET_SYNTAX);
 		return SWITCH_STATUS_SUCCESS;
 	}
@@ -910,7 +1045,16 @@ SWITCH_STANDARD_API(http_cache_get)
 		pool = lpool;
 	}
 
-	filename = url_cache_get(&gcache, session, cmd, 1, pool);
+	/* parse params and get profile */
+	url = switch_core_strdup(pool, cmd);
+	if (*url == '{') {
+		switch_event_create_brackets(url, '{', '}', ',', &params, &url, SWITCH_FALSE);
+	}
+	if (params) {
+		profile = url_cache_http_profile_find(&gcache, switch_event_get_header(params, "profile"));
+	}
+
+	filename = url_cache_get(&gcache, profile, session, url, 1, pool);
 	if (filename) {
 		stream->write_function(stream, "%s", filename);
 
@@ -923,10 +1067,14 @@ SWITCH_STANDARD_API(http_cache_get)
 		switch_core_destroy_memory_pool(&lpool);
 	}
 
+	if (params) {
+		switch_event_destroy(&params);
+	}
+
 	return status;
 }
 
-#define HTTP_TRYGET_SYNTAX "<url>"
+#define HTTP_TRYGET_SYNTAX "{param=val}<url>"
 /**
  * Get a file from the cache, fail if download is needed
  */
@@ -935,9 +1083,12 @@ SWITCH_STANDARD_API(http_cache_tryget)
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	switch_memory_pool_t *lpool = NULL;
 	switch_memory_pool_t *pool = NULL;
+	http_profile_t *profile = NULL;
 	char *filename;
+	switch_event_t *params = NULL;
+	char *url;
 
-	if (!isUrl(cmd)) {
+	if (zstr(cmd)) {
 		stream->write_function(stream, "USAGE: %s\n", HTTP_GET_SYNTAX);
 		return SWITCH_STATUS_SUCCESS;
 	}
@@ -949,7 +1100,16 @@ SWITCH_STANDARD_API(http_cache_tryget)
 		pool = lpool;
 	}
 
-	filename = url_cache_get(&gcache, session, cmd, 0, pool);
+	/* parse params and get profile */
+	url = switch_core_strdup(pool, cmd);
+	if (*url == '{') {
+		switch_event_create_brackets(url, '{', '}', ',', &params, &url, SWITCH_FALSE);
+	}
+	if (params) {
+		profile = url_cache_http_profile_find(&gcache, switch_event_get_header(params, "profile"));
+	}
+
+	filename = url_cache_get(&gcache, profile, session, url, 0, pool);
 	if (filename) {
 		if (!strcmp(DOWNLOAD_NEEDED, filename)) {
 			stream->write_function(stream, "-ERR %s\n", DOWNLOAD_NEEDED);
@@ -965,21 +1125,37 @@ SWITCH_STANDARD_API(http_cache_tryget)
 		switch_core_destroy_memory_pool(&lpool);
 	}
 
+	if (params) {
+		switch_event_destroy(&params);
+	}
+
 	return status;
 }
 
-#define HTTP_PUT_SYNTAX "<url> <file>"
+#define HTTP_PUT_SYNTAX "{param=val}<url> <file>"
 /**
  * Put a file to the server
  */
 SWITCH_STANDARD_API(http_cache_put)
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
+	http_profile_t *profile = NULL;
+	switch_memory_pool_t *lpool = NULL;
+	switch_memory_pool_t *pool = NULL;
 	char *args = NULL;
 	char *argv[10] = { 0 };
 	int argc = 0;
+	switch_event_t *params = NULL;
+	char *url;
 
-	if (zstr(cmd) || (strncmp("http://", cmd, strlen("http://")) && strncmp("https://", cmd, strlen("https://")))) {
+	if (session) {
+		pool = switch_core_session_get_pool(session);
+	} else {
+		switch_core_new_memory_pool(&lpool);
+		pool = lpool;
+	}
+
+	if (zstr(cmd)) {
 		stream->write_function(stream, "USAGE: %s\n", HTTP_PUT_SYNTAX);
 		status = SWITCH_STATUS_SUCCESS;
 		goto done;
@@ -993,7 +1169,16 @@ SWITCH_STANDARD_API(http_cache_put)
 		goto done;
 	}
 
-	status = http_put(&gcache, session, argv[0], argv[1]);
+	/* parse params and get profile */
+	url = switch_core_strdup(pool, argv[0]);
+	if (*url == '{') {
+		switch_event_create_brackets(url, '{', '}', ',', &params, &url, SWITCH_FALSE);
+	}
+	if (params) {
+		profile = url_cache_http_profile_find(&gcache, switch_event_get_header(params, "profile"));
+	}
+
+	status = http_put(&gcache, profile, session, url, argv[1], 0);
 	if (status == SWITCH_STATUS_SUCCESS) {
 		stream->write_function(stream, "+OK\n");
 	} else {
@@ -1002,6 +1187,15 @@ SWITCH_STANDARD_API(http_cache_put)
 
 done:
 	switch_safe_free(args);
+
+	if (lpool) {
+		switch_core_destroy_memory_pool(&lpool);
+	}
+
+	if (params) {
+		switch_event_destroy(&params);
+	}
+
 	return status;
 }
 
@@ -1066,7 +1260,7 @@ static void *SWITCH_THREAD_FUNC prefetch_thread(switch_thread_t *thread, void *o
 static switch_status_t do_config(url_cache_t *cache)
 {
 	char *cf = "http_cache.conf";
-	switch_xml_t cfg, xml, param, settings;
+	switch_xml_t cfg, xml, param, settings, profiles;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	int max_urls;
 	switch_time_t default_max_age_sec;
@@ -1128,6 +1322,39 @@ static switch_status_t do_config(url_cache_t *cache)
 		}
 	}
 
+	/* get profiles */
+	profiles = switch_xml_child(cfg, "profiles");
+	if (profiles) {
+		switch_xml_t profile;
+		for (profile = switch_xml_child(profiles, "profile"); profile; profile = profile->next) {
+			const char *name = switch_xml_attr_soft(profile, "name");
+			if (!zstr(name)) {
+				switch_xml_t s3 = switch_xml_child(profile, "aws-s3");
+				const char *access_key_id = NULL;
+				const char *secret_access_key = NULL;
+				if (s3) {
+					switch_xml_t id = switch_xml_child(s3, "access-key-id");
+					switch_xml_t secret = switch_xml_child(s3, "secret-access-key");
+					if (id && secret) {
+						access_key_id = switch_xml_txt(id);
+						secret_access_key = switch_xml_txt(secret);
+						if (!access_key_id || !secret_access_key) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Missing aws s3 credentials for profile \"%s\"\n", name);
+							access_key_id = NULL;
+							secret_access_key = NULL;
+						}
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Missing key id or secret\n");
+					}
+				}
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Adding profile \"%s\" to cache\n", name);
+				url_cache_http_profile_add(cache, name, access_key_id, secret_access_key);
+			} else {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "HTTP profile missing name\n");
+			}
+		}
+	}
+
 	/* check config */
 	if (max_urls <= 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "max-urls must be > 0\n");
@@ -1168,6 +1395,9 @@ done:
  */
 struct http_context {
 	switch_file_handle_t fh;
+	http_profile_t *profile;
+	char *local_path;
+	const char *write_url;
 };
 
 /**
@@ -1180,25 +1410,37 @@ static switch_status_t http_cache_file_open(switch_file_handle_t *handle, const 
 {
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	struct http_context *context = switch_core_alloc(handle->memory_pool, sizeof(*context));
-	const char *local_path;
+	int file_flags = SWITCH_FILE_DATA_SHORT;
 
-	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
-		/* WRITE not supported */
-		return SWITCH_STATUS_FALSE;
+	if (handle->params) {
+		context->profile = url_cache_http_profile_find(&gcache, switch_event_get_header(handle->params, "profile"));
 	}
 
-	local_path = url_cache_get(&gcache, NULL, path, 1, handle->memory_pool);
-	if (!local_path) {
-		return SWITCH_STATUS_FALSE;
+	if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
+		/* WRITE = HTTP PUT */
+		file_flags |= SWITCH_FILE_FLAG_WRITE;
+		context->write_url = switch_core_strdup(handle->memory_pool, path);
+		/* allocate local file in cache */
+		context->local_path = cached_url_filename_create(&gcache, find_extension(context->write_url));
+	} else {
+		/* READ = HTTP GET */
+		file_flags |= SWITCH_FILE_FLAG_READ;
+		context->local_path = url_cache_get(&gcache, context->profile, NULL, path, 1, handle->memory_pool);
+		if (!context->local_path) {
+			return SWITCH_STATUS_FALSE;
+		}
 	}
 
 	if ((status = switch_core_file_open(&context->fh,
-			local_path,
+			context->local_path,
 			handle->channels,
 			handle->samplerate,
-			SWITCH_FILE_FLAG_READ | SWITCH_FILE_DATA_SHORT, NULL)) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to open HTTP cache file: %s, %s\n", local_path, path);
-		return status;
+			file_flags, NULL)) != SWITCH_STATUS_SUCCESS) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to open HTTP cache file: %s, %s\n", context->local_path, path);
+			if (switch_test_flag(handle, SWITCH_FILE_FLAG_WRITE)) {
+				switch_safe_free(context->local_path);
+			}
+			return status;
 	}
 
 	handle->private_info = context;
@@ -1256,6 +1498,19 @@ static switch_status_t http_file_read(switch_file_handle_t *handle, void *data, 
 }
 
 /**
+ * Write to HTTP file
+ * @param handle
+ * @param data
+ * @param len
+ * @return
+ */
+static switch_status_t http_file_write(switch_file_handle_t *handle, void *data, size_t *len)
+{
+	struct http_context *context = (struct http_context *)handle->private_info;
+	return switch_core_file_write(&context->fh, data, len);
+}
+
+/**
  * Close HTTP file
  * @param handle
  * @return SWITCH_STATUS_SUCCESS
@@ -1263,7 +1518,15 @@ static switch_status_t http_file_read(switch_file_handle_t *handle, void *data, 
 static switch_status_t http_file_close(switch_file_handle_t *handle)
 {
 	struct http_context *context = (struct http_context *)handle->private_info;
-	return switch_core_file_close(&context->fh);
+	switch_status_t status = switch_core_file_close(&context->fh);
+
+	if (status == SWITCH_STATUS_SUCCESS && !zstr(context->write_url)) {
+		status = http_put(&gcache, context->profile, NULL, context->write_url, context->local_path, 1);
+	}
+	if (!zstr(context->write_url)) {
+		switch_safe_free(context->local_path);
+	}
+	return status;
 }
 
 static char *http_supported_formats[] = { "http", NULL };
@@ -1289,6 +1552,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_http_cache_load)
 
 	memset(&gcache, 0, sizeof(url_cache_t));
 	gcache.pool = pool;
+	switch_core_hash_init(&gcache.map, gcache.pool);
+	switch_core_hash_init(&gcache.profiles, gcache.pool);
+	switch_mutex_init(&gcache.mutex, SWITCH_MUTEX_UNNESTED, gcache.pool);
+	switch_thread_rwlock_create(&gcache.shutdown_lock, gcache.pool);
 
 	if (do_config(&gcache) != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_TERM;
@@ -1308,6 +1575,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_http_cache_load)
 		file_interface->file_open = http_file_open;
 		file_interface->file_close = http_file_close;
 		file_interface->file_read = http_file_read;
+		file_interface->file_write = http_file_write;
 
 		file_interface = switch_loadable_module_create_interface(*module_interface, SWITCH_FILE_INTERFACE);
 		file_interface->interface_name = modname;
@@ -1315,13 +1583,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_http_cache_load)
 		file_interface->file_open = https_file_open;
 		file_interface->file_close = http_file_close;
 		file_interface->file_read = http_file_read;
+		file_interface->file_write = http_file_write;
 	}
 
-	switch_core_hash_init(&gcache.map, gcache.pool);
-	switch_mutex_init(&gcache.mutex, SWITCH_MUTEX_UNNESTED, gcache.pool);
-	switch_thread_rwlock_create(&gcache.shutdown_lock, gcache.pool);
-
-	/* create the queue */
+	/* create the queue from configuration */
 	gcache.queue.max_size = gcache.max_url;
 	gcache.queue.data = switch_core_alloc(gcache.pool, sizeof(void *) * gcache.queue.max_size);
 	gcache.queue.pos = 0;

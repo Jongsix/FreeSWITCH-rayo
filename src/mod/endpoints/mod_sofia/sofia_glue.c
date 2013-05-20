@@ -163,6 +163,9 @@ void sofia_glue_attach_private(switch_core_session_t *session, sofia_profile_t *
 	tech_pvt->mparams.rtcp_video_interval_msec = profile->rtcp_video_interval_msec;
 	tech_pvt->mparams.sdp_username = profile->sdp_username;
 	tech_pvt->mparams.cng_pt = tech_pvt->cng_pt;
+	tech_pvt->mparams.rtp_timeout_sec = profile->rtp_timeout_sec;
+	tech_pvt->mparams.rtp_hold_timeout_sec = profile->rtp_hold_timeout_sec;
+	
 
 	switch_media_handle_create(&tech_pvt->media_handle, session, &tech_pvt->mparams);
 	switch_media_handle_set_media_flags(tech_pvt->media_handle, tech_pvt->profile->media_flags);
@@ -1870,17 +1873,6 @@ int sofia_recover_callback(switch_core_session_t *session)
 	switch_channel_set_name(tech_pvt->channel, switch_channel_get_variable(channel, "channel_name"));
 
 	
-	switch_core_session_get_recovery_crypto_key(session, SWITCH_MEDIA_TYPE_AUDIO, "srtp_remote_audio_crypto_key");
-	switch_core_session_get_recovery_crypto_key(session, SWITCH_MEDIA_TYPE_VIDEO, "srtp_remote_video_crypto_key");
-
-	if ((tmp = switch_channel_get_variable(channel, "rtp_local_sdp_str"))) {
-		tech_pvt->mparams.local_sdp_str = switch_core_session_strdup(session, tmp);
-	}
-
-	if ((tmp = switch_channel_get_variable(channel, SWITCH_R_SDP_VARIABLE))) {
-		tech_pvt->mparams.remote_sdp_str = switch_core_session_strdup(session, tmp);
-	}
-
 	switch_channel_set_variable(channel, "sip_invite_call_id", switch_channel_get_variable(channel, "sip_call_id"));
 
 	if (switch_true(switch_channel_get_variable(channel, "sip_nat_detected"))) {

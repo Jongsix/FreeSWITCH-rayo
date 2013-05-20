@@ -449,6 +449,12 @@ fi
 
 AC_CHECK_LIB(jpeg, jpeg_std_error,, AC_MSG_ERROR([no usable libjpeg; please install libjpeg devel package or equivalent]))
 
+AC_CHECK_LIB(jbig, jbg_enc_out, have_libjbig=yes, have_libjbig=no)
+if test "x$have_libjbig" = "xyes"  ; then
+SPANDSP_LA_JBIG="-ljbig"
+AC_SUBST(SPANDSP_LA_JBIG)
+fi
+
 AC_CHECK_LIB(resolv, res_init, have_libresolv=yes, have_libresolv=no)
 if test "x$have_libresolv" = "xyes"  ; then
 APR_ADDTO(SWITCH_AM_LDFLAGS, -lresolv)
@@ -947,7 +953,9 @@ if test x$HAVE_OPENSSL = x1; then
 	openssl_CFLAGS="$openssl_CFLAGS -DHAVE_OPENSSL";
 	APR_ADDTO(SWITCH_AM_CFLAGS, -DHAVE_OPENSSL)
 	AC_CHECK_LIB(ssl, SSL_CTX_set_tlsext_use_srtp, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS_SRTP, 1, HAVE_OPENSSL_DTLS_SRTP))
-	AC_CHECK_LIB(ssl, DTLSv1_method, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS, 1, HAVE_OPENSSL_DTLS))
+	AC_CHECK_LIB(ssl, DTLSv1_method, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS, 1, HAVE_OPENSSL_DTLS), AC_MSG_WARN([OpenSSL version < 1.0.1e you might want to upgrade]))
+else
+	AC_MSG_ERROR([OpenSSL and associaed developement headers required])
 fi
 
 AX_CHECK_JAVA

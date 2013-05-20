@@ -60,40 +60,78 @@ struct stream_data {
 #endif
 };
 
+#define WANT_READ 1
+#define WANT_WRITE 0
+
 #ifdef HAVE_SSL
 #ifdef WIN32
-static int sock_read_ready(struct stream_data *data, uint32_t ms)
+static int sock_ready(struct stream_data *data, int ms, int w_read)
 {
-	int r = 0;
-	fd_set fds;
+	int r = 0, e = 0;
+	fd_set rfds, wfds, efds, *fds;
 	struct timeval tv;
 
-	FD_ZERO(&fds);
+	FD_ZERO(&rfds);
+	FD_ZERO(&wfds);
+	FD_ZERO(&efds);
+
+	if (w_read) {
+		fds = &rfds;
+	} else {
+		fds = &wfds;
+	}
 
 #ifdef WIN32
 #pragma warning( push )
 #pragma warning( disable : 4127 )
-	FD_SET(SSL_get_fd(data->ssl), &fds);
+	FD_SET(SSL_get_fd(data->ssl), fds);
 #pragma warning( pop ) 
 #else
-	FD_SET(SSL_get_fd(data->ssl), &fds);
+	FD_SET(SSL_get_fd(data->ssl), fds);
 #endif
 
 	tv.tv_sec = ms / 1000;
 	tv.tv_usec = (ms % 1000) * ms;
 	
-	r = select (SSL_get_fd(data->ssl) + 1, &fds, NULL, NULL, &tv); 
+	r = select (SSL_get_fd(data->ssl) + 1, w_read ? &rfds : NULL, w_read ? NULL : &wfds, &efds, &tv); 
 
+	if (r > 0) {
+	
+#ifdef WIN32
+#pragma warning( push )
+#pragma warning( disable : 4127 )
+		e = FD_ISSET(SSL_get_fd(data->ssl), &efds);
+#pragma warning( pop ) 
+#else
+		e = FD_ISSET(SSL_get_fd(data->ssl), &efds);
+#endif		
+		
+		if (e) {
+			r = -1;
+		} else {
+		
+#ifdef WIN32
+#pragma warning( push )
+#pragma warning( disable : 4127 )
+			r = FD_ISSET(SSL_get_fd(data->ssl), fds);
+#pragma warning( pop ) 
+#else
+			r = FD_ISSET(SSL_get_fd(data->ssl), fds);
+#endif	
+			
+		}
+	}
+		
 	return r;
 }
 #else
-static int sock_read_ready(struct stream_data *data, int ms)
+static int sock_ready(struct stream_data *data, int ms, int w_read)
 {
 	struct pollfd pfds[2] = { { 0 } };
-	int s = 0, r = 0;
+	int s = 0, r = 0, w = w_read ? POLLIN : POLLOUT;
 	
 	pfds[0].fd = SSL_get_fd(data->ssl);
-	pfds[0].events = POLLIN | POLLHUP | POLLERR;
+	pfds[0].events = w | POLLHUP | POLLERR;
 	
 	s = poll(pfds, 1, ms);
 
@@ -101,7 +139,7 @@ static int sock_read_ready(struct stream_data *data, int ms)
 	if (s < 0) {
 		r = s;
 	} else if (s > 0) {
-		if ((pfds[0].revents & POLLIN)) {
+		if ((pfds[0].revents & w)) {
 			r = 1;
 		} else if ((pfds[0].revents & POLLHUP) || (pfds[0].revents & POLLERR)) {
 			r = -1;
@@ -193,8 +231,6 @@ handshake (struct stream_data *data)
 #elif HAVE_SSL
 static int wait_for_data(struct stream_data *data, int ret, int timeout)
 {
-	struct timeval tv;
-	fd_set fds;
 	int err;
 	int retval = IKS_OK;
 
@@ -203,32 +239,75 @@ static int wait_for_data(struct stream_data *data, int ret, int timeout)
 	switch(err)
 	{
 		case SSL_ERROR_WANT_READ:
+			ret = sock_ready(data, timeout*1000, WANT_READ);
+			break;
 		case SSL_ERROR_WANT_WRITE:
-			ret = sock_read_ready(data, timeout*1000);
-			
-			if (ret == -1) {
-				retval = IKS_NET_TLSFAIL;
-			}
-				
+			ret = sock_ready(data, timeout*1000, WANT_WRITE);
 			break;
 		default:
-			if(data->logHook)
+			if (data->logHook) {
 				data->logHook(data->user_data, ERR_error_string(err, NULL), strlen(ERR_error_string(err, NULL)), 1); 
-			retval = IKS_NET_TLSFAIL;
+			}
+			ret = -1;
 			break;
+
+			
+
 	}
+
+	if (ret == -1) {
+		retval = IKS_NET_TLSFAIL;
+	}
+	
 	
 	ERR_clear_error();
 				
 	return retval;
 }
 
+
+#ifndef WIN32
+#include <fcntl.h>
+#endif
+
+int iks_set_blocking(void *fd, int blocking)
+{
+#ifdef WIN32
+    unsigned long mode = !blocking;
+#endif
+    if (!fd) {
+		return -1;
+	}
+    
+#ifdef WIN32
+    if (ioctlsocket((SOCKET)(intptr_t) fd, FIONBIO, &mode)) {
+        return -1;
+    }
+
+#else
+    int flags;
+	int mfd = (int)(intptr_t)fd;
+
+    if ((flags = fcntl(mfd, F_GETFL, 0)) < 0) {
+        return -1;
+    }
+
+    if (fcntl(mfd, F_SETFL, flags | (!blocking ? O_NONBLOCK : ~O_NONBLOCK)) < 0) {
+        return -1;
+    }
+#endif
+
+    return 0;
+}
+
+
+
 static int
 handshake (struct stream_data *data)
 {
 	int ret;
 	int finished;
-	
+
 	SSL_library_init();
 	SSL_load_error_strings();
 	
@@ -238,12 +317,14 @@ handshake (struct stream_data *data)
 	data->ssl = SSL_new(data->ssl_ctx);
 	if(!data->ssl) return IKS_NOMEM;
 	
-	if( SSL_set_fd(data->ssl, (int)data->sock) != 1 ) return IKS_NOMEM;
+	iks_set_blocking(data->sock, 0);
+
+	if( SSL_set_fd(data->ssl, (int)(intptr_t)data->sock) != 1 ) return IKS_NOMEM;
 	
 	/* Set both the read and write BIO's to non-blocking mode */
 	BIO_set_nbio(SSL_get_rbio(data->ssl), 1);
 	BIO_set_nbio(SSL_get_wbio(data->ssl), 1);
-	
+
 	finished = 0;
 	
 	do
@@ -641,7 +722,7 @@ iks_connect_fd (iksparser *prs, int fd)
 		if (NULL == data->buf) return IKS_NOMEM;
 	}
 
-	data->sock = (void *) fd;
+	data->sock = (void *) (intptr_t) fd;
 	data->flags |= SF_FOREIGN;
 	data->trans = &iks_default_transport;
 
@@ -659,7 +740,7 @@ iks_fd (iksparser *prs)
 	if (prs) {
 		data = iks_user_data (prs);
 		if (data) {
-			return (int) data->sock;
+			return (int)(intptr_t) data->sock;
 		}
 	}
 	return -1;
@@ -673,8 +754,6 @@ iks_recv (iksparser *prs, int timeout)
 	
 #ifdef HAVE_SSL
 	int   err;
-	struct timeval tv;
-	fd_set fds;
 #endif
 
 	while (1) {
@@ -685,16 +764,14 @@ iks_recv (iksparser *prs, int timeout)
 		} else
 #elif HAVE_SSL
 		if (data->flags & SF_SECURE) {
-			ret = sock_read_ready(data, timeout*1000);
-			
+			ret = sock_ready(data, timeout*1000, WANT_READ);
+
 			if (ret == -1) {
 				return IKS_NET_TLSFAIL;
 			} else if( ret == 0 ) {
 				return IKS_OK;
 			} else {
-				do {
-					len = SSL_read(data->ssl, data->buf, NET_IO_BUF_SIZE - 1);
-				} while (len == -1 && (errno == EAGAIN || errno == EINTR || SSL_get_error(data->ssl, len) == SSL_ERROR_WANT_READ));
+				len = SSL_read(data->ssl, data->buf, NET_IO_BUF_SIZE - 1);
 			}
 			
 			if( len <= 0 ) 
@@ -771,7 +848,16 @@ iks_send_raw (iksparser *prs, const char *xmlstr)
 	} else
 #elif HAVE_SSL
 	if (data->flags & SF_SECURE) {
-		if (SSL_write(data->ssl, xmlstr, strlen (xmlstr)) < 0) return IKS_NET_RWERR;
+		int r, err;
+
+		do {
+			r = SSL_write(data->ssl, xmlstr, strlen (xmlstr));
+		} while (r == -1 && (err = SSL_get_error(data->ssl, r)) == SSL_ERROR_WANT_WRITE);
+		
+		if (r < 0) {
+			return IKS_NET_RWERR;
+		}
+
 	} else
 #endif
 	{

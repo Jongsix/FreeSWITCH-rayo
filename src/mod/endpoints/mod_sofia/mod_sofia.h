@@ -243,7 +243,6 @@ typedef enum {
 	PFLAG_TRACK_CALLS,
 	PFLAG_DESTROY,
 	PFLAG_EXTENDED_INFO_PARSING,
-	PFLAG_T38_PASSTHRU,
 	PFLAG_CID_IN_1XX,
 	PFLAG_IN_DIALOG_CHAT,
 	PFLAG_DEL_SUBS_ON_REG_REUSE,
@@ -303,6 +302,7 @@ typedef enum {
 	TFLAG_INB_NOMEDIA,
 	TFLAG_LATE_NEGOTIATION,
 	TFLAG_SDP,
+	TFLAG_NEW_SDP,
 	TFLAG_TPORT_LOG,
 	TFLAG_SENT_UPDATE,
 	TFLAG_PROXY_MEDIA,
@@ -840,7 +840,7 @@ void sofia_glue_attach_private(switch_core_session_t *session, sofia_profile_t *
 
 switch_status_t sofia_glue_do_invite(switch_core_session_t *session);
 
-uint8_t sofia_media_negotiate_sdp(switch_core_session_t *session, const char *r_sdp);
+uint8_t sofia_media_negotiate_sdp(switch_core_session_t *session, const char *r_sdp, switch_sdp_type_t type);
 
 void sofia_handle_sip_i_refer(nua_t *nua, sofia_profile_t *profile, nua_handle_t *nh, switch_core_session_t *session, sip_t const *sip,
 								sofia_dispatch_event_t *de, tagi_t tags[]);

@@ -24,6 +24,7 @@
  * Contributor(s):
  * 
  * Anthony Minessale II <anthm@freeswitch.org>
+ * William King <william.king@quentustech.com>
  *
  * mod_valet_parking.c -- Valet Parking Module
  *
@@ -207,7 +208,7 @@ static valet_token_t *next_id(switch_core_session_t *session, valet_lot_t *lot, 
 		}
 	}
 
-	for (i = min; (i < max || max == 0); i++) {
+	for (i = min; (i <= max || max == 0); i++) {
 		switch_snprintf(buf, sizeof(buf), "%d", i);
 		switch_mutex_lock(lot->mutex);
 		token = (valet_token_t *) switch_core_hash_find(lot->hash, buf);
@@ -885,6 +886,7 @@ static void pres_event_handler(switch_event_t *event)
 
 				switch_mutex_unlock(lot->mutex);
 			}
+			switch_console_free_matches(&matches);
 		}
 	}
 
