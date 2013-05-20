@@ -438,7 +438,7 @@ static switch_status_t do_config(switch_memory_pool_t *pool, const char *config_
 	switch_xml_t cfg, xml;
 
 	/* set defaults */
-	globals.record_file_prefix = SWITCH_GLOBAL_dirs.recordings_dir;
+	globals.record_file_prefix = switch_core_sprintf(pool, "%s%s", SWITCH_GLOBAL_dirs.recordings_dir, SWITCH_PATH_SEPARATOR);
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Configuring module\n");
 	if (!(xml = switch_xml_open_cfg(config_file, &cfg, NULL))) {
