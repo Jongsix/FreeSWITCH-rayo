@@ -137,7 +137,7 @@ Group: System/Libraries
 Packager: Chris Rienzo
 URL: http://www.freeswitch.org/
 Source0: freeswitch-%{version}.tar.bz2
-Requires: freeswitch = %{version}-%{release}
+Requires: freeswitch = %{version}
 Requires: freeswitch-application-conference
 Requires: freeswitch-application-distributor
 Requires: freeswitch-application-esf
