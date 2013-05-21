@@ -468,9 +468,9 @@ static uint8_t check_channel_status(originate_global_t *oglobals, originate_stat
 				
 				switch_channel_answer(originate_status[i].peer_channel);
 
+				switch_channel_set_variable(originate_status[i].peer_channel, "picked_up_uuid", switch_core_session_get_uuid(old_session));
 				switch_channel_execute_on(originate_status[i].peer_channel, "execute_on_pickup");
 				switch_channel_api_on(originate_status[i].peer_channel, "api_on_pickup");
-				switch_channel_set_variable(originate_status[i].peer_channel, "picked_up_uuid", switch_core_session_get_uuid(old_session));
 
 				switch_core_session_rwunlock(old_session);
 				break;
@@ -1380,7 +1380,7 @@ static void *SWITCH_THREAD_FUNC enterprise_originate_thread(switch_thread_t *thr
 	switch_mutex_unlock(handle->mutex);
 
 	if (handle->done != 2) {
-		if (handle->status == SWITCH_STATUS_SUCCESS) {
+		if (handle->status == SWITCH_STATUS_SUCCESS && handle->bleg) {
 			switch_channel_t *channel = switch_core_session_get_channel(handle->bleg);
 
 			switch_channel_set_variable(channel, "group_dial_status", "loser");
