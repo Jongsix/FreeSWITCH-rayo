@@ -32,8 +32,7 @@ static void test_signature(void)
 	ASSERT_NULL(aws_s3_signature(signature, S3_SIGNATURE_LENGTH_MAX, NULL, NULL));
 	ASSERT_NULL(aws_s3_signature(NULL, S3_SIGNATURE_LENGTH_MAX, "PUT\nc8fdb181845a4ca6b8fec737b3581d76\ntext/html\nThu, 17 Nov 2005 18:49:58 GMT\nx-amz-magic:abracadabra\nx-amz-meta-author:foo@bar.com\n/quotes/nelson", "OtxrzxIsfpFjA7SwPzILwy8Bw21TLhquhboDYROV"));
 	ASSERT_NULL(aws_s3_signature(signature, 0, "PUT\nc8fdb181845a4ca6b8fec737b3581d76\ntext/html\nThu, 17 Nov 2005 18:49:58 GMT\nx-amz-magic:abracadabra\nx-amz-meta-author:foo@bar.com\n/quotes/nelson", "OtxrzxIsfpFjA7SwPzILwy8Bw21TLhquhboDYROV"));
-	/* TODO freeswitch bug... */
-	//ASSERT_STRING_EQUALS("jZNO", aws_s3_signature(signature, 5, "PUT\nc8fdb181845a4ca6b8fec737b3581d76\ntext/html\nThu, 17 Nov 2005 18:49:58 GMT\nx-amz-magic:abracadabra\nx-amz-meta-author:foo@bar.com\n/quotes/nelson", "OtxrzxIsfpFjA7SwPzILwy8Bw21TLhquhboDYROV"));
+	ASSERT_STRING_EQUALS("jZNO", aws_s3_signature(signature, 5, "PUT\nc8fdb181845a4ca6b8fec737b3581d76\ntext/html\nThu, 17 Nov 2005 18:49:58 GMT\nx-amz-magic:abracadabra\nx-amz-meta-author:foo@bar.com\n/quotes/nelson", "OtxrzxIsfpFjA7SwPzILwy8Bw21TLhquhboDYROV"));
 }
 
 /**
@@ -46,6 +45,8 @@ static void test_check_url(void)
 	ASSERT_TRUE(aws_s3_is_s3_url("http://red.bucket.s3.amazonaws.com/object.ext"));
 	ASSERT_TRUE(aws_s3_is_s3_url("https://bucket.s3.amazonaws.com/object.ext"));
 	ASSERT_TRUE(aws_s3_is_s3_url("https://bucket.s3.amazonaws.com/object"));
+	ASSERT_TRUE(aws_s3_is_s3_url("https://bucket.s3.amazonaws.com/recordings/1240fwjf8we.mp3"));
+	ASSERT_TRUE(aws_s3_is_s3_url("https://bucket.s3.amazonaws.com/en/us/8000/1232345.mp3"));
 	ASSERT_FALSE(aws_s3_is_s3_url("bucket.s3.amazonaws.com/object.ext"));
 	ASSERT_FALSE(aws_s3_is_s3_url("https://s3.amazonaws.com/bucket/object"));
 	ASSERT_FALSE(aws_s3_is_s3_url("http://s3.amazonaws.com/bucket/object"));
