@@ -2810,6 +2810,17 @@ static void on_xmpp_stream_ready(struct xmpp_stream *stream)
 		if (xmpp_stream_is_incoming(stream)) {
 			/* peer server belongs to a s2s inbound stream */
 			xmpp_stream_set_private(stream, rayo_peer_server_create(xmpp_stream_get_jid(stream)));
+		} else {
+			/* send directed presence to domain */
+			iks *presence = iks_new("presence");
+			iks *x;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "sending server presence\n");
+
+			iks_insert_attrib(presence, "from", RAYO_JID(globals.server));
+			iks_insert_attrib(presence, "to", xmpp_stream_get_jid(stream));
+			x = iks_insert(presence, "show");
+			iks_insert_cdata(x, "chat", 4);
+			RAYO_SEND_BY_JID(globals.server, xmpp_stream_get_jid(stream), rayo_message_create(presence));
 		}
 	} else {
 		/* client belongs to stream */
