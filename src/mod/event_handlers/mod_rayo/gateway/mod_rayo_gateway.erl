@@ -58,6 +58,7 @@
 -record(rayo_clients, {jid, status}).
 -record(rayo_nodes, {jid, status}).
 -record(rayo_entities, {external_jid, internal_jid, dcp_jid}).
+-record(rayo_requests, {id, original_request, from, to}).
 
 start_link(Host, Opts) ->
 	Proc = gen_mod:get_module_proc(Host, ?PROCNAME),
@@ -88,6 +89,8 @@ init([Host, Opts]) ->
 	mnesia:create_table(rayo_nodes, [{attributes, record_info(fields, rayo_nodes)}]),
 	mnesia:delete_table(rayo_entities),
 	mnesia:create_table(rayo_entities, [{attributes, record_info(fields, rayo_entities)}]),
+	mnesia:delete_table(rayo_requests),
+	mnesia:create_table(rayo_requests, [{atttributes, record_info(fields, rayo_requests)}]),
 	mnesia:delete_table(rayo_config),
 	mnesia:create_table(rayo_config, [{attributes, record_info(fields, rayo_config)}]),
 
@@ -131,18 +134,18 @@ code_change(_OldVsn, Host, _Extra) ->
 % Handle presence from client
 route_client(From, _To, {xmlelement, "presence", _Attrs, _Els} = Presence) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got client presence ~n~p", [Presence]),
-	case xml:get_tag_attr_s("type", Presence) of
+	case get_attribute_as_list(Presence, "type", "") of
 		"" ->
-			case xml:get_subtag(Presence, "show") of
-				false ->
+			case get_element(Presence, "show") of
+				undefined ->
 					?DEBUG("MOD_RAYO_GATEWAY: ignoring empty presence", []);
 				Show ->
-					case xml:get_tag_cdata(Show) of
+					case get_cdata_as_list(Show) of
 						"chat" ->
 							register_client(From);
 						"dnd" ->
 							unregister_client(From);
-						_Else ->
+						_ ->
 							unregister_client(From)
 					end
 			end;
@@ -151,7 +154,7 @@ route_client(From, _To, {xmlelement, "presence", _Attrs, _Els} = Presence) ->
 		"probe" ->
 			%TODO maybe support
 			ok;
-		_Else ->
+		_ ->
 			ok
 	end,
 	ok;
@@ -165,32 +168,22 @@ route_client(_From, _To, {xmlelement, "message", _Attrs, _Els} = Message) ->
 % Handle <iq> from client to internal domain gateway
 route_client(From, To = {jid, [], _Domain, [], [], _Domain, []}, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got client iq to gateway ~n~p", [IQ]),
-	case xml:get_tag_attr_s("type", IQ) of
+	case get_attribute_as_list(IQ, "type", "") of
 		"get" ->
-			case xml:get_subtag(IQ, "ping") of
-				false ->
+			case get_element(IQ, ?PING_NS, "ping") of
+				undefined ->
 					route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST);
-				Ping ->
-					case xml:get_tag_attr_s("xmlns", Ping) of
-						?PING_NS ->
-							route_result_reply(To, From, IQ);
-						_Else ->
-							route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
-					end
+				_ ->
+					route_result_reply(To, From, IQ)
 			end;
 		"set" ->
-			case xml:get_subtag(IQ, "dial") of
-				false->
-					jlib:make_error_reply(IQ, ?ERR_BAD_REQUEST);
-				Dial->
-					case xml:get_tag_attr_s("xmlns", Dial) of
-						?RAYO_NS ->
-							route_dial_call(To, From, IQ);
-						_Else ->
-							route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
-					end
+			case get_element(IQ, ?RAYO_NS, "dial") of
+				undefined->
+					route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST);
+				_ ->
+					route_dial_call(To, From, IQ)
 			end;
-		_Else ->
+		"" ->
 			route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
 	end;
 
@@ -198,12 +191,11 @@ route_client(From, To = {jid, [], _Domain, [], [], _Domain, []}, {xmlelement, "i
 route_client(From, To, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got client iq ~n~p", [IQ]),
 	case is_entity_dcp(From, To) of
-		{true, EntityJID} ->
-			%TODO ejabberd_router:route(internal_client(), EntityJID, map_iq(IQ)),
-			ok;
+		{true, _} ->
+			route_rayo_command(From, To, IQ);
 		{false, _} ->
 			route_error_reply(To, From, IQ, ?ERR_CONFLICT);
-		_Else ->
+		_ ->
 			route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
 	end,
 	ok.
@@ -211,18 +203,18 @@ route_client(From, To, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
 % Handle <presence> from node to internal domain
 route_node(From, {jid, [], _Domain, [], [], _Domain, []}, {xmlelement, "presence", _Attrs, _Els} = Presence) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got node presence to internal domain ~n~p", [Presence]),
-	case xml:get_tag_attr_s("type", Presence) of
+	case get_attribute_as_list(Presence, "type", "") of
 		"" ->
-			case xml:get_subtag(Presence, "show") of
-				false ->
+			case get_element(Presence, "show") of
+				undefined ->
 					?DEBUG("MOD_RAYO_GATEWAY: ignoring empty presence", []);
 				Show ->
-					case xml:get_tag_cdata(Show) of
+					case get_cdata_as_list(Show) of
 						"chat" ->
 							register_node(From);
 						"dnd" ->
 							unregister_node(From);
-						_Else ->
+						"" ->
 							unregister_node(From)
 					end
 			end;
@@ -231,8 +223,6 @@ route_node(From, {jid, [], _Domain, [], [], _Domain, []}, {xmlelement, "presence
 			unregister_node(From);
 		"probe" ->
 			%TODO maybe support...
-			ok;
-		_Else ->
 			ok
 	end,
 	ok;
@@ -240,23 +230,17 @@ route_node(From, {jid, [], _Domain, [], [], _Domain, []}, {xmlelement, "presence
 % Handle <presence> from node
 route_node(From, To, {xmlelement, "presence", _Attrs, _Els} = Presence) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got node presence to internal domain ~n~p", [Presence]),
-	case xml:get_tag_attr_s("type", Presence) of
+	case get_attribute_as_list(Presence, "type", "") of
 		"" ->
-			case xml:get_subtag(Presence, "offer") of
-				false ->
-					?DEBUG("MOD_RAYO_GATEWAY: ignoring empty presence", []);
-				Offer ->
-					case xml:get_tag_attr_s("xmlns", Offer) of
-						?RAYO_NS ->
-							route_offer_call(From, To, Presence);
-						_Else ->
-							ok
-					end
+			case get_element(Presence, ?RAYO_NS, "offer") of
+				undefined ->
+					ok;
+				_ ->
+					route_offer_call(From, To, Presence)
 			end;
-		_Else ->
+		_ ->
 			ok
-	end,
-	ok;
+	end;
 
 % Handle <message> from node
 route_node(_From, _To, {xmlelement, "message", _Attrs, _Els} = Message) ->
@@ -265,25 +249,25 @@ route_node(_From, _To, {xmlelement, "message", _Attrs, _Els} = Message) ->
 	ok;
 
 % Handle <iq> from node.  Only allow ping, send error for all other requests.
-route_node(From, To, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
+route_node(From, {jid, [], _Domain, [], [], _Domain, []} = To, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
 	?DEBUG("MOD_RAYO_GATEWAY: got node iq ~n~p", [IQ]),
-	case xml:get_tag_attr_s("type", IQ) of
+	case get_attribute_as_list(IQ, "type", "") of
 		"get" ->
-			case xml:get_subtag(IQ, "ping") of
-				false ->
+			case get_element(IQ, ?PING_NS, "ping") of
+				undefined ->
 					route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST);
-				Ping ->
-					case xml:get_tag_attr_s("xmlns", Ping) of
-						"urn:xmpp:ping" ->
-							route_result_reply(To, From, IQ);
-						_Else ->
-							route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
-					end
+				_ ->
+					route_result_reply(To, From, IQ)
 			end;
-		_Else ->
+		"" ->
 			route_error_reply(To, From, IQ, ?ERR_BAD_REQUEST)
 	end,
-	ok.
+	ok;
+
+% Handle <iq> from node to entity.  Only allow request replies.
+route_node(From, To, {xmlelement, "iq", _Attrs, _Els} = IQ) ->
+	?DEBUG("MOD_RAYO_GATEWAY: got node iq ~n~p", [IQ]),
+	route_rayo_command_reply(From, To, IQ).
 
 register_node(JID) ->
 	Write = fun() ->
@@ -295,7 +279,7 @@ register_node(JID) ->
 	case num_clients() >= 1 of
 		true ->
 			ejabberd_router:route(internal_client(), JID, online_presence());
-		_Else ->
+		_ ->
 			ok
 	end,
 	ok.
@@ -321,7 +305,7 @@ register_client(JID) ->
 	case Size of
 		1 ->
 			route_to_list(internal_client(), all_nodes(), online_presence());
-		_Else ->
+		_ ->
 			ok
 	end,
 	ok.
@@ -337,7 +321,7 @@ unregister_client(JID) ->
 	case Size of
 		0 ->
 			route_to_list(internal_client(), all_nodes(), offline_presence());
-		_Else->
+		_->
 			ok
 	end,
 	ok.
@@ -357,7 +341,7 @@ unmap_jid(Jid) ->
 	{OrigDomain, OrigUser} = case ExtUser of
 		[] ->
 			{[], []};
-		_Else ->
+		_ ->
 			case string:chr(ExtUser, $|) of
 				0 ->
 					{[], []};
@@ -378,10 +362,10 @@ set_entity_dcp(PCPJID, EntityJID) ->
 				case mnesia:write(#rayo_entities{external_jid = EntityJID, internal_jid = InternalJID, dcp_jid = PCPJID}) of
 					ok ->
 						{true, InternalJID};
-					_Else ->
-						{error, _Else}
+					Else ->
+						{error, Else}
 				end;
-			_Else ->
+			_ ->
 				{false, []}
 		end
 	end,
@@ -393,11 +377,11 @@ set_entity_dcp(PCPJID, EntityJID) ->
 is_entity_dcp(PCPJID, EntityJID) ->
 	% quick check first
 	case mnesia:dirty_read(rayo_entities, EntityJID) of
-		[{EntityJID, InternalJID, none}] ->
+		[{EntityJID, _, none}] ->
 			set_entity_dcp(PCPJID, EntityJID);
 		[{EntityJID, InternalJID, PCPJID}] ->
 			{true, InternalJID};
-		[{EntityJID, InternalJID, DCPJID}] ->
+		[{EntityJID, InternalJID, _}] ->
 			{false, InternalJID}
 	end.
 
@@ -414,7 +398,7 @@ route_offer_call(From, _To, Offer) ->
 			mnesia:transaction(Call),
 			% Forward to all clients
 			route_to_list(MappedFrom, all_clients(), Offer);
-		_Else ->
+		_ ->
 			% TODO reject ??
 			ok
 	end,
@@ -427,15 +411,39 @@ route_dial_call(From, To, Dial) ->
 		true ->
 			% TODO forward to server
 			route_error_reply(To, From, Dial, ?ERR_RESOURCE_CONSTRAINT);
-		_Else ->
+		_ ->
 			route_error_reply(To, From, Dial, ?ERR_RESOURCE_CONSTRAINT)
 	end.
+
+% route rayo IQ to server entity
+route_rayo_command(_From, _To, _CMD) ->
+	% TODO
+	ok.
+
+% route rayo IQ reply from server entity
+route_rayo_command_reply(_From, _To, CMD) ->
+	case get_attribute_as_list(CMD, "type", "") of
+		"result" ->
+			case get_element_attribute_as_list(CMD, ?RAYO_NS, "ref", "uri", undefined) of
+				undefined ->
+					?DEBUG("MOD_RAYO_GATEWAY: ignoring malformed rayo command result (missing <ref uri>)", []);
+				_URI ->
+					% TODO
+					ok
+			end;
+		"error" ->
+			% TODO forward error to client
+			ok;
+		_ ->
+			ok
+	end,
+	ok.
 
 config_value(Name) ->
 	case catch mnesia:dirty_read(rayo_config, Name) of
 		[{rayo_config, Name, Value}] ->
 			Value;
-		_Else ->
+		_ ->
 			""
 	end.
 
@@ -452,7 +460,7 @@ all_clients() ->
 	case mnesia:transaction(fun() -> mnesia:all_keys(rayo_clients) end) of
 		{atomic, Keys} ->
 			Keys;
-		_Else ->
+		_ ->
 			[]
 	end.
 
@@ -463,7 +471,7 @@ all_nodes() ->
 	case mnesia:transaction(fun() -> mnesia:all_keys(rayo_nodes) end) of
 		{atomic, Keys} ->
 			Keys;
-		_Else ->
+		_ ->
 			[]
 	end.
 
@@ -477,6 +485,7 @@ online_presence() ->
 offline_presence() ->
 	presence(<<"dnd">>).
 
+
 route_to_list(From, ToList, Stanza) ->
 	lists:map(fun(To) -> ejabberd_router:route(From, To, Stanza) end, ToList),
 	ok.
@@ -486,4 +495,56 @@ route_error_reply(From, To, IQ, Reason) ->
 
 route_result_reply(From, To, IQ) ->
 	ejabberd_router:route(From, To, jlib:make_result_iq_reply(IQ)).
+
+% XML parsing helpers
+
+get_element(Element, Name) ->
+	case xml:get_subtag(Element, Name) of
+		false ->
+			undefined;
+		Subtag ->
+			Subtag
+	end.
+
+get_element(Element, NS, Name) ->
+	case get_element(Element, Name) of
+		undefined ->
+			undefined;
+		Subtag ->
+			case get_attribute_as_list(Subtag, "xmlns", "") of
+				"" ->
+					undefined;
+				NS ->
+					Subtag
+			end
+	end.
+
+get_cdata_as_list(undefined) ->
+	"";
+
+get_cdata_as_list(Element) ->
+	xml:get_tag_cdata(Element).
+
+get_element_cdata_as_list(Element, Name) ->
+	get_cdata_as_list(get_element(Element, Name)).
+
+get_element_cdata_as_list(Element, NS, Name) ->
+	get_cdata_as_list(get_element(Element, NS, Name)).
+
+get_element_attribute_as_list(Element, Name, AttrName, Default) ->
+	get_attribute_as_list(get_element(Element, Name), AttrName, Default).
+
+get_element_attribute_as_list(Element, NS, Name, AttrName, Default) ->
+	get_attribute_as_list(get_element(Element, NS, Name), AttrName, Default).
+
+get_attribute_as_list(undefined, _Name, _Default) ->
+	undefined;
+
+get_attribute_as_list(Element, Name, Default) ->
+	case xml:get_tag_attr_s(Name, Element) of
+		"" ->
+			Default;
+		Attr ->
+			Attr
+	end.
 
