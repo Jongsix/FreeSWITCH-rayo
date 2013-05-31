@@ -197,7 +197,7 @@ unregister_rayo_node_entity(ExtJid) ->
 		mnesia:delete({rayo_entities, ExtJid})
 	end,
 	Result = mnesia:transaction(Delete),
-	Size = num_clients(),
+	Size = mnesia:table_info(rayo_entities, size),
 	?DEBUG("MOD_RAYO_GATEWAY: unregister entity: ~p, result = ~p, ~p entities total", [jlib:jid_to_string(ExtJid), Result, Size]),
 	ok.
 
@@ -224,7 +224,7 @@ find_rayo_node_entity_by_ext_jid(ExtJid) ->
 % find entity Definitive Controlling Party JID given entity external JID
 find_rayo_node_entity_dcp_by_ext_jid(ExtJid) ->
 	case find_rayo_node_entity_by_ext_jid(ExtJid) of
-		{_, _, DcpJid, _} ->
+		{rayo_entities, _, _, DcpJid, _} ->
 			DcpJid;
 		_ ->
 			none
@@ -232,8 +232,8 @@ find_rayo_node_entity_dcp_by_ext_jid(ExtJid) ->
 
 % find entity Definitive Controlling Party JID given entity internal JID
 find_rayo_node_entity_dcp_by_int_jid(IntJid) ->
-	case find_rayo_node_entity_by_ext_jid(IntJid) of
-		{_, _, DcpJid, _} ->
+	case find_rayo_node_entity_by_int_jid(IntJid) of
+		{rayo_entities, _, _, DcpJid, _} ->
 			DcpJid;
 		_ ->
 			none
@@ -451,7 +451,7 @@ route_call_presence(From, _To, Presence) ->
 					route_rayo_entity_stanza(From, Presence);
 				_ ->
 					route_rayo_entity_stanza(From, Presence),
-					unregister_rayo_node_entity(From)
+					unregister_rayo_node_entity(create_external_jid(From))
 			end
 	end,
 	ok.
@@ -654,6 +654,7 @@ route_to_list(From, ToList, Stanza) ->
 route_rayo_entity_stanza(From, Stanza) ->
 	case find_rayo_node_entity_dcp_by_int_jid(From) of
 		none ->
+			?DEBUG("MOD_RAYO_GATEWAY: Failed to find DCP for ~p", [From]),
 			ok;
 		DcpJid ->
  			ejabberd_router:route(create_external_jid(From), DcpJid, Stanza)
