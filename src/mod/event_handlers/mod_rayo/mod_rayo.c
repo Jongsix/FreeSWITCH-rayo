@@ -795,6 +795,7 @@ static void rayo_call_cleanup(struct rayo_actor *actor)
 	revent = iks_new_presence("end", RAYO_NS,
 		RAYO_JID(call),
 		rayo_call_get_dcp_jid(call));
+	iks_insert_attrib(revent, "type", "unavailable");
 	end = iks_find(revent, "end");
 
 	if (cause_str) {
