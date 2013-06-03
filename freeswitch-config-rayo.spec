@@ -191,8 +191,6 @@ FreeSWITCH rayo server implementation.
 %{__cp} -prv ./conf/rayo/lang/en %{buildroot}/%{SYSCONFDIR}/lang/
 %{__cp} -prv ./conf/rayo/sip_profiles/external.xml %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__cp} -prv ./conf/rayo/sip_profiles/external %{buildroot}/%{SYSCONFDIR}/sip_profiles
-%{__cp} -prv ./conf/rayo/sip_profiles/internal.xml %{buildroot}/%{SYSCONFDIR}/sip_profiles
-%{__cp} -prv ./conf/rayo/sip_profiles/internal %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__cp} -prv ./conf/rayo/directory %{buildroot}/%{SYSCONFDIR}/
 
 %postun
@@ -239,7 +237,6 @@ FreeSWITCH rayo server implementation.
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/vm/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/external/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/internal/*.xml
 
 ### END OF config-rayo
 
