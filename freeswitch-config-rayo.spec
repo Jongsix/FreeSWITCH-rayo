@@ -180,13 +180,20 @@ FreeSWITCH rayo server implementation.
 %install
 %{__rm} -rf %{buildroot}
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}
+%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/autoload_configs
+%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/dialplan
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/lang
+%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/lang/en
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/sip_profiles
+%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/directory
 %{__cp} -prv ./conf/rayo/*.{xml,types,pem} %{buildroot}/%{SYSCONFDIR}/
 %{__cp} -prv ./conf/rayo/{autoload_configs,dialplan} %{buildroot}/%{SYSCONFDIR}/
 %{__cp} -prv ./conf/rayo/lang/en %{buildroot}/%{SYSCONFDIR}/lang/
 %{__cp} -prv ./conf/rayo/sip_profiles/external.xml %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__cp} -prv ./conf/rayo/sip_profiles/external %{buildroot}/%{SYSCONFDIR}/sip_profiles
+%{__cp} -prv ./conf/rayo/sip_profiles/internal.xml %{buildroot}/%{SYSCONFDIR}/sip_profiles
+%{__cp} -prv ./conf/rayo/sip_profiles/internal %{buildroot}/%{SYSCONFDIR}/sip_profiles
+%{__cp} -prv ./conf/rayo/directory %{buildroot}/%{SYSCONFDIR}/
 
 %postun
 
@@ -223,6 +230,8 @@ FreeSWITCH rayo server implementation.
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/autoload_configs/switch.conf.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/autoload_configs/timezones.conf.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/dialplan/public.xml
+%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/directory/default.xml
+%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/directory/default/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/demo/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/dir/*.xml
@@ -230,6 +239,7 @@ FreeSWITCH rayo server implementation.
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/vm/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/external/*.xml
+%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/internal/*.xml
 
 ### END OF config-rayo
 
@@ -239,5 +249,8 @@ FreeSWITCH rayo server implementation.
 #
 ######################################################################################################################
 %changelog
+* Mon Jun 03 2013 - chris.rienzo@grasshopper.com
+- Added users and internal profile for softphone testing
 * Wed May 08 2013 - chris.rienzo@grasshopper.com
 - Initial revision
+

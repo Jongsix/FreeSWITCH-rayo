@@ -54,21 +54,21 @@
     <!-- <load module="mod_tts_commandline"/> -->
 
     <!-- Say -->
-    <load module="mod_say_de"/>
-    <load module="mod_say_es"/>
-    <load module="mod_say_fr"/>
-    <load module="mod_say_hr"/>
-    <load module="mod_say_it"/>
-    <load module="mod_say_nl"/>
-    <load module="mod_say_ru"/>
-    <load module="mod_say_zh"/>
+    <!--load module="mod_say_de"/-->
+    <!--load module="mod_say_es"/-->
+    <!--load module="mod_say_fr"/-->
+    <!--load module="mod_say_hr"/-->
+    <!--load module="mod_say_it"/-->
+    <!--load module="mod_say_nl"/-->
+    <!--load module="mod_say_ru"/-->
+    <!--load module="mod_say_zh"/-->
     <load module="mod_say_en"/>
-    <load module="mod_say_fa"/>
-    <load module="mod_say_he"/>
-    <load module="mod_say_hu"/>
-    <load module="mod_say_ja"/>
-    <load module="mod_say_pt"/>
-    <load module="mod_say_th"/>
+    <!--load module="mod_say_fa"/-->
+    <!--load module="mod_say_he"/-->
+    <!--load module="mod_say_hu"/-->
+    <!--load module="mod_say_ja"/-->
+    <!--load module="mod_say_pt"/-->
+    <!--load module="mod_say_th"/-->
 
   </modules>
 </configuration>

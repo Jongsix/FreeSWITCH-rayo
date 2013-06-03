@@ -59,12 +59,25 @@
   -->
   <X-PRE-PROCESS cmd="set" data="sip_tls_version=tlsv1"/>
 
-  <!-- External SIP Profile -->
-  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=stun:stun.freeswitch.org"/>
-  <X-PRE-PROCESS cmd="set" data="external_sip_ip=stun:stun.freeswitch.org"/>
-  <X-PRE-PROCESS cmd="set" data="external_auth_calls=false"/>
+  <!-- Rayo -->
+  <X-PRE-PROCESS cmd="set" data="rayo_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="rayo_domain_name=$${rayo_ip}"/>
+
+  <!-- Internal SIP Profile (softphone calls) -->
+  <X-PRE-PROCESS cmd="set" data="internal_rtp_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="internal_sip_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="internal_sip_port=5080"/>
+  <X-PRE-PROCESS cmd="set" data="internal_tls_port=5081"/>
+  <X-PRE-PROCESS cmd="set" data="internal_tls_enable=false"/>
+  <X-PRE-PROCESS cmd="set" data="internal_tls_dir=$${base_dir}/conf/ssl"/>
+  <X-PRE-PROCESS cmd="set" data="internal_auth_calls=true"/>
+
+  <!-- External SIP Profile (sip trunks) -->
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${local_ip_v4}"/>
   <X-PRE-PROCESS cmd="set" data="external_sip_port=5060"/>
   <X-PRE-PROCESS cmd="set" data="external_tls_port=5061"/>
-  <X-PRE-PROCESS cmd="set" data="external_ssl_enable=false"/>
-  <X-PRE-PROCESS cmd="set" data="external_ssl_dir=$${base_dir}/conf/ssl"/>
+  <X-PRE-PROCESS cmd="set" data="external_tls_enable=false"/>
+  <X-PRE-PROCESS cmd="set" data="external_tls_dir=$${base_dir}/conf/ssl"/>
+  <X-PRE-PROCESS cmd="set" data="external_auth_calls=true"/>
 </include>
