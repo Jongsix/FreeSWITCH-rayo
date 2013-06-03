@@ -12,16 +12,17 @@
 	</record>
 
 	<!-- domain to use in from attribute of client messages -->
-	<domain name="$${domain}" shared-secret="ClueCon">
+	<domain name="$${rayo_domain_name}" shared-secret="ClueCon">
 
 		<!-- Listeners for new Rayo client connections -->
-		<listen type="c2s" port="5222" address="$${local_ip_v4}" acl="rayo-clients"/>
+		<!--listen type="c2s" port="5222" address="$${local_ip_v4}" acl="rayo-clients"/-->
+		<listen type="c2s" port="5222" address="$${rayo_ip}" acl=""/>
 
 		<!-- Listeners for new server connections -->
-		<listen type="s2s" port="5269" address="$${local_ip_v4}" acl="rayo-servers"/>
+		<!--listen type="s2s" port="5269" address="$${local_ip_v4}" acl="rayo-servers"/-->
 
 		<!-- servers to connect to -->
-		<connect port="5269" address="node.example.com" domain="example.com"/>
+		<!--connect port="5269" address="node.example.com" domain="example.com"/-->
 
 		<!-- Authorized users -->
 		<users>
