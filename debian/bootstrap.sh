@@ -7,7 +7,7 @@ conf_dir="../conf"
 lang_dir="../conf/vanilla/lang"
 fs_description="FreeSWITCH is a scalable open source cross-platform telephony platform designed to route and interconnect popular communication protocols using audio, video, text or any other form of media."
 mod_build_depends="."
-supported_distros="squeeze wheezy sid"
+supported_distros="squeeze wheezy jessie sid"
 avoid_mods=(
   applications/mod_limit
   applications/mod_mongo
@@ -36,6 +36,8 @@ avoid_mods=(
   xml_int/mod_xml_radius
 )
 avoid_mods_sid=(
+)
+avoid_mods_jessie=(
 )
 avoid_mods_wheezy=(
 )
@@ -421,6 +423,9 @@ Recommends:
  freeswitch-init (= \${binary:Version}),
  freeswitch-lang (= \${binary:Version}),
  freeswitch-meta-codecs (= \${binary:Version}),
+ freeswitch-meta-conf (= \${binary:Version}),
+ freeswitch-meta-lang (= \${binary:Version}),
+ freeswitch-meta-mod-say (= \${binary:Version}),
  freeswitch-music (= \${binary:Version}),
  freeswitch-sounds (= \${binary:Version}),
  freeswitch-mod-abstraction (= \${binary:Version}),
@@ -471,6 +476,7 @@ Recommends:
  freeswitch-mod-flite (= \${binary:Version}),
  freeswitch-mod-pocketsphinx (= \${binary:Version}),
  freeswitch-mod-tts-commandline (= \${binary:Version}),
+ freeswitch-mod-unimrcp (= \${binary:Version}),
  freeswitch-mod-dialplan-asterisk (= \${binary:Version}),
  freeswitch-mod-dialplan-directory (= \${binary:Version}),
  freeswitch-mod-dialplan-xml (= \${binary:Version}),
@@ -479,8 +485,10 @@ Recommends:
  freeswitch-mod-dingaling (= \${binary:Version}),
  freeswitch-mod-html5 (= \${binary:Version}),
  freeswitch-mod-loopback (= \${binary:Version}),
+ freeswitch-mod-portaudio (= \${binary:Version}),
  freeswitch-mod-rtmp (= \${binary:Version}),
  freeswitch-mod-skinny (= \${binary:Version}),
+ freeswitch-mod-skypopen (= \${binary:Version}),
  freeswitch-mod-sofia (= \${binary:Version}),
  freeswitch-mod-cdr-csv (= \${binary:Version}),
  freeswitch-mod-cdr-mongodb (= \${binary:Version}),
@@ -496,6 +504,7 @@ Recommends:
  freeswitch-mod-snmp (= \${binary:Version}),
  freeswitch-mod-local-stream (= \${binary:Version}),
  freeswitch-mod-native-file (= \${binary:Version}),
+ freeswitch-mod-portaudio-stream (= \${binary:Version}),
  freeswitch-mod-shell-stream (= \${binary:Version}),
  freeswitch-mod-sndfile (= \${binary:Version}),
  freeswitch-mod-tone-stream (= \${binary:Version}),
@@ -507,7 +516,6 @@ Recommends:
  freeswitch-mod-console (= \${binary:Version}),
  freeswitch-mod-logfile (= \${binary:Version}),
  freeswitch-mod-syslog (= \${binary:Version}),
- freeswitch-mod-say-en (= \${binary:Version}),
  freeswitch-mod-posix-timer (= \${binary:Version}),
  freeswitch-mod-timerfd (= \${binary:Version}),
  freeswitch-mod-xml-cdr (= \${binary:Version}),
@@ -516,20 +524,6 @@ Recommends:
  freeswitch-mod-xml-scgi (= \${binary:Version}),
 Suggests:
  freeswitch-mod-vlc (= \${binary:Version}),
- freeswitch-mod-say-de (= \${binary:Version}),
- freeswitch-mod-say-es (= \${binary:Version}),
- freeswitch-mod-say-fa (= \${binary:Version}),
- freeswitch-mod-say-fr (= \${binary:Version}),
- freeswitch-mod-say-he (= \${binary:Version}),
- freeswitch-mod-say-hr (= \${binary:Version}),
- freeswitch-mod-say-hu (= \${binary:Version}),
- freeswitch-mod-say-it (= \${binary:Version}),
- freeswitch-mod-say-ja (= \${binary:Version}),
- freeswitch-mod-say-nl (= \${binary:Version}),
- freeswitch-mod-say-pt (= \${binary:Version}),
- freeswitch-mod-say-ru (= \${binary:Version}),
- freeswitch-mod-say-th (= \${binary:Version}),
- freeswitch-mod-say-zh (= \${binary:Version}),
 Description: Cross-Platform Scalable Multi-Protocol Soft Switch
  $(debian_wrap "${fs_description}")
  .
@@ -544,6 +538,7 @@ Depends: \${misc:Depends}, freeswitch (= \${binary:Version}),
  freeswitch-mod-bv (= \${binary:Version}),
  freeswitch-mod-celt (= \${binary:Version}),
  freeswitch-mod-codec2 (= \${binary:Version}),
+ freeswitch-mod-dahdi-codec (= \${binary:Version}),
  freeswitch-mod-g723-1 (= \${binary:Version}),
  freeswitch-mod-g729 (= \${binary:Version}),
  freeswitch-mod-h26x (= \${binary:Version}),
@@ -563,6 +558,60 @@ Description: Cross-Platform Scalable Multi-Protocol Soft Switch
  .
  This is a metapackage which depends on the packages needed to install
  most FreeSWITCH codecs.
+
+Package: freeswitch-meta-conf
+Architecture: all
+Depends: \${misc:Depends},
+ freeswitch-conf-curl (= \${binary:Version}),
+ freeswitch-conf-insideout (= \${binary:Version}),
+ freeswitch-conf-sbc (= \${binary:Version}),
+ freeswitch-conf-softphone (= \${binary:Version}),
+ freeswitch-conf-vanilla (= \${binary:Version}),
+Description: Cross-Platform Scalable Multi-Protocol Soft Switch
+ $(debian_wrap "${fs_description}")
+ .
+ This is a metapackage which depends on the available configuration
+ examples for FreeSWITCH.
+
+Package: freeswitch-meta-lang
+Architecture: all
+Depends: \${misc:Depends},
+ freeswitch-lang-de (= \${binary:Version}),
+ freeswitch-lang-en (= \${binary:Version}),
+ freeswitch-lang-es (= \${binary:Version}),
+ freeswitch-lang-fr (= \${binary:Version}),
+ freeswitch-lang-he (= \${binary:Version}),
+ freeswitch-lang-pt (= \${binary:Version}),
+ freeswitch-lang-ru (= \${binary:Version}),
+Description: Cross-Platform Scalable Multi-Protocol Soft Switch
+ $(debian_wrap "${fs_description}")
+ .
+ This is a metapackage which depends on all language files for
+ FreeSWITCH.
+
+Package: freeswitch-meta-mod-say
+Architecture: any
+Depends: \${misc:Depends},
+ freeswitch-mod-say-de (= \${binary:Version}),
+ freeswitch-mod-say-en (= \${binary:Version}),
+ freeswitch-mod-say-es (= \${binary:Version}),
+ freeswitch-mod-say-fa (= \${binary:Version}),
+ freeswitch-mod-say-fr (= \${binary:Version}),
+ freeswitch-mod-say-he (= \${binary:Version}),
+ freeswitch-mod-say-hr (= \${binary:Version}),
+ freeswitch-mod-say-hu (= \${binary:Version}),
+ freeswitch-mod-say-it (= \${binary:Version}),
+ freeswitch-mod-say-ja (= \${binary:Version}),
+ freeswitch-mod-say-nl (= \${binary:Version}),
+ freeswitch-mod-say-pt (= \${binary:Version}),
+ freeswitch-mod-say-ru (= \${binary:Version}),
+ freeswitch-mod-say-th (= \${binary:Version}),
+ freeswitch-mod-say-zh (= \${binary:Version}),
+Description: Cross-Platform Scalable Multi-Protocol Soft Switch
+ $(debian_wrap "${fs_description}")
+ .
+ This is a metapackage which depends on all mod_say languages for
+ FreeSWITCH.
 
 Package: freeswitch-dbg
 Section: debug
@@ -695,7 +744,7 @@ print_mod_control () {
 Package: freeswitch-${module_name//_/-}
 Section: ${m_section}
 Architecture: any
-$(debian_wrap "Depends: \${shlibs:Depends}, \${misc:Depends}, freeswitch, ${depends}")
+$(debian_wrap "Depends: \${shlibs:Depends}, \${misc:Depends}, libfreeswitch1 (= \${binary:Version}), ${depends}")
 $(debian_wrap "Recommends: ${recommends}")
 $(debian_wrap "Suggests: freeswitch-${module_name//_/-}-dbg, ${suggests}")
 Description: ${description} for FreeSWITCH
@@ -808,7 +857,7 @@ print_lang_control () {
 Package: freeswitch-lang-${lang//_/-}
 Architecture: all
 Depends: \${misc:Depends}
-Recommends: freeswitch-sounds-en-${lang} (= \${binary:Version})
+Recommends: freeswitch-sounds-${lang} (= \${binary:Version})
 Description: ${lang_name} language files for FreeSWITCH
  $(debian_wrap "${fs_description}")
  .
@@ -1016,10 +1065,23 @@ genmodctl_mod () {
   echo
 }
 
+set_modules_non_dfsg () {
+  local len=${#avoid_mods}
+  for ((i=0; i<len; i++)); do
+    case "${avoid_mods[$i]}" in
+      codecs/mod_siren|codecs/mod_ilbc)
+        unset avoid_mods[$i]
+        ;;
+    esac
+  done
+}
+
 codename="sid"
-while getopts "c:" o; do
+modulelist_opt=""
+while getopts "c:m:" o; do
   case "$o" in
     c) codename="$OPTARG" ;;
+    m) modulelist_opt="$OPTARG" ;;
   esac
 done
 shift $(($OPTIND-1))
@@ -1027,6 +1089,8 @@ shift $(($OPTIND-1))
 echo "Bootstrapping debian/ for ${codename}" >&2
 echo >&2
 echo "Please wait, this takes a few seconds..." >&2
+
+test -z "$modulelist_opt" || set_modules_${modulelist_opt/-/_}
 
 echo "Adding any new modules to control-modules..." >&2
 parse_dir=control-modules.parse

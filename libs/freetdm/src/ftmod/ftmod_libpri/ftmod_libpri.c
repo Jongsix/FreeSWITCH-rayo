@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2007-2012, Anthony Minessale II
  * Copyright (c) 2010, Stefan Knoblich <s.knoblich@axsentis.de>
+ * Copyright (c) 2012-2013, Stefan Knoblich <stkn@openisdn.net>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1666,7 +1667,7 @@ out:
  */
 static ftdm_channel_t *find_channel_by_cref(ftdm_span_t *span, const int cref)
 {
-	ftdm_iterator_t *iter = NULL;
+	ftdm_iterator_t *c_iter, *c_cur;
 	ftdm_channel_t *chan = NULL;
 
 	if (!span || cref <= 0)
@@ -1674,9 +1675,11 @@ static ftdm_channel_t *find_channel_by_cref(ftdm_span_t *span, const int cref)
 
 	ftdm_mutex_lock(span->mutex);
 
+	c_iter = ftdm_span_get_chan_iterator(span, NULL);
+
 	/* Iterate over all channels on this span */
-	for (iter = ftdm_span_get_chan_iterator(span, NULL); iter; iter = ftdm_iterator_next(iter)) {
-		ftdm_channel_t *cur = ftdm_iterator_current(iter);
+	for (c_cur = c_iter; c_cur; c_cur = ftdm_iterator_next(c_cur)) {
+		ftdm_channel_t *cur = ftdm_iterator_current(c_cur);
 		ftdm_caller_data_t *caller_data = NULL;
 
 		if (ftdm_channel_get_type(cur) != FTDM_CHAN_TYPE_B)
@@ -1690,7 +1693,7 @@ static ftdm_channel_t *find_channel_by_cref(ftdm_span_t *span, const int cref)
 		}
 	}
 
-	ftdm_iterator_free(iter);
+	ftdm_iterator_free(c_iter);
 	ftdm_mutex_unlock(span->mutex);
 	return chan;
 }
@@ -1708,8 +1711,8 @@ static ftdm_channel_t *find_channel_by_cref(ftdm_span_t *span, const int cref)
  */
 static ftdm_status_t hunt_channel(ftdm_span_t *span, const int hint, const ftdm_bool_t excl, ftdm_channel_t **chan)
 {
-	ftdm_iterator_t *iter = NULL;
-	ftdm_channel_t  *tmp  = NULL;
+	ftdm_iterator_t *c_iter, *c_cur;
+	ftdm_channel_t *tmp = NULL;
 	int ret = FTDM_FAIL;
 
 	/* lock span */
@@ -1736,9 +1739,11 @@ static ftdm_status_t hunt_channel(ftdm_span_t *span, const int hint, const ftdm_
 		}
 	}
 
+	c_iter = ftdm_span_get_chan_iterator(span, NULL);
+
 	/* Iterate over all channels on this span */
-	for (iter = ftdm_span_get_chan_iterator(span, NULL); iter; iter = ftdm_iterator_next(iter)) {
-		tmp = ftdm_iterator_current(iter);
+	for (c_cur = c_iter; c_cur; c_cur = ftdm_iterator_next(c_cur)) {
+		tmp = ftdm_iterator_current(c_cur);
 
 		if (ftdm_channel_get_type(tmp) != FTDM_CHAN_TYPE_B)
 			continue;
@@ -1751,7 +1756,7 @@ static ftdm_status_t hunt_channel(ftdm_span_t *span, const int hint, const ftdm_
 		}
 	}
 
-	ftdm_iterator_free(iter);
+	ftdm_iterator_free(c_iter);
 out:
 	ftdm_mutex_unlock(span->mutex);
 	return ret;
@@ -1968,14 +1973,16 @@ static int on_timeout_t3xx(struct lpwrap_pri *spri, struct lpwrap_timer *timer)
 {
 	ftdm_span_t *span = spri->span;
 	ftdm_libpri_data_t *isdn_data = span->signal_data;
-	ftdm_iterator_t *iter = NULL;
+	ftdm_iterator_t *c_iter, *c_cur;
 
 	ftdm_log_chan_msg(isdn_data->dchan, FTDM_LOG_INFO, "-- T3xx timed out, restarting idle b-channels\n");
 	ftdm_mutex_lock(span->mutex);
 
+	c_iter = ftdm_span_get_chan_iterator(span, NULL);
+
 	/* Iterate b-channels */
-	for (iter = ftdm_span_get_chan_iterator(span, NULL); iter; iter = ftdm_iterator_next(iter)) {
-		ftdm_channel_t *cur = ftdm_iterator_current(iter);
+	for (c_cur = c_iter; c_cur; c_cur = ftdm_iterator_next(c_cur)) {
+		ftdm_channel_t *cur = ftdm_iterator_current(c_cur);
 		/* Skip non-b-channels */
 		if (ftdm_channel_get_type(cur) != FTDM_CHAN_TYPE_B)
 			continue;
@@ -1984,7 +1991,7 @@ static int on_timeout_t3xx(struct lpwrap_pri *spri, struct lpwrap_timer *timer)
 			ftdm_set_state_locked(cur, FTDM_CHANNEL_STATE_RESTART);
 		}
 	}
-	ftdm_iterator_free(iter);
+	ftdm_iterator_free(c_iter);
 	ftdm_mutex_unlock(span->mutex);
 
 	/* Start timer again */
@@ -2098,7 +2105,7 @@ static int on_restart(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_eve
 	int i;
 
 	if (pevent->restart.channel < 1) {
-		ftdm_log_chan_msg(spri->dchan, FTDM_LOG_NOTICE, "-- Restarting interface\n");
+		ftdm_log_chan_msg(spri->dchan, FTDM_LOG_DEBUG, "-- Restarting interface\n");
 
 		for (i = 1; i <= ftdm_span_get_chan_count(span); i++) {
 			chan = ftdm_span_get_channel(span, i);
@@ -2112,11 +2119,15 @@ static int on_restart(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri_eve
 		}
 	}
 	else if ((chan = ftdm_span_get_channel(span, pevent->restart.channel))) {
-		ftdm_libpri_b_chan_t *chan_priv = chan->call_data;
+		if (ftdm_channel_get_type(chan) == FTDM_CHAN_TYPE_B) {
+			ftdm_libpri_b_chan_t *chan_priv = chan->call_data;
 
-		ftdm_log_chan_msg(chan, FTDM_LOG_NOTICE, "-- Restarting single channel\n");
-		chan_priv->flags |= FTDM_LIBPRI_B_REMOTE_RESTART;
-		ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RESTART);
+			ftdm_log_chan_msg(chan, FTDM_LOG_DEBUG, "-- Restarting single channel\n");
+			chan_priv->flags |= FTDM_LIBPRI_B_REMOTE_RESTART;
+			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_RESTART);
+		} else {
+			ftdm_log_chan_msg(chan, FTDM_LOG_NOTICE, "Ignoring RESTART on D-Channel\n");
+		}
 	}
 	else {
 		ftdm_log(FTDM_LOG_ERROR, "Invalid restart indicator / channel id '%d' received\n",
@@ -2141,7 +2152,7 @@ static int on_restart_ack(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri
 	int i;
 
 	if (pevent->restartack.channel < 1) {
-		ftdm_log_chan_msg(spri->dchan, FTDM_LOG_NOTICE, "-- Restart of interface completed\n");
+		ftdm_log_chan_msg(spri->dchan, FTDM_LOG_DEBUG, "-- Restart of interface completed\n");
 
 		for (i = 1; i <= ftdm_span_get_chan_count(span); i++) {
 			chan = ftdm_span_get_channel(span, i);
@@ -2156,8 +2167,12 @@ static int on_restart_ack(lpwrap_pri_t *spri, lpwrap_pri_event_t event_type, pri
 		}
 	}
 	else if ((chan = ftdm_span_get_channel(span, pevent->restart.channel))) {
-		ftdm_log_chan_msg(chan, FTDM_LOG_NOTICE, "-- Restart of channel completed\n");
-		ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_DOWN);
+		if (ftdm_channel_get_type(chan) == FTDM_CHAN_TYPE_B) {
+			ftdm_log_chan_msg(chan, FTDM_LOG_DEBUG, "-- Restart of channel completed\n");
+			ftdm_set_state_locked(chan, FTDM_CHANNEL_STATE_DOWN);
+		} else {
+			ftdm_log_chan_msg(chan, FTDM_LOG_NOTICE, "Ignoring RESTART ACK on D-Channel\n");
+		}
 	}
 	else {
 		ftdm_log(FTDM_LOG_ERROR, "Invalid restart indicator / channel id '%d' received\n",

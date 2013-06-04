@@ -1213,17 +1213,13 @@ switch_status_t rtmp_session_login(rtmp_session_t *rsession, const char *user, c
 
 switch_status_t rtmp_session_logout(rtmp_session_t *rsession, const char *user, const char *domain)
 {
-	rtmp_account_t *account, *prev = NULL;
+	rtmp_account_t *account;
 	switch_event_t *event;
 	
 	switch_thread_rwlock_wrlock(rsession->account_rwlock);
 	for (account = rsession->account; account; account = account->next) {
 		if (!strcmp(account->user, user) && !strcmp(account->domain, domain)) {
-			if (prev) {
-				prev->next = account->next;
-			} else {
-				rsession->account = account->next;
-			}
+			rsession->account = account->next;
 		}
 	}
 	switch_thread_rwlock_unlock(rsession->account_rwlock);

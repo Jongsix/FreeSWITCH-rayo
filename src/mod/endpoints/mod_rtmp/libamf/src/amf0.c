@@ -40,11 +40,13 @@ static amf0_data * amf0_list_insert_before(amf0_list * list, amf0_node * node, a
         if (new_node != NULL) {
             new_node->next = node;
             new_node->prev = node->prev;
-
+	    
             if (node->prev != NULL) {
                 node->prev->next = new_node;
-                node->prev = new_node;
             }
+
+	    node->prev = new_node;
+
             if (node == list->first_element) {
                 list->first_element = new_node;
             }
@@ -60,13 +62,15 @@ static amf0_data * amf0_list_insert_after(amf0_list * list, amf0_node * node, am
     if (node != NULL) {
         amf0_node * new_node = (amf0_node*)malloc(sizeof(amf0_node));
         if (new_node != NULL) {
-            new_node->next = node->next;
-            new_node->prev = node;
-
             if (node->next != NULL) {
                 node->next->prev = new_node;
                 node->next = new_node;
-            }
+		new_node->prev = node;
+            } else {
+	      node->next = new_node;
+	      new_node->prev = node;
+	    }
+
             if (node == list->last_element) {
                 list->last_element = new_node;
             }
@@ -241,7 +245,9 @@ static amf0_data * amf0_object_read(read_proc_t read_proc, void * user_data) {
                         amf0_data_free(element);
                         amf0_data_free(data);
                         return NULL;
-                    }
+                    } else {
+                        amf0_data_free(name);
+		    }
                 }
                 else {
                     amf0_data_free(name);
@@ -277,7 +283,9 @@ static amf0_data * amf0_associative_array_read(read_proc_t read_proc, void * use
                             amf0_data_free(element);
                             amf0_data_free(data);
                             return NULL;
-                        }
+                        } else {
+			  amf0_data_free(name);
+			}
                     }
                     else {
                         amf0_data_free(name);
@@ -843,7 +851,9 @@ amf0_data * amf0_object_get(amf0_data * data, const char * name) {
                 return (node != NULL) ? node->data : NULL;
             }
             /* we have to skip the element data to reach the next name */
-            node = node->next->next;
+	    if ( node != NULL && node->next != NULL ) {
+	      node = node->next->next;
+	    }
         }
     }
     return NULL;
@@ -862,7 +872,9 @@ amf0_data * amf0_object_set(amf0_data * data, const char * name, amf0_data * ele
                 }
             }
             /* we have to skip the element data to reach the next name */
-            node = node->next->next;
+	    if ( node != NULL && node->next != NULL ) {
+	      node = node->next->next;
+	    }
         }
     }
     return NULL;

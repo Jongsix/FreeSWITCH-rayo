@@ -726,7 +726,7 @@ switch_status_t send_register_reject(listener_t *listener,
 switch_status_t send_open_receive_channel(listener_t *listener,
 		uint32_t conference_id,
 		uint32_t pass_thru_party_id,
-		uint32_t packets,
+		uint32_t ms_per_packet,
 		uint32_t payload_capacity,
 		uint32_t echo_cancel_type,
 		uint32_t g723_bitrate,
@@ -739,7 +739,7 @@ switch_status_t send_open_receive_channel(listener_t *listener,
 	message->length = 4 + sizeof(message->data.open_receive_channel);
 	message->data.open_receive_channel.conference_id = conference_id;
 	message->data.open_receive_channel.pass_thru_party_id = pass_thru_party_id;
-	message->data.open_receive_channel.packets = packets;
+	message->data.open_receive_channel.ms_per_packet = ms_per_packet;
 	message->data.open_receive_channel.payload_capacity = payload_capacity;
 	message->data.open_receive_channel.echo_cancel_type = echo_cancel_type;
 	message->data.open_receive_channel.g723_bitrate = g723_bitrate;
@@ -975,9 +975,9 @@ switch_status_t skinny_perform_send_reply(listener_t *listener, const char *file
 	if (listener_is_ready(listener)) {
 		if (listener->profile->debug >= 10 || reply->type != KEEP_ALIVE_ACK_MESSAGE) {
 			switch_log_printf(SWITCH_CHANNEL_ID_LOG, file, func, line, NULL, SWITCH_LOG_DEBUG,
-					"Sending %s (type=%x,length=%d) to %s:%d.\n",
+					"Sending %s (type=%x,length=%d) to %s:%d at %s:%d.\n",
 					skinny_message_type2str(reply->type), reply->type, reply->length,
-					listener->device_name, listener->device_instance);
+					listener->device_name, listener->device_instance, listener->remote_ip, listener->remote_port);
 		}
 		return switch_socket_send(listener->sock, ptr, &len);
 	} else {

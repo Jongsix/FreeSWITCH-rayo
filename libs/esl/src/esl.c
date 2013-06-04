@@ -1246,7 +1246,7 @@ ESL_DECLARE(esl_status_t) esl_recv_event(esl_handle_t *handle, int check_q, esl_
 			revent->event_id = ESL_EVENT_SOCKET_DATA;
 			esl_event_add_header_string(revent, ESL_STACK_BOTTOM, "Event-Name", "SOCKET_DATA");
 			
-			hname = p = data;
+			p = data;
 
 			while(p) {
 				hname = p;
@@ -1287,7 +1287,8 @@ ESL_DECLARE(esl_status_t) esl_recv_event(esl_handle_t *handle, int check_q, esl_
 			}
 			continue;
 		} else if (rrval < 0) {
-			strerror_r(handle->errnum, handle->err, sizeof(handle->err));
+			if (!(strerror_r(handle->errnum, handle->err, sizeof(handle->err))))
+				*(handle->err)=0;
 			goto fail;
 		}
 
@@ -1319,7 +1320,8 @@ ESL_DECLARE(esl_status_t) esl_recv_event(esl_handle_t *handle, int check_q, esl_
 				*((char *)handle->socket_buf + ESL_CLAMP(0, sizeof(handle->socket_buf) - 1, r)) = '\0';
 
 				if (r < 0) {
-					strerror_r(handle->errnum, handle->err, sizeof(handle->err));
+					if (!(strerror_r(handle->errnum, handle->err, sizeof(handle->err))))
+						*(handle->err)=0;
 					goto fail;
 				} else if (r == 0) {
 					if (++zc >= 100) {
@@ -1464,14 +1466,16 @@ ESL_DECLARE(esl_status_t) esl_send(esl_handle_t *handle, const char *cmd)
 	
 	if (send(handle->sock, cmd, strlen(cmd), 0) != (int)strlen(cmd)) {
 		handle->connected = 0;
-		strerror_r(handle->errnum, handle->err, sizeof(handle->err));
+		if (!(strerror_r(handle->errnum, handle->err, sizeof(handle->err))))
+			*(handle->err)=0;
 		return ESL_FAIL;
 	}
 	
 	if (!(*e == '\n' && *(e-1) == '\n')) {
 		if (send(handle->sock, "\n\n", 2, 0) != 2) {
 			handle->connected = 0;
-			strerror_r(handle->errnum, handle->err, sizeof(handle->err));
+			if (!(strerror_r(handle->errnum, handle->err, sizeof(handle->err))))
+				*(handle->err)=0;
 			return ESL_FAIL;
 		}
 	}
@@ -1575,3 +1579,13 @@ ESL_DECLARE(unsigned int) esl_separate_string_string(char *buf, const char *deli
 	return count;
 }
 
+/* For Emacs:
+ * Local Variables:
+ * mode:c
+ * indent-tabs-mode:t
+ * tab-width:4
+ * c-basic-offset:4
+ * End:
+ * For VIM:
+ * vim:set softtabstop=4 shiftwidth=4 tabstop=4:
+ */

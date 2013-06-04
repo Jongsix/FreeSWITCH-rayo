@@ -909,11 +909,17 @@ SWITCH_DECLARE(switch_bool_t) switch_simple_email(const char *to,
 	if (zstr(from)) {
 		from = "freeswitch";
 	}
+
+	{
+		char *to_arg = switch_util_quote_shell_arg(to);
+		char *from_arg = switch_util_quote_shell_arg(from);
 #ifdef WIN32
-	switch_snprintf(buf, B64BUFFLEN, "\"\"%s\" -f %s %s %s < \"%s\"\"", runtime.mailer_app, from, runtime.mailer_app_args, to, filename);
+		switch_snprintf(buf, B64BUFFLEN, "\"\"%s\" -f %s %s %s < \"%s\"\"", runtime.mailer_app, from_arg, runtime.mailer_app_args, to_arg, filename);
 #else
-	switch_snprintf(buf, B64BUFFLEN, "/bin/cat %s | %s -f %s %s %s", filename, runtime.mailer_app, from, runtime.mailer_app_args, to);
+		switch_snprintf(buf, B64BUFFLEN, "/bin/cat %s | %s -f %s %s %s", filename, runtime.mailer_app, from_arg, runtime.mailer_app_args, to_arg);
 #endif
+		switch_safe_free(to_arg); switch_safe_free(from_arg);
+	}
 	if (switch_system(buf, SWITCH_TRUE) < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to execute command: %s\n", buf);
 		err = "execute error";
@@ -1490,7 +1496,9 @@ SWITCH_DECLARE(switch_status_t) switch_find_local_ip(char *buf, int len, int *ma
 			remote.sin_port = htons(4242);
 
 			memset(&iface_out, 0, sizeof(iface_out));
-			tmp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+			if ( (tmp_socket = socket(AF_INET, SOCK_DGRAM, 0)) == -1 ) {
+				goto doh;
+			}
 
 			if (setsockopt(tmp_socket, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) == -1) {
 				goto doh;
@@ -1528,7 +1536,9 @@ SWITCH_DECLARE(switch_status_t) switch_find_local_ip(char *buf, int len, int *ma
 			remote.sin6_port = htons(4242);
 
 			memset(&iface_out, 0, sizeof(iface_out));
-			tmp_socket = socket(AF_INET6, SOCK_DGRAM, 0);
+			if ( (tmp_socket = socket(AF_INET6, SOCK_DGRAM, 0)) == -1 ) {
+				goto doh;
+			}
 
 			if (connect(tmp_socket, (struct sockaddr *) &remote, sizeof(remote)) == -1) {
 				goto doh;
@@ -2073,7 +2083,7 @@ SWITCH_DECLARE(char *) switch_escape_string(const char *in, char *out, switch_si
 
 SWITCH_DECLARE(char *) switch_escape_string_pool(const char *in, switch_memory_pool_t *pool)
 {
-	int len = strlen(in) * 2;
+	int len = strlen(in) * 2 + 1;
 	char *buf = switch_core_alloc(pool, len);
 	return switch_escape_string(in, buf, len);
 }
@@ -2343,13 +2353,38 @@ SWITCH_DECLARE(char *) switch_string_replace(const char *string, const char *sea
 
 SWITCH_DECLARE(char *) switch_util_quote_shell_arg(const char *string)
 {
+	return switch_util_quote_shell_arg_pool(string, NULL);
+}
+
+SWITCH_DECLARE(char *) switch_util_quote_shell_arg_pool(const char *string, switch_memory_pool_t *pool)
+{
 	size_t string_len = strlen(string);
 	size_t i;
 	size_t n = 0;
-	size_t dest_len = string_len + 1;	/* +1 for the opening quote  */
-	char *dest, *tmp;
+	size_t dest_len = 0;
+	char *dest;
 
-	dest = (char *) malloc(sizeof(char) * dest_len);
+	/* first pass through, figure out how large to make the allocation */
+	dest_len = strlen(string) + 1; /* string + null */
+	dest_len += 1; /* opening quote */
+	for (i = 0; i < string_len; i++) {
+		switch (string[i]) {
+#ifndef WIN32
+		case '\'':
+			/* We replace ' by sq backslace sq sq, so need 3 additional bytes */
+			dest_len += 3;
+			break;
+#endif
+		}
+	}
+	dest_len += 1; /* closing quote */
+
+	/* if we're given a pool, allocate from it, otherwise use malloc */
+	if (pool) {
+		dest = switch_core_alloc(pool, sizeof(char) * dest_len);
+	} else {
+		dest = (char *) malloc(sizeof(char) * dest_len);
+	}
 	switch_assert(dest);
 
 #ifdef WIN32
@@ -2367,11 +2402,7 @@ SWITCH_DECLARE(char *) switch_util_quote_shell_arg(const char *string)
 			break;
 #else
 		case '\'':
-			/* We replace ' by '\'' */
-			dest_len += 3;
-			tmp = (char *) realloc(dest, sizeof(char) * (dest_len));
-			switch_assert(tmp);
-			dest = tmp;
+			/* We replace ' by sq backslash sq sq */
 			dest[n++] = '\'';
 			dest[n++] = '\\';
 			dest[n++] = '\'';
@@ -2383,10 +2414,6 @@ SWITCH_DECLARE(char *) switch_util_quote_shell_arg(const char *string)
 		}
 	}
 
-	dest_len += 2;				/* +2 for the closing quote and the null character */
-	tmp = (char *) realloc(dest, sizeof(char) * (dest_len));
-	switch_assert(tmp);
-	dest = tmp;
 #ifdef WIN32
 	dest[n++] = '"';
 #else
