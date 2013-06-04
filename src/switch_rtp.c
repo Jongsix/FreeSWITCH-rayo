@@ -932,9 +932,11 @@ static void handle_ice(switch_rtp_t *rtp_session, switch_rtp_ice_t *ice, void *d
 							if (channel) {
 								switch_channel_set_variable(channel, "remote_media_ip_reported", switch_channel_get_variable(channel, "remote_media_ip"));
 								switch_channel_set_variable(channel, "remote_media_ip", host);
+								switch_channel_set_variable(channel, "rtp_auto_adjust_ip", host);
 								switch_snprintf(adj_port, sizeof(adj_port), "%u", port);
 								switch_channel_set_variable(channel, "remote_media_port_reported", switch_channel_get_variable(channel, "remote_media_port"));
 								switch_channel_set_variable(channel, "remote_media_port", adj_port);
+								switch_channel_set_variable(channel, "rtp_auto_adjust_port", adj_port);
 								switch_channel_set_variable(channel, "rtp_auto_candidate_adjust", "true");
 							}
 							rtp_session->auto_adj_used = 1;
@@ -961,7 +963,7 @@ static void handle_ice(switch_rtp_t *rtp_session, switch_rtp_ice_t *ice, void *d
 	}
 
 	if (ok || !ice->rready) {
-		if ((packet->header.type == SWITCH_STUN_BINDING_RESPONSE)) {
+		if (packet->header.type == SWITCH_STUN_BINDING_RESPONSE) {
 
 			if (!ice->rready) {
 				if (rtp_session->flags[SWITCH_RTP_FLAG_RTCP_MUX]) {
@@ -973,7 +975,7 @@ static void handle_ice(switch_rtp_t *rtp_session, switch_rtp_ice_t *ice, void *d
 
 				switch_rtp_set_flag(rtp_session, SWITCH_RTP_FLAG_FLUSH);
 			}
-		} else if ((packet->header.type == SWITCH_STUN_BINDING_REQUEST)) {
+		} else if (packet->header.type == SWITCH_STUN_BINDING_REQUEST) {
 			uint8_t stunbuf[512];
 			switch_stun_packet_t *rpacket;
 			const char *remote_ip;
@@ -2674,7 +2676,7 @@ SWITCH_DECLARE(switch_status_t) switch_rtp_create(switch_rtp_t **new_rtp_session
 	}
 
 #ifdef ENABLE_ZRTP
-	if (zrtp_on && !rtp_session->flags[SWITCH_RTP_FLAG_PROXY_MEDIA]) {
+	if (zrtp_on && session && channel && !rtp_session->flags[SWITCH_RTP_FLAG_PROXY_MEDIA]) {
 		switch_rtp_t *master_rtp_session = NULL;
 
 		int initiator = 0;

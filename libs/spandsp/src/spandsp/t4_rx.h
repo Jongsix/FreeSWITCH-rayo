@@ -139,14 +139,13 @@ typedef enum
 typedef enum
 {
     T4_X_RESOLUTION_100 = 3937,
-    T4_X_RESOLUTION_R4 = 4016,
+    T4_X_RESOLUTION_R4 = 4020,
     T4_X_RESOLUTION_200 = 7874,
-    T4_X_RESOLUTION_R8 = 8031,
+    T4_X_RESOLUTION_R8 = 8040,
     T4_X_RESOLUTION_300 = 11811,
     T4_X_RESOLUTION_400 = 15748,
-    T4_X_RESOLUTION_R16 = 16063,
+    T4_X_RESOLUTION_R16 = 16080,
     T4_X_RESOLUTION_600 = 23622,
-    T4_X_RESOLUTION_800 = 31496,
     T4_X_RESOLUTION_1200 = 47244
 } t4_image_x_resolution_t;
 
@@ -445,7 +444,7 @@ typedef struct
     /*! \brief The number of vertical pixels in the exchanged page. */
     int length;
     /*! \brief The type of compression used between the FAX machines */
-    int encoding;
+    int compression;
     /*! \brief The size of the image on the line, in bytes */
     int line_image_size;
 } t4_stats_t;
@@ -536,11 +535,11 @@ SPAN_DECLARE(void) t4_rx_set_model(t4_rx_state_t *s, const char *model);
     \param t A pointer to a statistics structure. */
 SPAN_DECLARE(void) t4_rx_get_transfer_statistics(t4_rx_state_t *s, t4_stats_t *t);
 
-/*! Get the short text name of an encoding format.
+/*! Get the short text name of a compression format.
     \brief Get the short text name of an encoding format.
-    \param encoding The encoding type.
+    \param compression The compression type.
     \return A pointer to the string. */
-SPAN_DECLARE(const char *) t4_encoding_to_str(int encoding);
+SPAN_DECLARE(const char *) t4_compression_to_str(int compression);
 
 /*! Get the short text name of an image format.
     \brief Get the short text name of an image format.

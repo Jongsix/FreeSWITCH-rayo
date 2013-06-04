@@ -1040,16 +1040,29 @@ SWITCH_DECLARE(switch_status_t) switch_channel_set_profile_var(switch_channel_t 
 		channel->caller_profile->chan_name = v;
 	} else {
 		profile_node_t *pn, *n = switch_core_alloc(channel->caller_profile->pool, sizeof(*n));
-		
+		int var_found;
+
 		n->var = switch_core_strdup(channel->caller_profile->pool, name);
 		n->val = v;
 
 		if (!channel->caller_profile->soft) {
 			channel->caller_profile->soft = n;
 		} else {
-			for(pn = channel->caller_profile->soft; pn && pn->next; pn = pn->next);
+			var_found = 0;
 			
-			if (pn) {
+			for(pn = channel->caller_profile->soft; pn ; pn = pn->next) {
+				if (!strcasecmp(pn->var,n->var)) {
+					pn->val = n->val;
+					var_found = 1;
+					break;
+				}
+
+				if(!pn->next) {
+					break;
+				}
+			}
+			
+			if (pn && !pn->next && !var_found) {
 				pn->next = n;
 			}
 		}
@@ -2041,50 +2054,7 @@ SWITCH_DECLARE(switch_channel_state_t) switch_channel_perform_set_running_state(
 		}
 
 		if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_STATE) == SWITCH_STATUS_SUCCESS) {
-			if (state == CS_ROUTING) {
-				switch_channel_event_set_data(channel, event);
-			} else {
-				const char *v;
-				
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-State", switch_channel_state_name(state));
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Call-State", switch_channel_callstate2str(channel->callstate));
-				switch_event_add_header(event, SWITCH_STACK_BOTTOM, "Channel-State-Number", "%d", state);
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Name", channel->name);
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Unique-ID", switch_core_session_get_uuid(channel->session));
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Call-Direction",
-											   channel->direction == SWITCH_CALL_DIRECTION_OUTBOUND ? "outbound" : "inbound");
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Presence-Call-Direction",
-											   channel->direction == SWITCH_CALL_DIRECTION_OUTBOUND ? "outbound" : "inbound");
-
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-HIT-Dialplan", 
-											   switch_channel_direction(channel) == SWITCH_CALL_DIRECTION_INBOUND ||
-											   switch_channel_test_flag(channel, CF_DIALPLAN) ? "true" : "false");
-				
-				if (switch_channel_down_nosig(channel)) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answer-State", "hangup");
-				} else if (switch_channel_test_flag(channel, CF_ANSWERED)) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answer-State", "answered");
-				} else if (switch_channel_test_flag(channel, CF_EARLY_MEDIA)) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answer-State", "early");
-				} else {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Answer-State", "ringing");
-				}
-
-
-				if ((v = switch_channel_get_variable(channel, "presence_id"))) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Presence-ID", v);
-				}
-				
-				if ((v = switch_channel_get_variable(channel, "presence_data"))) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Presence-Data", v);
-				}
-				
-				if ((v = switch_channel_get_variable(channel, "presence_data_cols"))) {
-					switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Presence-Data-Cols", v);
-					switch_event_add_presence_data_cols(channel, event, "PD-");
-				}
-				
-			}
+			switch_channel_event_set_data(channel, event);
 			switch_event_fire(&event);
 		}
 	}
@@ -4400,6 +4370,148 @@ SWITCH_DECLARE(const char *) switch_channel_get_partner_uuid(switch_channel_t *c
 
 	return uuid;
 }
+
+SWITCH_DECLARE(void) switch_channel_handle_cause(switch_channel_t *channel, switch_call_cause_t cause)
+{
+	switch_core_session_t *session = channel->session;
+	const char *transfer_on_fail = NULL;
+	char *tof_data = NULL;
+	char *tof_array[4] = { 0 };
+	//int tof_arrayc = 0;
+
+	if (!switch_channel_up_nosig(channel)) {
+		return;
+	}
+
+	transfer_on_fail = switch_channel_get_variable(channel, "transfer_on_fail");
+	tof_data = switch_core_session_strdup(session, transfer_on_fail);
+	switch_split(tof_data, ' ', tof_array);
+   	transfer_on_fail = tof_array[0];
+
+	/* 
+	   if the variable continue_on_fail is set it can be:
+	   'true' to continue on all failures.
+	   'false' to not continue.
+	   A list of codes either names or numbers eg "user_busy,normal_temporary_failure,603"
+	   failure_causes acts as the opposite version  
+	   EXCEPTION... ATTENDED_TRANSFER never is a reason to continue.......
+	*/
+	if (cause != SWITCH_CAUSE_ATTENDED_TRANSFER) {
+		const char *continue_on_fail = NULL, *failure_causes = NULL;
+
+		continue_on_fail = switch_channel_get_variable(channel, "continue_on_fail");
+		failure_causes = switch_channel_get_variable(channel, "failure_causes");
+
+		if (continue_on_fail || failure_causes) {
+			const char *cause_str;
+			char cause_num[35] = "";
+
+			cause_str = switch_channel_cause2str(cause);
+			switch_snprintf(cause_num, sizeof(cause_num), "%u", cause);
+
+			if (failure_causes) {
+				char *lbuf = switch_core_session_strdup(session, failure_causes);
+				char *argv[256] = { 0 };
+				int argc = switch_separate_string(lbuf, ',', argv, (sizeof(argv) / sizeof(argv[0])));
+				int i, x = 0;
+
+				for (i = 0; i < argc; i++) {
+					if (!strcasecmp(argv[i], cause_str) || !strcasecmp(argv[i], cause_num)) {
+						x++;
+						break;
+					}
+				}
+				if (!x) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+									  "Failure causes [%s]:  Cause: %s\n", failure_causes, cause_str);
+					return;
+				}
+			}
+
+			if (continue_on_fail) {
+				if (switch_true(continue_on_fail)) {
+					return;
+				} else {
+					char *lbuf = switch_core_session_strdup(session, continue_on_fail);
+					char *argv[256] = { 0 };
+					int argc = switch_separate_string(lbuf, ',', argv, (sizeof(argv) / sizeof(argv[0])));
+					int i;
+
+					for (i = 0; i < argc; i++) {
+						if (!strcasecmp(argv[i], cause_str) || !strcasecmp(argv[i], cause_num)) {
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+											  "Continue on fail [%s]:  Cause: %s\n", continue_on_fail, cause_str);
+							return;
+						}
+					}
+				}
+			}
+		} else {
+			/* no answer is *always* a reason to continue */
+			if (cause == SWITCH_CAUSE_NO_ANSWER || cause == SWITCH_CAUSE_NO_USER_RESPONSE || cause == SWITCH_CAUSE_ORIGINATOR_CANCEL) {
+				return;
+			}
+		}
+			
+		if (transfer_on_fail || failure_causes) {
+			const char *cause_str;
+			char cause_num[35] = "";
+
+			cause_str = switch_channel_cause2str(cause);
+			switch_snprintf(cause_num, sizeof(cause_num), "%u", cause);
+
+			if ((tof_array[1] == NULL ) || (!strcasecmp(tof_array[1], "auto_cause"))){
+				tof_array[1] = (char *) cause_str;
+			}
+
+			if (failure_causes) {
+				char *lbuf = switch_core_session_strdup(session, failure_causes);
+				char *argv[256] = { 0 };
+				int argc = switch_separate_string(lbuf, ',', argv, (sizeof(argv) / sizeof(argv[0])));
+				int i, x = 0;
+
+				for (i = 0; i < argc; i++) {
+					if (!strcasecmp(argv[i], cause_str) || !strcasecmp(argv[i], cause_num)) {
+						x++;
+						break;
+					}
+				}
+				if (!x) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+									  "Failure causes [%s]:  Cause: %s\n", failure_causes, cause_str);
+										  
+					switch_ivr_session_transfer(session, tof_array[1], tof_array[2], tof_array[3]);
+				}
+			}
+
+			if (transfer_on_fail) {
+				if (switch_true(transfer_on_fail)) {
+					return;
+				} else {
+					char *lbuf = switch_core_session_strdup(session, transfer_on_fail);
+					char *argv[256] = { 0 };
+					int argc = switch_separate_string(lbuf, ',', argv, (sizeof(argv) / sizeof(argv[0])));
+					int i;
+
+					for (i = 0; i < argc; i++) {
+						if (!strcasecmp(argv[i], cause_str) || !strcasecmp(argv[i], cause_num)) {
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+											  "Transfer on fail [%s]:  Cause: %s\n", transfer_on_fail, cause_str);
+							switch_ivr_session_transfer(session, tof_array[1], tof_array[2], tof_array[3]);
+						}
+					}
+				}
+			}
+		} 
+	}
+
+
+	if (!switch_channel_test_flag(channel, CF_TRANSFER) && !switch_channel_test_flag(channel, CF_CONFIRM_BLIND_TRANSFER) && 
+		switch_channel_get_state(channel) != CS_ROUTING) {
+		switch_channel_hangup(channel, cause);
+	}
+}
+
 
 /* For Emacs:
  * Local Variables:

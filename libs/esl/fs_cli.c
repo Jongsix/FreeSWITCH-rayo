@@ -1406,8 +1406,6 @@ int main(int argc, char *argv[])
 				print_banner(stdout, is_color);
 				usage(argv[0]);
 				return 0;
-			default:
-				opt = 0;
 		}
 	}
 	if (argv_error) {
@@ -1640,6 +1638,7 @@ int main(int argc, char *argv[])
 	el_end(el);
 #endif
 	esl_disconnect(&handle);
+	global_handle = NULL;
 	thread_running = 0;
 	return 0;
 }

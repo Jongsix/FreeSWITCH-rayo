@@ -1589,6 +1589,7 @@ FT_DECLARE(ftdm_status_t) ftdm_usrmsg_set_raw_data(ftdm_usrmsg_t *usrmsg, void *
 
 /*! \brief Get iterator current value (depends on the iterator type)
  *  \note Channel iterators return a pointer to ftdm_channel_t
+ *        Span iterators return a pointer to ftdm_span_t
  *        Variable iterators return a pointer to the variable name (not the variable value)
  */
 FT_DECLARE(void *) ftdm_iterator_current(ftdm_iterator_t *iter);
@@ -1710,6 +1711,16 @@ FT_DECLARE(ftdm_status_t) ftdm_span_stop(ftdm_span_t *span);
  */
 FT_DECLARE(ftdm_status_t) ftdm_global_add_io_interface(ftdm_io_interface_t *io_interface);
 
+/**
+ * Get I/O interface by name
+ *
+ * \param iotype    Name of interface
+ * \param autoload  Try to load missing plugins
+ * \retval I/O interface handle on success
+ * \retval NULL on failure
+ */
+FT_DECLARE(ftdm_io_interface_t *) ftdm_global_get_io_interface(const char *iotype, ftdm_bool_t autoload);
+
 /*! \brief Find a span by name */
 FT_DECLARE(ftdm_status_t) ftdm_span_find_by_name(const char *name, ftdm_span_t **span);
 
@@ -1724,6 +1735,11 @@ FT_DECLARE(const char *) ftdm_span_get_name(const ftdm_span_t *span);
  *  \param iter Optional iterator. You can reuse an old iterator (not previously freed) to avoid the extra allocation of a new iterator.
  */
 FT_DECLARE(ftdm_iterator_t *) ftdm_span_get_chan_iterator(const ftdm_span_t *span, ftdm_iterator_t *iter);
+
+/*! \brief Get iterator for spans
+ *  \param iter Optional iterator. You can reuse an old iterator (not previously freed) to avoid the extra allocation of a new iterator.
+ */
+FT_DECLARE(ftdm_iterator_t *) ftdm_get_span_iterator(ftdm_iterator_t *iter);
 
 /*! 
  * \brief Execute a text command. The text command output will be returned and must be free'd 
