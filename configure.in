@@ -86,6 +86,11 @@ AC_ARG_WITH([recordingsdir],
 AC_SUBST(recordingsdir)
 AC_DEFINE_UNQUOTED([SWITCH_RECORDINGS_DIR],"${recordingsdir}",[where to put recording files])
 
+AC_ARG_WITH([storagedir],
+	[AS_HELP_STRING([--with-storagedir=DIR], [Put storage files into this location (default: $prefix/storage)])], [storagedir="$withval"], [storagedir="$prefix/storage"])
+AC_SUBST(storagedir)
+AC_DEFINE_UNQUOTED([SWITCH_STORAGE_DIR],"${storagedir}",[where to put storage files])
+
 if test "$sysconfdir" = "\${prefix}/etc" ; then
     confdir="$prefix/conf"
 else
@@ -948,7 +953,9 @@ if test x$HAVE_OPENSSL = x1; then
 	openssl_CFLAGS="$openssl_CFLAGS -DHAVE_OPENSSL";
 	APR_ADDTO(SWITCH_AM_CFLAGS, -DHAVE_OPENSSL)
 	AC_CHECK_LIB(ssl, SSL_CTX_set_tlsext_use_srtp, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS_SRTP, 1, HAVE_OPENSSL_DTLS_SRTP))
-	AC_CHECK_LIB(ssl, DTLSv1_method, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS, 1, HAVE_OPENSSL_DTLS))
+	AC_CHECK_LIB(ssl, DTLSv1_method, AC_DEFINE_UNQUOTED(HAVE_OPENSSL_DTLS, 1, HAVE_OPENSSL_DTLS), AC_MSG_WARN([OpenSSL version < 1.0.1e you might want to upgrade]))
+else
+	AC_MSG_ERROR([OpenSSL and associaed developement headers required])
 fi
 
 AX_CHECK_JAVA

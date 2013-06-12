@@ -38,6 +38,7 @@ applications/mod_sms
 applications/mod_spandsp
 #applications/mod_spy
 #applications/mod_stress
+#applications/mod_translate
 applications/mod_valet_parking
 #applications/mod_vmd
 applications/mod_voicemail
@@ -51,6 +52,7 @@ applications/mod_voicemail
 codecs/mod_amr
 #codecs/mod_amrwb
 codecs/mod_bv
+codecs/mod_b64
 #codecs/mod_celt
 #codecs/mod_codec2
 #codecs/mod_com_g729
@@ -79,7 +81,7 @@ endpoints/mod_loopback
 #endpoints/mod_opal
 #endpoints/mod_portaudio
 #endpoints/mod_rtmp
-endpoints/mod_skinny
+#endpoints/mod_skinny
 #endpoints/mod_skypopen
 endpoints/mod_sofia
 event_handlers/mod_cdr_csv
@@ -120,6 +122,7 @@ say/mod_say_en
 #say/mod_say_hu
 #say/mod_say_it
 #say/mod_say_nl
+#say/mod_say_pl
 #say/mod_say_pt
 #say/mod_say_ru
 #say/mod_say_th

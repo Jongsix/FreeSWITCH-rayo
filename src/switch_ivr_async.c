@@ -1163,7 +1163,7 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			
 			if (rh->rready && rh->wready) {
 				switch_time_t now = switch_micro_time_now();
-				long diff;
+				switch_time_t diff;
 				nframe = switch_core_media_bug_get_native_read_frame(bug);
 				len = nframe->datalen;
 				
@@ -1193,7 +1193,7 @@ static switch_bool_t record_callback(switch_media_bug_t *bug, void *user_data, s
 			
 			if (rh->rready && rh->wready) {
 				switch_time_t now = switch_micro_time_now();
-				long diff;
+				switch_time_t diff;
 
 				nframe = switch_core_media_bug_get_native_write_frame(bug);
 				len = nframe->datalen;

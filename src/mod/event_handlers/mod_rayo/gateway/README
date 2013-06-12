@@ -1,4 +1,6 @@
-# Compile on CentOS 6.4...
+# Still a work in progress...
+
+# Compile on CentOS 6.4
 erlc -I /usr/lib64/ejabberd/include mod_rayo_gateway.erl
 
 # Install in ejabberd
