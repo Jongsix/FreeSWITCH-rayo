@@ -144,8 +144,6 @@ typedef struct switch_core_media_params_s {
 
 	char *sdp_username;
 
-	switch_mutex_t *mutex;
-
 	switch_payload_t te;
 	switch_payload_t recv_te;
 
@@ -255,6 +253,7 @@ SWITCH_DECLARE(void) switch_core_session_set_ice(switch_core_session_t *session)
 SWITCH_DECLARE(void) switch_core_media_init(void);
 SWITCH_DECLARE(void) switch_core_media_deinit(void);
 SWITCH_DECLARE(void) switch_core_media_set_stats(switch_core_session_t *session);
+SWITCH_DECLARE(void) switch_core_session_wake_video_thread(switch_core_session_t *session);
 
 SWITCH_END_EXTERN_C
 #endif

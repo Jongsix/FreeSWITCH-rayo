@@ -1922,6 +1922,11 @@ SWITCH_DECLARE(void) switch_channel_clear_flag(switch_channel_t *channel, switch
 	if (flag == CF_RECOVERED) {
 		switch_channel_set_variable(channel, "recovered", NULL);
 	}
+
+	if (flag == CF_VIDEO_PASSIVE) {
+		switch_core_session_wake_video_thread(channel->session);
+	}
+
 }
 
 
@@ -4766,7 +4771,7 @@ static void switch_channel_check_device_state(switch_channel_t *channel, switch_
 		}
 	}
 
-	if (drec->state == SDS_DOWN && drec->last_state == SDS_DOWN) {
+	if ((drec->state == SDS_DOWN && drec->last_state == SDS_DOWN) || (drec->state == SDS_HANGUP && drec->last_state == SDS_HANGUP)) {
 		switch_mutex_unlock(drec->mutex);
 		switch_mutex_unlock(globals.device_mutex);
 		return;
