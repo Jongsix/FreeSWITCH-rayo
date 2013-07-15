@@ -61,6 +61,10 @@
     "[%s:%d @ %s:%d] " _fmt, skinny_undef_str(listener->device_name), listener->device_instance, skinny_undef_str(listener->remote_ip), \
     listener->remote_port)
 
+#define skinny_log_s(session, level, _fmt, ...) switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), level, \
+    _fmt, __VA_ARGS__)
+
+
 /*****************************************************************************/
 /* MODULE TYPES */
 /*****************************************************************************/
@@ -271,6 +275,7 @@ switch_bool_t skinny_execute_sql_callback(skinny_profile_t *profile,
 uint8_t listener_is_ready(listener_t *listener);
 switch_status_t kill_listener(listener_t *listener, void *pvt);
 switch_status_t keepalive_listener(listener_t *listener, void *pvt);
+void skinny_clean_listener_from_db(listener_t *listener);
 
 /*****************************************************************************/
 /* CHANNEL FUNCTIONS */
