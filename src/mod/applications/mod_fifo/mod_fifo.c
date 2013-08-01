@@ -934,7 +934,7 @@ struct call_helper {
 	switch_memory_pool_t *pool;
 };
 
-#define MAX_ROWS 25
+#define MAX_ROWS 250
 struct callback_helper {
 	int need;
 	switch_memory_pool_t *pool;
@@ -4069,6 +4069,8 @@ static switch_status_t load_config(int reload, int del_all)
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "ODBC IS NOT AVAILABLE!\n");
 				}
+			} else if (!strcasecmp(var, "dbname") && !zstr(val)) {
+				globals.dbname = switch_core_strdup(globals.pool, val);
 			} else if (!strcasecmp(var, "allow-transcoding") && !zstr(val)) {
 				globals.allow_transcoding = switch_true(val);
 			} else if (!strcasecmp(var, "db-pre-trans-execute") && !zstr(val)) {

@@ -490,6 +490,7 @@ int main(int argc, char *argv[])
     int noise_level;
     int code_to_look_up;
     int scan_line_time;
+    int allowed_bilevel_resolutions; 
     int colour_enabled;
     t38_stats_t t38_stats;
     t30_stats_t t30_stats;
@@ -529,12 +530,16 @@ int main(int argc, char *argv[])
     scan_line_time = 0;
     decode_file_name = NULL;
     code_to_look_up = -1;
+    allowed_bilevel_resolutions = 0;
     colour_enabled = FALSE;
     t38_transport = T38_TRANSPORT_UDPTL;
-    while ((opt = getopt(argc, argv, "c:Cd:D:efFgH:i:Ilm:M:n:p:s:S:tT:u:v:z:")) != -1)
+    while ((opt = getopt(argc, argv, "b:c:Cd:D:efFgH:i:Ilm:M:n:p:s:S:tT:u:v:z:")) != -1)
     {
         switch (opt)
         {
+        case 'b':
+            allowed_bilevel_resolutions = atoi(optarg);
+            break;
         case 'c':
             code_to_look_up = atoi(optarg);
             break;
@@ -850,64 +855,100 @@ int main(int argc, char *argv[])
                                     | T4_SUPPORT_LENGTH_US_LETTER
                                     | T4_SUPPORT_LENGTH_US_LEGAL
                                     | T4_SUPPORT_LENGTH_UNLIMITED);
-#if 1
-        t30_set_supported_bilevel_resolutions(t30_state[i],
-                                              T4_SUPPORT_RESOLUTION_R8_STANDARD
-                                            | T4_SUPPORT_RESOLUTION_R8_FINE
-                                            | T4_SUPPORT_RESOLUTION_R8_SUPERFINE
-                                            | T4_SUPPORT_RESOLUTION_R16_SUPERFINE
-                                            | T4_SUPPORT_RESOLUTION_200_100
-                                            | T4_SUPPORT_RESOLUTION_200_200
-                                            | T4_SUPPORT_RESOLUTION_200_400
-                                            | T4_SUPPORT_RESOLUTION_300_300
-                                            | T4_SUPPORT_RESOLUTION_300_600
-                                            | T4_SUPPORT_RESOLUTION_400_400
-                                            | T4_SUPPORT_RESOLUTION_400_800
-                                            | T4_SUPPORT_RESOLUTION_600_600
-                                            | T4_SUPPORT_RESOLUTION_600_1200
-                                            | T4_SUPPORT_RESOLUTION_1200_1200);
-#elif 0
-        t30_set_supported_bilevel_resolutions(t30_state[i],
-                                              T4_SUPPORT_RESOLUTION_R8_STANDARD
-                                            | T4_SUPPORT_RESOLUTION_R8_FINE
-                                            | T4_SUPPORT_RESOLUTION_R8_SUPERFINE
-                                            | T4_SUPPORT_RESOLUTION_R16_SUPERFINE);
-#else
-        t30_set_supported_bilevel_resolutions(t30_state[i],
-                                              T4_SUPPORT_RESOLUTION_200_100
-                                            | T4_SUPPORT_RESOLUTION_200_200
-                                            | T4_SUPPORT_RESOLUTION_200_400
-                                            | T4_SUPPORT_RESOLUTION_300_300
-                                            | T4_SUPPORT_RESOLUTION_300_600
-                                            | T4_SUPPORT_RESOLUTION_400_400
-                                            | T4_SUPPORT_RESOLUTION_400_800
-                                            | T4_SUPPORT_RESOLUTION_600_600
-                                            | T4_SUPPORT_RESOLUTION_600_1200
-                                            | T4_SUPPORT_RESOLUTION_1200_1200);
-#endif
+        switch (allowed_bilevel_resolutions)
+        {
+        case 0:
+            /* Allow anything */
+            t30_set_supported_bilevel_resolutions(t30_state[i],
+                                                  T4_RESOLUTION_R8_STANDARD
+                                                | T4_RESOLUTION_R8_FINE
+                                                | T4_RESOLUTION_R8_SUPERFINE
+                                                | T4_RESOLUTION_R16_SUPERFINE
+                                                | T4_RESOLUTION_200_100
+                                                | T4_RESOLUTION_200_200
+                                                | T4_RESOLUTION_200_400
+                                                | T4_RESOLUTION_300_300
+                                                | T4_RESOLUTION_300_600
+                                                | T4_RESOLUTION_400_400
+                                                | T4_RESOLUTION_400_800
+                                                | T4_RESOLUTION_600_600
+                                                | T4_RESOLUTION_600_1200
+                                                | T4_RESOLUTION_1200_1200);
+            break;
+        case 1:
+            /* Allow anything metric */
+            t30_set_supported_bilevel_resolutions(t30_state[i],
+                                                  T4_RESOLUTION_R8_STANDARD
+                                                | T4_RESOLUTION_R8_FINE
+                                                | T4_RESOLUTION_R8_SUPERFINE
+                                                | T4_RESOLUTION_R16_SUPERFINE);
+            break;
+        case 2:
+            /* Allow anything inch based */
+            t30_set_supported_bilevel_resolutions(t30_state[i],
+                                                  T4_RESOLUTION_200_100
+                                                | T4_RESOLUTION_200_200
+                                                | T4_RESOLUTION_200_400
+                                                | T4_RESOLUTION_300_300
+                                                | T4_RESOLUTION_300_600
+                                                | T4_RESOLUTION_400_400
+                                                | T4_RESOLUTION_400_800
+                                                | T4_RESOLUTION_600_600
+                                                | T4_RESOLUTION_600_1200
+                                                | T4_RESOLUTION_1200_1200);
+            break;
+        case 3:
+            /* Allow only restricted length resolution */
+            t30_set_supported_bilevel_resolutions(t30_state[i],
+                                                  T4_RESOLUTION_R8_STANDARD
+                                                | T4_RESOLUTION_R8_FINE
+                                                | T4_RESOLUTION_200_100
+                                                | T4_RESOLUTION_200_200);
+            break;
+        case 4:
+            /* Allow only more restricted length resolution */
+            t30_set_supported_bilevel_resolutions(t30_state[i],
+                                                  T4_RESOLUTION_R8_STANDARD
+                                                | T4_RESOLUTION_200_100);
+            break;
+        }
         if (colour_enabled)
         {
             t30_set_supported_colour_resolutions(t30_state[i],
-                                                 T4_SUPPORT_RESOLUTION_100_100
-                                               | T4_SUPPORT_RESOLUTION_200_200
-                                               | T4_SUPPORT_RESOLUTION_300_300
-                                               | T4_SUPPORT_RESOLUTION_400_400
-                                               | T4_SUPPORT_RESOLUTION_600_600
-                                               | T4_SUPPORT_RESOLUTION_1200_1200);
+                                                 T4_RESOLUTION_100_100
+                                               | T4_RESOLUTION_200_200
+                                               | T4_RESOLUTION_300_300
+                                               | T4_RESOLUTION_400_400
+                                               | T4_RESOLUTION_600_600
+                                               | T4_RESOLUTION_1200_1200);
         }
         else
         {
             t30_set_supported_colour_resolutions(t30_state[i], 0);
         }
-        t30_set_supported_output_compressions(t30_state[i], T4_SUPPORT_COMPRESSION_T4_2D);
+        t30_set_supported_output_compressions(t30_state[i], T4_COMPRESSION_T4_2D);
         t30_set_ecm_capability(t30_state[i], use_ecm);
         t30_set_supported_compressions(t30_state[i],
-                                       T4_SUPPORT_COMPRESSION_T4_1D
-                                     | T4_SUPPORT_COMPRESSION_T4_2D
-                                     | T4_SUPPORT_COMPRESSION_T6
-                                     //| T4_SUPPORT_COMPRESSION_t42_T81
-                                     | T4_SUPPORT_COMPRESSION_T85
-                                     | T4_SUPPORT_COMPRESSION_T85_L0);
+                                       T4_COMPRESSION_T4_1D
+                                     | T4_COMPRESSION_T4_2D
+                                     | T4_COMPRESSION_T6
+                                     | T4_COMPRESSION_T85
+                                     | T4_COMPRESSION_T85_L0
+#if 0
+                                     //| T4_COMPRESSION_T88
+                                     | T4_COMPRESSION_T43
+                                     | T4_COMPRESSION_T45
+                                     | T4_COMPRESSION_T42_T81
+                                     | T4_COMPRESSION_SYCC_T81
+                                     | T4_COMPRESSION_GRAYSCALE
+                                     | T4_COMPRESSION_COLOUR
+                                     | T4_COMPRESSION_12BIT
+                                     | T4_COMPRESSION_COLOUR_TO_GRAY
+                                     | T4_COMPRESSION_GRAY_TO_BILEVEL
+                                     | T4_COMPRESSION_COLOUR_TO_BILEVEL
+                                     | T4_COMPRESSION_RESCALING
+#endif
+                                     | 0);
         t30_set_minimum_scan_line_time(t30_state[i], scan_line_time);
 
         if (mode[i] == T38_GATEWAY_FAX)
