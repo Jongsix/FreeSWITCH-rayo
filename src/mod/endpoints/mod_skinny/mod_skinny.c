@@ -1326,11 +1326,63 @@ static int flush_listener_callback(void *pArg, int argc, char **argv, char **col
 	return 0;
 }
 
+void skinny_clean_device_from_db(listener_t *listener, char *device_name)
+{
+	if(!zstr(device_name)) {
+		skinny_profile_t *profile = listener->profile;
+		char *sql;
+
+		skinny_log_l(listener, SWITCH_LOG_DEBUG, 
+			"Clean device from DB with name '%s'\n",
+			device_name);
+
+		if ((sql = switch_mprintf(
+						"DELETE FROM skinny_devices "
+						"WHERE name='%s'",
+						device_name))) {
+			skinny_execute_sql(profile, sql, profile->sql_mutex);
+			switch_safe_free(sql);
+		}
+
+		if ((sql = switch_mprintf(
+						"DELETE FROM skinny_lines "
+						"WHERE device_name='%s'",
+						device_name))) {
+			skinny_execute_sql(profile, sql, profile->sql_mutex);
+			switch_safe_free(sql);
+		}
+
+		if ((sql = switch_mprintf(
+						"DELETE FROM skinny_buttons "
+						"WHERE device_name='%s'",
+						device_name))) {
+			skinny_execute_sql(profile, sql, profile->sql_mutex);
+			switch_safe_free(sql);
+		}
+
+		if ((sql = switch_mprintf(
+						"DELETE FROM skinny_active_lines "
+						"WHERE device_name='%s'",
+						device_name))) {
+			skinny_execute_sql(profile, sql, profile->sql_mutex);
+			switch_safe_free(sql);
+		}
+
+	} else {
+		skinny_log_l_msg(listener, SWITCH_LOG_DEBUG, 
+			"Clean device from DB, missing device name.\n");
+	}
+}
+
 void skinny_clean_listener_from_db(listener_t *listener)
 {
 	if(!zstr(listener->device_name)) {
 		skinny_profile_t *profile = listener->profile;
 		char *sql;
+
+		skinny_log_l(listener, SWITCH_LOG_DEBUG, 
+			"Clean listener from DB with name '%s' and instance '%d'\n",
+			listener->device_name, listener->device_instance);
 
 		if ((sql = switch_mprintf(
 						"DELETE FROM skinny_devices "
@@ -1364,6 +1416,9 @@ void skinny_clean_listener_from_db(listener_t *listener)
 			switch_safe_free(sql);
 		}
 
+	} else {
+		skinny_log_l_msg(listener, SWITCH_LOG_DEBUG, 
+			"Clean listener from DB, missing device name.\n");
 	}
 }
 
@@ -1795,14 +1850,8 @@ switch_status_t skinny_profile_set(skinny_profile_t *profile, const char *var, c
 		profile->keep_alive = atoi(val);
 	} else if (!strcasecmp(var, "date-format")) {
 		strncpy(profile->date_format, val, 6);
-	} else if (!strcasecmp(var, "odbc-dsn")) {
-		if (!zstr(val)) {
-			if (switch_odbc_available()) {
-				profile->odbc_dsn = switch_core_strdup(profile->pool, val);
-			} else {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "ODBC IS NOT AVAILABLE!\n");
-			}
-		}
+	} else if (!strcasecmp(var, "odbc-dsn") && !zstr(val)) {
+		profile->odbc_dsn = switch_core_strdup(profile->pool, val);
 	} else if (!strcasecmp(var, "debug")) {
 		profile->debug = atoi(val);
 	} else if (!strcasecmp(var, "auto-restart")) {
@@ -2195,6 +2244,10 @@ static void skinny_message_waiting_event_handler(switch_event_t *event)
 
 	if (!(account = switch_event_get_header(event, "mwi-message-account"))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing required Header 'MWI-Message-Account'\n");
+		return;
+	}
+
+	if (!strncmp("sip:", account, 4)) {
 		return;
 	}
 

@@ -185,7 +185,7 @@ Prefix:        	%{prefix}
 #BuildRequires: openldap2-devel
 BuildRequires: lzo-devel
 %else
-BuildRequires: openldap-devel
+#BuildRequires: openldap-devel
 %endif
 BuildRequires: autoconf
 BuildRequires: automake
@@ -230,7 +230,7 @@ Requires: ncurses
 Requires: openssl
 Requires: unixODBC
 Requires: libjpeg
-Requires: openldap
+#Requires: openldap
 Requires: db4
 Requires: gdbm
 Requires: zlib
@@ -818,13 +818,13 @@ Theora Video Codec support for FreeSWITCH open source telephony platform.
 #				FreeSWITCH Directory Modules
 ######################################################################################################################
 
-%package directory-ldap
-Summary:        LDAP Directory support for FreeSWITCH open source telephony platform
-Group:          System/Libraries
-Requires:       %{name} = %{version}-%{release}
+#%package directory-ldap
+#Summary:        LDAP Directory support for FreeSWITCH open source telephony platform
+#Group:          System/Libraries
+#Requires:       %{name} = %{version}-%{release}
 
-%description directory-ldap
-LDAP Directory support for FreeSWITCH open source telephony platform.
+#%description directory-ldap
+#LDAP Directory support for FreeSWITCH open source telephony platform.
 
 ######################################################################################################################
 #				FreeSWITCH Endpoint Modules
@@ -1335,7 +1335,6 @@ cp %{SOURCE9} libs/
 cp %{SOURCE10} libs/
 cp %{SOURCE11} libs/
 cp %{SOURCE12} libs/
-cp %{SOURCE13} libs/
 
 ######################################################################################################################
 #
@@ -2152,9 +2151,9 @@ fi
 #
 ######################################################################################################################
 
-%files directory-ldap
-%defattr(-,freeswitch,daemon)
-%{MODINSTDIR}/mod_theora.so*
+#%files directory-ldap
+#%defattr(-,freeswitch,daemon)
+#%{MODINSTDIR}/mod_theora.so*
 
 ######################################################################################################################
 #
