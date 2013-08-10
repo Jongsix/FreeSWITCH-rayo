@@ -182,13 +182,10 @@ FreeSWITCH rayo server implementation.
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/autoload_configs
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/dialplan
-%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/lang
-%{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/lang/en
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__install} -d -m 0750 %{buildroot}/%{SYSCONFDIR}/directory
 %{__cp} -prv ./conf/rayo/*.{xml,types,pem} %{buildroot}/%{SYSCONFDIR}/
 %{__cp} -prv ./conf/rayo/{autoload_configs,dialplan} %{buildroot}/%{SYSCONFDIR}/
-%{__cp} -prv ./conf/rayo/lang/en %{buildroot}/%{SYSCONFDIR}/lang/
 %{__cp} -prv ./conf/rayo/sip_profiles/external.xml %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__cp} -prv ./conf/rayo/sip_profiles/external %{buildroot}/%{SYSCONFDIR}/sip_profiles
 %{__cp} -prv ./conf/rayo/directory %{buildroot}/%{SYSCONFDIR}/
@@ -230,11 +227,6 @@ FreeSWITCH rayo server implementation.
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/dialplan/public.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/directory/default.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/directory/default/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/demo/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/dir/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/ivr/*.xml
-%config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/lang/en/vm/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/*.xml
 %config(noreplace) %attr(0640, freeswitch, daemon) %{SYSCONFDIR}/sip_profiles/external/*.xml
 
