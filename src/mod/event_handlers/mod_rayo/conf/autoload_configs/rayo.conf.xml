@@ -4,6 +4,7 @@
 	<settings>
 		<param name="max-idle-sec" value="300"/>
 		<param name="mixer-conf-profile" value="sla"/>
+		<param name="offer-uri" value="false"/>
 	</settings>
 
 	<!-- record component params -->
