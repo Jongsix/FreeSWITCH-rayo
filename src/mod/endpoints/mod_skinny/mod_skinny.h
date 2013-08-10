@@ -36,6 +36,12 @@
 #include <switch.h>
 
 /*****************************************************************************/
+/* UTILITY MACROS */
+/*****************************************************************************/
+#define empty_null(a) ((a)?(a):NULL)
+#define empty_null2(a,b) ((a)?(a):empty_null(b))
+
+/*****************************************************************************/
 /* LOGGING FUNCTIONS */
 /*****************************************************************************/
 #define skinny_undef_str(x) (zstr(x) ? "_undef_" : x)
@@ -117,6 +123,8 @@ struct skinny_profile {
 	/* extensions */
 	char *ext_voicemail;
 	char *ext_redial;
+	char *ext_meetme;
+	char *ext_pickup;
 	/* db */
 	char *dbname;
 	char *odbc_dsn;
@@ -182,6 +190,10 @@ struct listener {
 	uint32_t flags;
 	time_t expire_time;
 	struct listener *next;
+	char *ext_voicemail;
+	char *ext_redial;
+	char *ext_meetme;
+	char *ext_pickup;
 };
 
 typedef struct listener listener_t;
