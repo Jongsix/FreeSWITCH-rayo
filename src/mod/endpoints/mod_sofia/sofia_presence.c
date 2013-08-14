@@ -154,6 +154,11 @@ switch_status_t sofia_presence_chat_send(switch_event_t *message_event)
 		goto end;
 	}
 
+	if (!from) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Missing From: header.\n");
+		goto end;
+	}
+
 	if (!zstr(type)) {
 		ct = type;
 	}
@@ -3320,7 +3325,9 @@ static int broadsoft_sla_gather_state_callback(void *pArg, int argc, char **argv
 		}
 
 		if (!zstr(callee_name)) {
-			callee_name = switch_sanitize_number(switch_core_session_strdup(session, callee_name));
+			char *tmp = switch_core_session_strdup(session, callee_name);
+			switch_url_decode(tmp);
+			callee_name = switch_sanitize_number(tmp);
 		}
 
 
