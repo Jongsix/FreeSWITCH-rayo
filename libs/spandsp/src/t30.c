@@ -1804,8 +1804,8 @@ static int analyze_rx_dis_dtc(t30_state_t *s, const uint8_t *msg, int len)
     }
     else
     {
-        if (!test_ctrl_bit(s->far_dis_dtc_frame, T30_DIS_BIT_INCH_RESOLUTION_PREFERRED))
-            s->mutual_colour_resolutions &= ~T4_RESOLUTION_200_200;
+        //if (!test_ctrl_bit(s->far_dis_dtc_frame, T30_DIS_BIT_INCH_RESOLUTION_PREFERRED))
+        //    s->mutual_colour_resolutions &= ~T4_RESOLUTION_200_200;
     }
     if (!test_ctrl_bit(s->far_dis_dtc_frame, T30_DIS_BIT_INCH_RESOLUTION_PREFERRED))
         s->mutual_bilevel_resolutions &= ~T4_RESOLUTION_200_100;
@@ -2589,7 +2589,7 @@ static int start_sending_document(t30_state_t *s)
             t30_set_status(s, T30_ERR_NORESSUPPORT);
             break;
         default:
-            span_log(&s->logging, SPAN_LOG_WARNING, "Cannot negotiate an image format\n");
+            span_log(&s->logging, SPAN_LOG_WARNING, "Cannot negotiate an image mode\n");
             t30_set_status(s, T30_ERR_BADTIFF);
             break;
         }
