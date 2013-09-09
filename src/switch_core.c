@@ -28,7 +28,7 @@
  * Paul D. Tinsley <pdt at jackhammer.org>
  * Marcel Barbulescu <marcelbarbulescu@gmail.com>
  * Joseph Sullivan <jossulli@amazon.com>
- *
+ * Seven Du <dujinfang@gmail.com>
  *
  * switch_core.c -- Main Core Library
  *
@@ -1678,12 +1678,12 @@ SWITCH_DECLARE(switch_status_t) switch_core_init(switch_core_flag_t flags, switc
 	}
 
 	switch_log_init(runtime.memory_pool, runtime.colorize_console);
-
-	if (flags & SCF_MINIMAL) return SWITCH_STATUS_SUCCESS;
 			
 	runtime.tipping_point = 0;
 	runtime.timer_affinity = -1;
 	runtime.microseconds_per_tick = 20000;
+
+	if (flags & SCF_MINIMAL) return SWITCH_STATUS_SUCCESS;
 
 	switch_load_core_config("switch.conf");
 
@@ -1950,9 +1950,18 @@ static void switch_load_core_config(const char *file)
 					switch_core_min_idle_cpu(atof(val));
 				} else if (!strcasecmp(var, "tipping-point") && !zstr(val)) {
 					runtime.tipping_point = atoi(val);
+				} else if (!strcasecmp(var, "events-use-dispatch") && !zstr(val)) {
+					runtime.events_use_dispatch = 1;
 				} else if (!strcasecmp(var, "initial-event-threads") && !zstr(val)) {
-					int tmp = atoi(val);
+					int tmp;
 
+					if (!runtime.events_use_dispatch) {
+						runtime.events_use_dispatch = 1;
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+										  "Implicitly setting events-use-dispatch based on usage of this initial-event-threads parameter.\n");
+					}
+
+					tmp = atoi(val);
 
 					if (tmp > runtime.cpu_count / 2) {
 						tmp = runtime.cpu_count / 2;
