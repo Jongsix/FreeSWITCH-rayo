@@ -32,6 +32,7 @@
  * David Weekly <david@weekly.org>
  * Joao Mesquita <jmesquita@gmail.com>
  * Raymond Chandler <intralanman@freeswitch.org>
+ * Seven Du <dujinfang@gmail.com>
  *
  * mod_conference.c -- Software Conference Bridge
  *
@@ -1459,6 +1460,7 @@ static switch_status_t conference_add_member(conference_obj_t *conference, confe
 		if (switch_channel_test_flag(channel, CF_VIDEO)) {
 			if (switch_test_flag(conference, CFLAG_VIDEO_BRIDGE)) {
 				switch_channel_set_flag(channel, CF_VIDEO_ECHO);
+				switch_channel_clear_flag(channel, CF_VIDEO_PASSIVE);
 			} else {
 				switch_channel_clear_flag(channel, CF_VIDEO_ECHO);
 			}
@@ -1618,7 +1620,7 @@ static void conference_set_video_floor_holder(conference_obj_t *conference, conf
 	if (member) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG1, "Adding video floor %s\n", 
 						  switch_channel_get_name(member->channel));
-		switch_channel_set_flag(member->channel, CF_VIDEO_PASSIVE);
+		//switch_channel_set_flag(member->channel, CF_VIDEO_PASSIVE);
 		switch_core_session_refresh_video(member->session);
 		conference->video_floor_holder = member;
 	} else {
@@ -1627,7 +1629,7 @@ static void conference_set_video_floor_holder(conference_obj_t *conference, conf
 
 	if (old_member) {
 		old_id = old_member->id;
-		switch_channel_clear_flag(old_member->channel, CF_VIDEO_PASSIVE);
+		//switch_channel_clear_flag(old_member->channel, CF_VIDEO_PASSIVE);
 	}
 
 	switch_set_flag(conference, CFLAG_FLOOR_CHANGE);
@@ -1868,7 +1870,6 @@ static void *SWITCH_THREAD_FUNC conference_video_bridge_thread_run(switch_thread
 	switch_status_t status;
 	switch_frame_t *read_frame;
 	conference_obj_t *conference = vh->member_a->conference;
-	switch_core_session_message_t msg = { 0 };
 	
 	switch_thread_rwlock_rdlock(conference->rwlock);
 	switch_thread_rwlock_rdlock(vh->member_a->rwlock);
@@ -1881,16 +1882,12 @@ static void *SWITCH_THREAD_FUNC conference_video_bridge_thread_run(switch_thread
 	switch_core_session_read_lock(session_a);
 	switch_core_session_read_lock(session_b);
 	
-	/* Tell the channel to request a fresh vid frame */
-	msg.from = __FILE__;
-	msg.message_id = SWITCH_MESSAGE_INDICATE_VIDEO_REFRESH_REQ;
-
 	vh->up = 1;
 	while (vh->up == 1 && switch_test_flag(vh->member_a, MFLAG_RUNNING) && switch_test_flag(vh->member_b, MFLAG_RUNNING) &&
 		   switch_channel_ready(channel_a) && switch_channel_ready(channel_b))  {
 
 		if (switch_channel_test_flag(channel_a, CF_VIDEO_REFRESH_REQ)) {
-			switch_core_session_receive_message(session_b, &msg);
+			switch_core_session_refresh_video(session_b);
 			switch_channel_clear_flag(channel_a, CF_VIDEO_REFRESH_REQ);
 		}
 
@@ -7488,6 +7485,7 @@ SWITCH_STANDARD_APP(conference_function)
 	switch_core_session_video_reset(session);
 
 	switch_channel_set_flag(channel, CF_CONFERENCE);
+	switch_channel_set_flag(channel, CF_VIDEO_PASSIVE);
 
 	if (switch_channel_answer(channel) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Channel answer failed.\n");
@@ -8042,6 +8040,7 @@ SWITCH_STANDARD_APP(conference_function)
  end:
 
 	switch_channel_clear_flag(channel, CF_CONFERENCE);
+	switch_channel_clear_flag(channel, CF_VIDEO_PASSIVE);
 
 	switch_core_session_video_reset(session);
 }
