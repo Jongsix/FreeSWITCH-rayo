@@ -1375,7 +1375,7 @@ APPLICATION_MODULES_DE+="applications/mod_esl"
 
 APPLICATION_MODULES_FR="applications/mod_fifo applications/mod_fsk applications/mod_fsv applications/mod_hash \
 			applications/mod_httapi applications/mod_http_cache applications/mod_lcr applications/mod_limit \
-			applications/mod_memcache applications/mod_nibblebill applications/mod_redis applications/mod_rss" 
+			applications/mod_memcache applications/mod_mongo applications/mod_nibblebill applications/mod_redis applications/mod_rss" 
 
 APPLICATION_MODULES_SZ="applications/mod_sms applications/mod_snapshot applications/mod_snom applications/mod_soundtouch \
 			applications/mod_spandsp applications/mod_spy applications/mod_stress \
@@ -1759,6 +1759,7 @@ fi
 %{MODINSTDIR}/mod_event_socket.so*
 %{MODINSTDIR}/mod_logfile.so*
 %{MODINSTDIR}/mod_loopback.so*
+%{MODINSTDIR}/mod_mongo.so*
 %{MODINSTDIR}/mod_native_file.so*
 %{MODINSTDIR}/mod_sndfile.so*
 %{MODINSTDIR}/mod_sofia.so*
