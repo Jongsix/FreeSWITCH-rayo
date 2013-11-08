@@ -952,6 +952,7 @@ static void rayo_call_cleanup(struct rayo_actor *actor)
 
 	iks_delete(revent);
 	switch_event_destroy(&event);
+	switch_core_hash_destroy(&call->pcps);
 }
 
 /**
@@ -982,18 +983,13 @@ int rayo_call_is_faxing(struct rayo_call *call)
 }
 
 /**
- * Set faxing flag if faxing is not in progress
+ * Set faxing flag
  * @param call the call to flag
  * @param faxing true if faxing is in progress
- * @return true if set, false if can't set because faxing is already in progress.  Reset always succeeds.
  */
-int rayo_call_set_faxing(struct rayo_call *call, int faxing)
+void rayo_call_set_faxing(struct rayo_call *call, int faxing)
 {
-	if (!faxing || (faxing && !call->faxing)) {
-		call->faxing = faxing;
-		return 1;
-	}
-	return 0;
+	call->faxing = faxing;
 }
 
 #define RAYO_MIXER_LOCATE(mixer_name) rayo_mixer_locate(mixer_name, __FILE__, __LINE__)
@@ -1131,12 +1127,22 @@ static struct rayo_call *_rayo_call_create(const char *uuid, const char *file, i
 }
 
 /**
+ * Mixer destructor
+ */
+static void rayo_mixer_cleanup(struct rayo_actor *actor)
+{
+	struct rayo_mixer *mixer = RAYO_MIXER(actor);
+	switch_core_hash_destroy(&mixer->members);
+	switch_core_hash_destroy(&mixer->subscribers);
+}
+
+/**
  * Initialize mixer
  */
 static struct rayo_mixer *rayo_mixer_init(struct rayo_mixer *mixer, switch_memory_pool_t *pool, const char *name, const char *file, int line)
 {
 	char *mixer_jid = switch_mprintf("%s@%s", name, RAYO_JID(globals.server));
-	rayo_actor_init(RAYO_ACTOR(mixer), pool, RAT_MIXER, "", name, mixer_jid, NULL, rayo_mixer_send, file, line);
+	rayo_actor_init(RAYO_ACTOR(mixer), pool, RAT_MIXER, "", name, mixer_jid, rayo_mixer_cleanup, rayo_mixer_send, file, line);
 	switch_core_hash_init(&mixer->members, pool);
 	switch_core_hash_init(&mixer->subscribers, pool);
 	switch_safe_free(mixer_jid);
@@ -1307,6 +1313,7 @@ static void rayo_peer_server_cleanup(struct rayo_actor *actor)
 		RAYO_UNLOCK(client);
 		RAYO_DESTROY(client);
 	}
+	switch_core_hash_destroy(&rserver->clients);
 	switch_mutex_unlock(globals.clients_mutex);
 }
 
@@ -2371,11 +2378,14 @@ static iks *on_iq_get_xmpp_disco(struct rayo_actor *server, struct rayo_message 
 	iks *node = msg->payload;
 	iks *response = NULL;
 	iks *x;
+	iks *feature;
 	response = iks_new_iq_result(node);
 	x = iks_insert(response, "query");
 	iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_DISCO);
-	x = iks_insert(x, "feature");
-	iks_insert_attrib(x, "var", RAYO_NS);
+	feature = iks_insert(x, "feature");
+	iks_insert_attrib(feature, "var", RAYO_NS);
+	feature = iks_insert(x, "feature");
+	iks_insert_attrib(feature, "var", RAYO_FAX_NS);
 
 	/* TODO The response MUST also include features for the application formats and transport methods supported by
 	 * the responding entity, as described in the relevant specifications.
@@ -3159,18 +3169,17 @@ SWITCH_STANDARD_APP(rayo_app)
 			}
 		}
 		if (!call) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_CRIT, "Missing rayo call!!\n");
-			goto done;
+			/* this scenario can only happen if a call was originated through a mechanism other than <dial> 
+			   and then the rayo APP was executed to offer control */
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Outbound call that wasn't created with <dial>, will try to offer control\n");
 		}
 		ok = 1;
-	} else {
-		/* inbound call - offer control */
+	}
+
+	if (!call) {
+		/* offer control */
 		switch_hash_index_t *hi = NULL;
 		iks *offer = NULL;
-		if (call) {
-			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "Call is already under Rayo 3PCC!\n");
-			goto done;
-		}
 
 		call = rayo_call_create(switch_core_session_get_uuid(session));
 		switch_channel_set_variable(switch_core_session_get_channel(session), "rayo_call_jid", RAYO_JID(call));
@@ -3203,6 +3212,7 @@ SWITCH_STANDARD_APP(rayo_app)
 
 		/* nobody to offer to */
 		if (!ok) {
+			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "Rejecting rayo call - there are no online rayo clients to offer call to\n");
 			switch_channel_hangup(channel, SWITCH_CAUSE_NORMAL_TEMPORARY_FAILURE);
 		}
 	}
