@@ -227,9 +227,10 @@ typedef intptr_t switch_ssize_t;
 
 #ifdef WIN32
 
-#ifdef WIN64
+#ifdef _WIN64
 #define SWITCH_SSIZE_T_FMT          "lld"
 #define SWITCH_SIZE_T_FMT           "lld"
+#define FS_64BIT 1
 #else
 #define SWITCH_SSIZE_T_FMT          "d"
 #define SWITCH_SIZE_T_FMT           "d"
