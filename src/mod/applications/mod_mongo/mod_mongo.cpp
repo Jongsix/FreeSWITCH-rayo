@@ -44,6 +44,7 @@ static struct {
 	const char *reduce;
 	const char *finalize;
 	const char *conn_str;
+	double socket_timeout;
 } globals;
 
 static int parse_query_options(char *query_options_str)
@@ -88,7 +89,7 @@ SWITCH_STANDARD_API(mongo_mapreduce_function)
 
 	if (!zstr(ns) && !zstr(json_query)) {
 		try {
-			scoped_ptr<ScopedDbConnection> conn(ScopedDbConnection::getScopedDbConnection(string(globals.conn_str)));
+			scoped_ptr<ScopedDbConnection> conn(ScopedDbConnection::getScopedDbConnection(string(globals.conn_str, globals.socket_timeout)));
 			BSONObj query = fromjson(json_query);
 			BSONObj out;
 			BSONObjBuilder cmd;
@@ -155,7 +156,7 @@ SWITCH_STANDARD_API(mongo_find_one_function)
 
 	if (!zstr(ns) && !zstr(json_query) && !zstr(json_fields)) {
 		try {
-			scoped_ptr<ScopedDbConnection> conn(ScopedDbConnection::getScopedDbConnection(string(globals.conn_str)));
+			scoped_ptr<ScopedDbConnection> conn(ScopedDbConnection::getScopedDbConnection(string(globals.conn_str), globals.socket_timeout));
 			BSONObj query = fromjson(json_query);
 			BSONObj fields = fromjson(json_fields);
 			try {
@@ -192,6 +193,7 @@ static switch_status_t config(switch_memory_pool_t *pool)
 	globals.reduce = "";
 	globals.finalize = "";
 	globals.conn_str = "";
+	globals.socket_timeout = 0.0;
 
 	if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Open of %s failed\n", cf);
@@ -208,21 +210,61 @@ static switch_status_t config(switch_memory_pool_t *pool)
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "missing connection-string value\n");
 					status = SWITCH_STATUS_GENERR;
 				} else {
-					string errmsg;
-					ConnectionString cs = ConnectionString::parse(string(val), errmsg);
-					if (!cs.isValid()) {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection-string \"%s\" is not valid: %s\n", val, errmsg.c_str());
+					try {
+						string errmsg;
+						ConnectionString cs = ConnectionString::parse(string(val), errmsg);
+						if (!cs.isValid()) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection-string \"%s\" is not valid: %s\n", val, errmsg.c_str());
+							status = SWITCH_STATUS_GENERR;
+						} else {
+							globals.conn_str = switch_core_strdup(pool, val);
+						}
+					} catch (DBException &e) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection-string \"%s\" is not valid: %s\n", val, e.toString().c_str());
 						status = SWITCH_STATUS_GENERR;
-					} else {
-						globals.conn_str = switch_core_strdup(pool, val);
+					} catch (...) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection-string \"%s\" is not valid\n", val);
+						status = SWITCH_STATUS_GENERR;
 					}
 				}
 			} else if (!strcmp(var, "map")) {
-				globals.map = switch_core_strdup(pool, val);
+				if (!zstr(val)) {
+					globals.map = switch_core_strdup(pool, val);
+				}
 			} else if (!strcmp(var, "reduce")) {
-				globals.reduce = switch_core_strdup(pool, val);
+				if (!zstr(val)) {
+					globals.reduce = switch_core_strdup(pool, val);
+				}
 			} else if (!strcmp(var, "finalize")) {
-				globals.finalize = switch_core_strdup(pool, val);
+				if (!zstr(val)) {
+					globals.finalize = switch_core_strdup(pool, val);
+				}
+			} else if (!strcmp(var, "socket-timeout")) {
+				if (!zstr(val)) {
+					if (switch_is_number(val)) {
+						double timeout = atof(val);
+						if (timeout >= 0.0) {
+							globals.socket_timeout = timeout;
+						} else {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "socket-timeout \"%s\" is not valid\n", val);
+						}
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "socket-timeout \"%s\" is not valid\n", val);
+					}
+				}
+			} else if (!strcmp(var, "max-connections")) {
+				if (!zstr(val)) {
+					if (switch_is_number(val)) {
+						int max_connections = atoi(val);
+						if (max_connections > 0) {
+							PoolForHost::setMaxPerHost(max_connections);
+						} else {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "max-connections \"%s\" is not valid\n", val);
+						}
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "max-connections \"%s\" is not valid\n", val);
+					}
+				}
 			}
 		}
 	}
