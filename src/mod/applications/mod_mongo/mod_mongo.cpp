@@ -107,16 +107,20 @@ SWITCH_STANDARD_API(mongo_mapreduce_function)
 				cmd.append("query", query);
 			}
 			cmd.append("out", BSON("inline" << 1));
-		
+
 			try {
 				conn->get()->runCommand(nsGetDB(ns), cmd.done(), out);
 				stream->write_function(stream, "-OK\n%s\n", out.jsonString().c_str());
 			} catch (DBException &e) {
 				stream->write_function(stream, "-ERR\n%s\n", e.toString().c_str());
+			} catch (...) {
+				stream->write_function(stream, "-ERR\nUnknown exception!\n");
 			}
 			conn->done();
-		} catch (UserException &e) {
-			stream->write_function(stream, "-ERR\%s\n", e.toString().c_str());
+		} catch (DBException &e) {
+			stream->write_function(stream, "-ERR\n%s\n", e.toString().c_str());
+		} catch (...) {
+			stream->write_function(stream, "-ERR\nUnknown exception!\n");
 		}
 	} else {
 		stream->write_function(stream, "-ERR\n%s\n", MAPREDUCE_SYNTAX);	  
@@ -159,10 +163,14 @@ SWITCH_STANDARD_API(mongo_find_one_function)
 				stream->write_function(stream, "-OK\n%s\n", res.jsonString().c_str());
 			} catch (DBException &e) {
 				stream->write_function(stream, "-ERR\n%s\n", e.toString().c_str());
+			} catch (...) {
+				stream->write_function(stream, "-ERR\nUnknown exception!\n");
 			}
 			conn->done();
-		} catch (UserException &e) {
-			stream->write_function(stream, "-ERR\%s\n", e.toString().c_str());
+		} catch (DBException &e) {
+			stream->write_function(stream, "-ERR\n%s\n", e.toString().c_str());
+		} catch (...) {
+			stream->write_function(stream, "-ERR\nUnknown exception!\n");
 		}
 	} else {
 	  stream->write_function(stream, "-ERR\n%s\n", FIND_ONE_SYNTAX);	  
